@@ -278,6 +278,40 @@ pip install pytest  # para correr tests
 | `rich` | >=13.0.0 | Output formateado: paneles, colores, markdown |
 | `gnureadline` | >=8.1.2 | GNU readline para macOS (legacy) |
 
+## Script de arranque `agentdevs`
+
+`agentdevs` es un launcher de bash que automatiza la instalación y ejecución del agente sobre cualquier repositorio. Vive en la raíz del proyecto (`agentdevs`) y es el binario que se instala en tu `PATH`.
+
+**Qué hace al ejecutarlo:**
+
+1. Resuelve el directorio del proyecto a ruta absoluta (antes de cualquier `cd`)
+2. Crea el venv `.venv` si no existe
+3. Instala las dependencias la primera vez (marcador `.venv/.deps_installed`)
+4. Ejecuta `main.py <ruta_absoluta_del_repo>`
+
+### Instalación
+
+```bash
+# Clonar el proyecto (si no lo tenés)
+git clone <tu-repo> ~/agent-lucho
+
+# Crear el symlink en tu PATH (macOS/Homebrew)
+ln -s "$HOME/agent-lucho/agentdevs" /opt/homebrew/bin/agentdevs
+
+# Asegurar permisos de ejecución
+chmod +x ~/agent-lucho/agentdevs
+```
+
+### Uso
+
+```bash
+agentdevs .                  # analiza el directorio actual
+agentdevs /ruta/al/repo      # analiza un repo específico
+agentdevs                    # sin argumentos → directorio actual
+```
+
+Cada ejecución verifica el venv y las dependencias automáticamente — no hace falta setup manual.
+
 ## Uso
 
 ```bash

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+set -e
+
+# Directorio donde está instalado agent-lucho
+AGENT_HOME="$HOME/agent-lucho"
+
+# Directorio del proyecto a analizar (por defecto el directorio actual).
+# Se resuelve a ruta absoluta ANTES de hacer cd, para que '.' no cambie de significado.
+PROJECT_DIR="$(cd "${1:-$(pwd)}" && pwd)"
+
+if [ ! -d "$PROJECT_DIR" ]; then
+    echo "❌ Error: '$PROJECT_DIR' no es un directorio válido"
+    exit 1
+fi
+
+if [ ! -f "$AGENT_HOME/main.py" ]; then
+    echo "❌ Error: main.py no encontrado en $AGENT_HOME"
+    exit 1
+fi
+
+echo "🚀 Inicializando agente..."
+echo "📂 Proyecto: $PROJECT_DIR"
+
+cd "$AGENT_HOME"
+
+# Crear el entorno virtual si no existe
+if [ ! -d ".venv" ]; then
+    echo "📦 Creando entorno virtual..."
+    python3 -m venv .venv
+fi
+
+# Instalar dependencias la primera vez
+if [ ! -f ".venv/.deps_installed" ]; then
+    echo "📥 Instalando dependencias..."
+
+    .venv/bin/python -m pip install --upgrade pip
+    .venv/bin/pip install -r requirements.txt
+
+    touch .venv/.deps_installed
+fi
+
+# Ejecutar el agente usando el Python del venv
+exec .venv/bin/python main.py "$PROJECT_DIR"
