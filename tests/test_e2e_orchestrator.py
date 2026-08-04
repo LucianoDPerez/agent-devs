@@ -39,8 +39,8 @@ for intent in Intent:
     check(f"{intent.value} → {role.value}", role is not None)
 check("analyze: 10 tools", len(tools_for_role(Role.ANALYZE)) == 10)
 check("plan: 11 tools", len(tools_for_role(Role.PLAN)) == 11)
-check("execute: 16 tools", len(tools_for_role(Role.EXECUTE)) == 16)
-check("review: 10 tools", len(tools_for_role(Role.REVIEW)) == 10)
+check("execute: 19 tools", len(tools_for_role(Role.EXECUTE)) == 19)
+check("review: 13 tools", len(tools_for_role(Role.REVIEW)) == 13)
 check("chat: 0 tools", len(tools_for_role(Role.CHAT)) == 0)
 for role in Role:
     p = load_prompt(role)
@@ -58,6 +58,8 @@ test_cases = [
     ("escribí el código del endpoint", Intent.EXECUTE),
     ("implementá el cambio y comitealo", Intent.EXECUTE),
     ("editá el archivo main.py", Intent.EXECUTE),
+    # path with "plans" must NOT steal EXECUTE → PLAN
+    ("implementar Tarea 1 de /repo/lucho-plans/tasks.md", Intent.EXECUTE),
     ("revisá este PR por bugs", Intent.REVIEW),
     ("hacé code review del PR #5", Intent.REVIEW),
     ("buscá bugs en el último commit", Intent.REVIEW),

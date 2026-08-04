@@ -60,3 +60,41 @@ class TestEditFile:
         })
         assert "Replaced" in result or "✅" in result
         assert (Path(repo) / "test.py").read_text() == "new code"
+
+
+class TestSoftErrors:
+    def test_read_file_missing(self):
+        result = read_file.invoke({"path": "/nonexistent/path/file.txt"})
+        assert "does not exist" in result
+
+    def test_read_file_on_directory(self):
+        repo = tempfile.mkdtemp()
+        result = read_file.invoke({"path": repo})
+        assert "directory" in result.lower()
+        assert "list_files" in result
+
+    def test_list_files_missing(self):
+        result = list_files.invoke({"path": "/nonexistent/path"})
+        assert "does not exist" in result
+
+    def test_edit_file_missing(self):
+        result = edit_file.invoke({
+            "path": "/nonexistent/path/file.txt",
+            "old_str": "a",
+            "new_str": "b",
+        })
+        assert "does not exist" in result
+
+    def test_edit_file_on_directory(self):
+        repo = tempfile.mkdtemp()
+        result = edit_file.invoke({
+            "path": repo,
+            "old_str": "a",
+            "new_str": "b",
+        })
+        assert "directory" in result.lower()
+
+    def test_write_file_to_directory(self):
+        repo = tempfile.mkdtemp()
+        result = write_file.invoke({"path": repo, "content": "hello"})
+        assert "directory" in result.lower()

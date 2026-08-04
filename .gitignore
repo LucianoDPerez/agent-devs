@@ -1,20 +1,58 @@
-# Python
+# Bytecode
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
-.Python
+
+# Virtual environments
+.venv/
 venv/
 env/
+.env/
 
-# Testing
+# Packaging / build
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+pip-wheel-metadata/
+
+# Testing / coverage
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
 
-# IDE
+# Type checkers / linters
+.mypy_cache/
+.ruff_cache/
+.pytype/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE / editors
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets (keep .env.example if you add one)
+.env
+.env.*
+!.env.example
 
 # Project specific
 .atl/

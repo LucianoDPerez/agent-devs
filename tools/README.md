@@ -10,6 +10,7 @@ Pool de tools para los agentes. Cada tool vive en un módulo por **dominio**
 | `filesystem.py`   | `list_files`, `read_file`, `write_file`, `edit_file`        |
 | `search.py`       | `search_code`                                               |
 | `routes.py`       | `inspect_routes` (detección de endpoints multi-lenguaje)    |
+| `verify.py`       | `run_lint`, `run_tests`, `run_build` (auto-detect Node/Python/Go) |
 | `git.py`          | `current_branch`, `changed_files`, `git_status`, `git_log`, `stage_files`, `create_commit`, `push`, `create_pr`, `read_pr`, `list_prs` (vía `git` + `gh`) |
 | `mcp_client.py`   | Proveedor: carga tools de `codebase-memory-mcp` expuestas como `cm__*` (graph on-demand, no en contexto) |
 | `_helpers.py`     | `_is_excluded`, `_read_text` (internas compartidas)          |
@@ -23,8 +24,8 @@ limitar el alcance de cada rol:
 |-------------|-------------------------------------------------------------|
 | `analyzer`  | `list_files`, `read_file`, `search_code`, `inspect_routes` + git read-only |
 | `planner`   | + `write_file` + git read-only                             |
-| `executor`  | todas (incluye `edit_file`, stage/commit/push/create_pr)   |
-| `reviewer`  | solo lectura (filesystem sin `write_file`/`edit_file`) + `read_pr`, `list_prs` |
+| `executor`  | todas (incluye `edit_file`, stage/commit/push/create_pr, verify) |
+| `reviewer`  | solo lectura (filesystem sin `write_file`/`edit_file`) + `read_pr`, `list_prs` + verify |
 
 ## Uso
 

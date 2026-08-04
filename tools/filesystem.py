@@ -18,7 +18,7 @@ def list_files(path: str, recursive: bool = False) -> str:
     """
     root = Path(path)
     if not root.exists():
-        raise ToolException(f"Path does not exist: {path}")
+        return f"Path does not exist: {path}"
     if not root.is_dir():
         return f"'{path}' is a file, not a directory. Use read_file to view it."
 
@@ -55,7 +55,9 @@ def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> st
     """
     p = Path(path)
     if not p.exists():
-        raise ToolException(f"File does not exist: {path}")
+        return f"File does not exist: {path}"
+    if p.is_dir():
+        return f"'{path}' is a directory, not a file. Use list_files to browse it."
 
     raw = p.read_text(encoding="utf-8", errors="replace")
     total_lines = raw.splitlines()
@@ -90,6 +92,9 @@ def write_file(path: str, content: str) -> str:
     Usage: write_file(path="/Users/me/repo/report.md", content="# Report")
     """
     p = Path(path)
+    if p.exists() and p.is_dir():
+        return f"'{path}' is a directory, not a file. Cannot write file content to a directory."
+
     p.parent.mkdir(parents=True, exist_ok=True)
 
     p.write_text(content, encoding="utf-8")
@@ -105,7 +110,9 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
     """
     p = Path(path)
     if not p.exists():
-        raise ToolException(f"File does not exist: {path}")
+        return f"File does not exist: {path}"
+    if p.is_dir():
+        return f"'{path}' is a directory, not a file. Use list_files to browse it."
 
     content = p.read_text(encoding="utf-8")
 

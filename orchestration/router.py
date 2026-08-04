@@ -17,6 +17,7 @@ def classify_intent(_llm, user_message: str) -> Intent:
         return Intent.REVIEW
 
     # Plan patterns (must come before execute — "plan" overrides "implementar")
+    # Match as whole tokens so paths like "lucho-plans/tasks.md" don't trigger PLAN.
     if _has_any(text, [
         "plan", "planific", "planifi",
         "diseñá", "diseña", "diseño", "diseñ",
@@ -60,4 +61,22 @@ def classify_intent(_llm, user_message: str) -> Intent:
 
 
 def _has_any(text: str, patterns: list[str]) -> bool:
-    return any(p in text for p in patterns)
+    """Match patterns as whole tokens (not substrings inside paths/filenames).
+
+    "plan" matches "hacé un plan" but NOT "lucho-plans/tasks.md".
+    Stems like "planific" still match "planificación" via prefix + word chars.
+    """
+    for p in patterns:
+        if " " in p:
+            if p in text:
+                return True
+            continue
+        # Stem (ends mid-word intentionally) → prefix at token start
+        if p in {"planific", "planifi", "diseñ", "revis", "crític", "critic", "implement"}:
+            if re.search(rf"(?<!\w){re.escape(p)}\w*", text):
+                return True
+            continue
+        # Whole token — avoids matching inside "lucho-plans", "pushkin", etc.
+        if re.search(rf"(?<!\w){re.escape(p)}(?!\w)", text):
+            return True
+    return False

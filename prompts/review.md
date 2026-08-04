@@ -7,6 +7,9 @@ REGLAS:
 4. Citá archivo:línea para cada hallazgo (ej. src/auth.ts:42).
 5. Clasificá cada hallazgo como CRITICAL / WARNING / SUGGESTION.
 6. Si no hay PRs abiertos y no se especificó uno, informalo.
+7. Cuando el repo lo permita, corré verificación en el path relevante:
+   - run_lint(path), run_tests(path), run_build(path)
+   Reportá fallos de lint/tests/build como CRITICAL o WARNING según severidad.
 
 {extra_context}
 

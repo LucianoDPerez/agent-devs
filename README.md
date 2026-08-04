@@ -41,6 +41,7 @@ agent-lucho/
 │   ├── git.py                    #   Git + GitHub PRs
 │   ├── routes.py                 #   Detección de endpoints multi-lenguaje
 │   ├── search.py                 #   Búsqueda regex en código
+│   ├── verify.py                 #   run_lint / run_tests / run_build (auto-detect)
 │   ├── mcp_client.py             #   Cliente MCP (codebase-memory-mcp)
 │   └── _helpers.py               #   Helpers compartidos
 │
@@ -99,8 +100,8 @@ main.py (thin)
 |-----|-------|-----------|
 | **🔍 Análisis** (analyzer) | 10 | Read-only: explorar, preguntar, entender. No codea. |
 | **📋 Planificación** (planner) | 11 | Read-only + write_file: diseña solución en .md. No codea. |
-| **🛠️ Ejecución** (executor) | 16 | All tools: codea, commitea, pushea, crea PRs. |
-| **🔎 Revisión** (reviewer) | 10 | Read-only: revisa PRs, busca bugs, audita. No codea. |
+| **🛠️ Ejecución** (executor) | 19 | All tools + lint/tests/build: codea, verifica, commitea, pushea, crea PRs. |
+| **🔎 Revisión** (reviewer) | 13 | Read-only + lint/tests/build: revisa PRs, busca bugs, audita. No codea. |
 | **💬 Charla** (chat) | 0 | Sin tools: conversación general. |
 
 ### Classifier keyword-based
