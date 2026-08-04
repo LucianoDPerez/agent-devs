@@ -218,7 +218,7 @@ Mientras escribís, una barra inferior muestra en tiempo real:
 | llama-server | Compilado con soporte multimodal | `llama-server --help` |
 | codebase-memory-mcp | 0.8+ | `codebase-memory-mcp --version` |
 
-## Instalación
+## Instalación completa recomendada
 
 ### 1. llama-server (LLM local)
 
@@ -231,8 +231,7 @@ Levantá el servidor:
 
 ```bash
 llama-server \
-  -m /ruta/al/modelo/Agents-A1-4B-Q4_K_M.gguf \
-  --mmproj /ruta/al/modelo/Agents-A1-4B-mmproj.gguf \
+  -hf InternScience/Agents-A1-4B-Q4_K_M-GGUF:Q4_K_M \
   -c 32000 -ngl 99 --flash-attn on --kv-unified \
   --cache-type-k q5_0 --cache-type-v q5_0 \
   --threads 4 --threads-batch 4 \
@@ -254,10 +253,10 @@ gh auth login
 ### 3. codebase-memory-mcp (knowledge graph)
 
 ```bash
-cargo install codebase-memory-mcp
+curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash
 ```
 
-### 4. Python + dependencias
+### 4. Proyecto + dependencias
 
 ```bash
 python3 -m venv .venv
