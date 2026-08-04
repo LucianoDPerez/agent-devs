@@ -1,0 +1,62 @@
+"""Tests para filesystem tools."""
+
+import tempfile
+from pathlib import Path
+
+from tools.filesystem import edit_file, list_files, read_file, write_file
+
+
+def _create_repo(files: dict[str, str]) -> str:
+    tmp = tempfile.mkdtemp()
+    for name, content in files.items():
+        p = Path(tmp) / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+    return tmp
+
+
+class TestListFiles:
+    def test_list_root(self):
+        repo = _create_repo({"a.txt": "a", "b.txt": "b"})
+        result = list_files.invoke({"path": repo})
+        assert "a.txt" in result
+        assert "b.txt" in result
+
+    def test_list_recursive(self):
+        repo = _create_repo({"sub/c.txt": "c"})
+        result = list_files.invoke({"path": repo, "recursive": True})
+        assert "c.txt" in result
+
+
+class TestReadFile:
+    def test_read_content(self):
+        repo = _create_repo({"test.py": "print('hello')"})
+        result = read_file.invoke({"path": str(Path(repo) / "test.py")})
+        assert "print('hello')" in result
+
+    def test_read_line_range(self):
+        repo = _create_repo({"test.py": "line1\nline2\nline3\n"})
+        result = read_file.invoke({"path": str(Path(repo) / "test.py"), "start_line": 2, "end_line": 3})
+        assert "line2" in result
+        assert "line3" in result
+
+
+class TestWriteFile:
+    def test_write_creates_file(self):
+        repo = tempfile.mkdtemp()
+        path = str(Path(repo) / "new.txt")
+        result = write_file.invoke({"path": path, "content": "hello world"})
+        assert "Written" in result or "✅" in result
+        assert (Path(repo) / "new.txt").read_text() == "hello world"
+
+
+class TestEditFile:
+    def test_edit_replaces_text(self):
+        repo = _create_repo({"test.py": "old code"})
+        result = edit_file.invoke({
+            "path": str(Path(repo) / "test.py"),
+            "old_str": "old code",
+            "new_str": "new code",
+        })
+        assert "Replaced" in result or "✅" in result
+        assert (Path(repo) / "test.py").read_text() == "new code"
