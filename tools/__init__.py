@@ -9,7 +9,7 @@ Este índice reexporta todas y expone un pool por tipo de agente para que cada
 agente (analyzer, planner, executor, reviewer) use solo las que necesita.
 """
 
-from .filesystem import edit_file, list_files, read_file, write_file
+from .filesystem import delete_file, edit_file, list_files, read_file, write_file
 from .git import (
     changed_files,
     create_commit,
@@ -24,18 +24,18 @@ from .git import (
 )
 from .routes import inspect_routes
 from .search import search_code
-from .verify import run_build, run_lint, run_tests
+from .verify import run_build, run_install, run_lint, run_tests
 
 ALL_TOOLS = [
-    list_files, read_file, write_file, edit_file, search_code, inspect_routes,
-    run_lint, run_tests, run_build,
+    list_files, read_file, write_file, edit_file, delete_file, search_code, inspect_routes,
+    run_install, run_lint, run_tests, run_build,
     current_branch, changed_files, git_status, git_log,
     stage_files, create_commit, push, create_pr, read_pr, list_prs,
 ]
 
 _READONLY_GIT = [current_branch, changed_files, git_status, git_log, read_pr, list_prs]
 _GIT_WRITE = [stage_files, create_commit, push, create_pr]
-_VERIFY = [run_lint, run_tests, run_build]
+_VERIFY = [run_install, run_lint, run_tests, run_build]
 
 # Subsets por rol de agente. Read-only evita que compile modificadores.
 ANALYZER_TOOLS = [list_files, read_file, search_code, inspect_routes, *_READONLY_GIT]

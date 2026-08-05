@@ -98,3 +98,4 @@ class TestSoftErrors:
         repo = tempfile.mkdtemp()
         result = write_file.invoke({"path": repo, "content": "hello"})
         assert "directory" in result.lower()
+        assert "⛔" in result

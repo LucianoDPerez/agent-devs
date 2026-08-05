@@ -190,7 +190,7 @@ def list_prs(path: str, state: str = "open") -> str:
         raise ToolException(f"Invalid state '{state}'. Must be one of {sorted(valid)}")
     out = _run(path, [
         "gh", "pr", "list", "--state", state,
-        "--json", "number,title,isDraft,headRefName,baseRefName,reviewStatus",
+        "--json", "number,title,isDraft,headRefName,baseRefName,reviewDecision",
         "--limit", "30",
     ])
     return out or f"No PRs found for state '{state}'."

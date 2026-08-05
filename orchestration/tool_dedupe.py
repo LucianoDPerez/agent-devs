@@ -7,13 +7,29 @@ from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
 
+
+class ToolBudgetExceeded(Exception):
+    """Raised when a tool call is blocked by dedupe or explore budget.
+    The 4B model ignores STOP strings; this exception forcibly halts the agent turn."""
+    pass
+
+
 # Tools que gastan presupuesto de exploración (solo EXECUTE)
 EXPLORE_TOOL_NAMES = frozenset({"list_files", "search_code", "inspect_routes"})
 WRITE_TOOL_NAMES = frozenset({
-    "write_file", "edit_file", "stage_files", "create_commit", "push", "create_pr",
+    "write_file", "edit_file", "delete_file", "stage_files", "create_commit", "push", "create_pr",
 })
-# Tras explorar, estas también se acotan si no hubo write
-READISH_TOOL_NAMES = frozenset({"read_file", "changed_files", "git_status", "git_log"})
+# Tools de lectura (no son "write" pero son acción productiva)
+READISH_TOOL_NAMES = frozenset(
+    {"read_file", "changed_files", "git_status", "git_log", "current_branch", "read_pr", "list_prs"}
+)
+
+# Tools de verificación (lint/tests/build) — acción productiva
+VERIFY_TOOL_NAMES = frozenset({"run_lint", "run_tests", "run_build", "run_install"})
+
+# Tools que cuentan como "producto final" para evitar max_tools_before_write
+# (REVIEW nunca escribe; estos son sus outputs válidos)
+PRODUCTIVE_TOOL_NAMES = READISH_TOOL_NAMES | VERIFY_TOOL_NAMES
 
 
 class ToolCallDedupe:
@@ -66,7 +82,7 @@ class ExploreBudget:
         self._reads_after = 0
         self._total = 0
         self._wrote = False
-        self._explore_exhausted = False
+        self._explore_exhausted = self.max_calls <= 0
 
     @property
     def used(self) -> int:
@@ -76,6 +92,10 @@ class ExploreBudget:
         """Devuelve mensaje STOP si la llamada no debe ejecutarse."""
         kwargs = kwargs or {}
         self._total += 1
+
+        # max_calls puede cambiar post-reset (hints_on → 0 en session.py)
+        if self.max_calls <= 0:
+            self._explore_exhausted = True
 
         if name in WRITE_TOOL_NAMES:
             self._wrote = True
@@ -87,9 +107,8 @@ class ExploreBudget:
         # recursive=true prohibido en EXECUTE
         if name == "list_files" and kwargs.get("recursive"):
             return (
-                "STOP: list_files(recursive=true) está prohibido en EXECUTE. "
-                "Usá recursive=false en un subpath concreto, o mejor ESCRIBÍ YA "
-                "con write_file/edit_file (el layout del repo ya está en el mensaje)."
+                "⛔ list_files(recursive=true) prohibido en EXECUTE. "
+                "Usá recursive=false o ESCRIBÍ YA con write_file/edit_file."
             )
 
         if name in EXPLORE_TOOL_NAMES:
@@ -97,12 +116,15 @@ class ExploreBudget:
             if self._count >= self.max_calls:
                 self._explore_exhausted = True
             if self._count > self.max_calls:
+                # Cuando el modelo ignora strings STOP (4B), usar exception
+                if self.max_calls <= 0:
+                    raise ToolBudgetExceeded(
+                        "Exploración prohibida (max_calls=0). "
+                        "TU ÚNICA ACCIÓN: write_file, edit_file o delete_file AHORA."
+                    )
                 return (
-                    "STOP: exploration budget exhausted "
-                    f"({self.max_calls} list_files/search_code/inspect_routes). "
-                    "NO llames más list_files ni search_code. "
-                    "TU PRÓXIMA ACCIÓN OBLIGATORIA: write_file o edit_file. "
-                    "Implementá YA según el checklist (env, adapter, validación, docs)."
+                    "⛔ Exploración agotada. NO uses list_files/search_code/inspect_routes. "
+                    "TU ÚNICA ACCIÓN: write_file, edit_file o delete_file AHORA."
                 )
             return None
 
@@ -111,20 +133,23 @@ class ExploreBudget:
             if name in READISH_TOOL_NAMES or name == "read_file":
                 self._reads_after += 1
                 if self._reads_after > self.max_reads_after_explore:
+                    if self.max_calls <= 0:
+                        raise ToolBudgetExceeded(
+                            "Demasiados read_file. NO leas más. "
+                            "TU ÚNICA ACCIÓN: write_file, edit_file o delete_file AHORA."
+                        )
                     return (
-                        "STOP: demasiados read_file tras explorar. "
-                        "NO leas más. ESCRIBÍ YA con write_file/edit_file. "
-                        "Usá el contenido precargado (tasks, env example, entrypoints, listing)."
+                        "⛔ Demasiados read_file. NO leas más archivos. "
+                        "TU ÚNICA ACCIÓN: write_file, edit_file o delete_file AHORA."
                     )
 
-        # Sin ninguna escritura tras N tools → forzar write
+        # Sin ninguna escritura tras N tools → forzar write (EXCEPTION — halts turn)
+        # Pero PRODUCTIVE tools (read/git/verify) sí cuentan como acción productiva
         if not self._wrote and self._total > self.max_tools_before_write:
-            if name not in WRITE_TOOL_NAMES:
-                return (
-                    "STOP: no escribiste código en este turno "
-                    f"(ya van {self._total} tool calls). "
-                    "TU ÚNICA ACCIÓN PERMITIDA AHORA: write_file o edit_file. "
-                    "Implementá las tareas del checklist YA."
+            if name not in WRITE_TOOL_NAMES and name not in PRODUCTIVE_TOOL_NAMES:
+                raise ToolBudgetExceeded(
+                    f"{self._total} tool calls sin escribir código. "
+                    "NO explores más. TU ÚNICA ACCIÓN: write_file o edit_file AHORA."
                 )
 
         return None
@@ -157,9 +182,8 @@ def _wrap_one(
         n = dedupe.register(name, kwargs)
         if n > dedupe.max_repeats:
             return (
-                f"STOP: already called {name} with the same arguments {n} times. "
-                "Do NOT call it again. Use write_file/edit_file to implement changes, "
-                "or finish with your findings."
+                f"⛔ Called {name} with same args {n} times. "
+                "Do NOT call it again. Use write_file/edit_file to implement changes."
             )
         return tool.invoke(kwargs)
 

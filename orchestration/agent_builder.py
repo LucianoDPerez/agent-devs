@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from langchain.agents import create_agent
 
+from config import EXECUTE_MAX_TOKENS, REVIEW_MAX_TOKENS
 from core.roles import Role, load_prompt, tools_for_role
 from orchestration.tool_dedupe import ExploreBudget, ToolCallDedupe, wrap_tools_with_dedupe
 from tools.mcp_client import load_mcp_tools, mcp_tool_count
@@ -49,8 +50,8 @@ async def build_agent(
     role_mcp = _mcp_for_role(role, mcp_tools)
     all_tools = role_mcp + local_tools
     if dedupe is not None:
-        # Solo EXECUTE recibe explore_budget enforceado
-        budget = explore_budget if role == Role.EXECUTE else None
+        # EXECUTE y REVIEW reciben explore_budget (evita loops infinitos del 4B)
+        budget = explore_budget if role in (Role.EXECUTE, Role.REVIEW) else None
         all_tools = wrap_tools_with_dedupe(all_tools, dedupe, budget)
 
     prompt_template = load_prompt(role)
@@ -66,9 +67,16 @@ async def build_agent(
     )
 
     role_llm = llm
+    update_kwargs = {}
     target_temp = _ROLE_TEMPERATURE.get(role)
     if target_temp is not None and getattr(llm, "temperature", None) != target_temp:
-        role_llm = llm.model_copy(update={"temperature": target_temp}, deep=False)
+        update_kwargs["temperature"] = target_temp
+    if role == Role.EXECUTE:
+        update_kwargs["max_tokens"] = EXECUTE_MAX_TOKENS
+    elif role == Role.REVIEW:
+        update_kwargs["max_tokens"] = REVIEW_MAX_TOKENS
+    if update_kwargs:
+        role_llm = llm.model_copy(update=update_kwargs, deep=False)
 
     agent = create_agent(role_llm, all_tools, system_prompt=system_prompt)
     return agent, len(local_tools), len(role_mcp)

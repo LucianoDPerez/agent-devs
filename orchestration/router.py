@@ -20,16 +20,66 @@ _EXECUTE_VERBS = [
     "corregí", "corrige", "corregir",
 ]
 
+# Leading command patterns — detected from the first ~100 chars
+# (before any pasted content) to avoid false matches in pastes.
+_REVIEW_LEADING = [
+    "revisá", "revisa", "revisión", "review", "code review",
+    "hacer review", "hacer code review", "hacer code-review",
+    "hacer revisión", "hacer revisión de", "hacer review de",
+    "buscá bugs", "busca bugs", "auditá", "audita",
+]
+
+_PLAN_LEADING = [
+    "plan", "planificá", "planifica", "planificar",
+    "diseñá", "diseña", "desglosá", "desglosa",
+    "proponé", "propone", "propuesta",
+]
+
+_CHAT_LEADING = [
+    "hola", "buenas", "buen día", "buen dia",
+    "gracias", "muchas gracias",
+    "cómo estás", "como estas", "cómo andas",
+    "chau", "adiós", "adios", "nos vemos",
+]
+
+
+def _extract_command_prefix(text: str, max_chars: int = 120) -> str:
+    """Extract the user's command from the start of the message.
+
+    Stops at pasted content markers (quotes, markdown blocks, long blocks).
+    """
+    prefix = text[:max_chars]
+    # Stop at common paste boundaries
+    for marker in ['"✅', '"**', '\n---', '\n\n###', '\n\n---']:
+        idx = prefix.find(marker)
+        if idx >= 0:
+            prefix = prefix[:idx]
+    return prefix.strip().lower()
+
 
 def classify_intent(_llm, user_message: str) -> Intent:
     text = user_message.strip().lower()
+    prefix = _extract_command_prefix(user_message)
 
-    # EXECUTE gana si hay verbo de acción — aunque el paste diga "revisión/críticos"
-    # (ej. "implementar estas correcciones detectadas ### PROBLEMAS CRÍTICOS…")
+    # LEADING INTENT: user's own command (first ~120 chars) takes priority
+    # over keywords found in pasted completion reports/checklists.
+    if _has_any(prefix, _REVIEW_LEADING):
+        return Intent.REVIEW
+
+    if _has_any(prefix, _PLAN_LEADING):
+        return Intent.PLAN
+
+    if _has_any(prefix, _CHAT_LEADING):
+        return Intent.CHAT
+
+    # EXECUTE gana si hay verbo de acción en el comando del usuario
+    if _has_any(prefix, _EXECUTE_VERBS):
+        return Intent.EXECUTE
+
+    # Fallback: full text search (for messages without clear command prefix)
     if _has_any(text, _EXECUTE_VERBS):
         return Intent.EXECUTE
 
-    # Review patterns (most specific)
     if _has_any(text, [
         "revisá", "revisa", "revisión", "revis", "review",
         "pr #", "buscá bugs", "busca bugs", "audit",
@@ -37,7 +87,6 @@ def classify_intent(_llm, user_message: str) -> Intent:
     ]):
         return Intent.REVIEW
 
-    # Plan patterns — whole tokens so paths like "lucho-plans/tasks.md" don't trigger PLAN
     if _has_any(text, [
         "plan", "planific", "planifi",
         "diseñá", "diseña", "diseño", "diseñ",
@@ -49,7 +98,6 @@ def classify_intent(_llm, user_message: str) -> Intent:
     ]):
         return Intent.PLAN
 
-    # Chat patterns
     if _has_any(text, [
         "hola", "buenas", "buen día", "buen dia",
         "gracias", "muchas gracias",
