@@ -142,6 +142,33 @@ class TestReviewPreload:
             assert "timeout configurado (5s)" in out
             assert "backoff" not in out
 
+    def test_preload_for_review_clean_tree_shows_commits(self):
+        """When tree is clean (code committed), review gets diff against main."""
+        import subprocess
+        import shutil
+        tmp = tempfile.mkdtemp()
+        try:
+            subprocess.run(["git", "init"], cwd=tmp, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=tmp, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.name", "A"], cwd=tmp, capture_output=True, check=True)
+            # Create initial commit on main
+            (Path(tmp) / "a.txt").write_text("main content", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=tmp, capture_output=True, check=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmp, capture_output=True, check=True)
+            # Create feature branch with a committed change
+            subprocess.run(["git", "checkout", "-b", "feat"], cwd=tmp, capture_output=True, check=True)
+            (Path(tmp) / "new-file.ts").write_text("new code", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=tmp, capture_output=True, check=True)
+            subprocess.run(["git", "commit", "-m", "feat: new file"], cwd=tmp, capture_output=True, check=True)
+            # Now tree is clean, but branch has new file
+            out = preload_for_review("review", tmp)
+            # Should show committed diff info (branch vs main)
+            assert "main...feat" in out
+            assert "new-file.ts" in out
+            assert "ESTADO DE GIT" in out
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 class TestPasteCorrection:
     def test_extract_findings(self):

@@ -114,16 +114,44 @@ def write_file(path: str, content: str) -> str:
     """
     Write content to a file. Overwrites if the file exists.
     Creates parent directories if needed.
+    If the path is a directory or the write fails, returns a message —
+    accept it and choose a different path.
     Usage: write_file(path="/Users/me/repo/report.md", content="# Report")
     """
     p = Path(path)
     if p.exists() and p.is_dir():
-        return f"'{path}' is a directory, not a file. Cannot write file content to a directory."
+        return (
+            f"⛔ '{path}' is a DIRECTORY, not a file. "
+            f"Do NOT call write_file on a directory path. "
+            f"Call write_file with a FILE name inside it, for example: "
+            f"write_file(path='{path}/index.ts', content='...')"
+        )
 
-    p.parent.mkdir(parents=True, exist_ok=True)
-
-    p.write_text(content, encoding="utf-8")
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+    except (OSError, IsADirectoryError, FileExistsError) as e:
+        return f"⛔ Failed to write {path}: {e}. Choose a different file path."
     return f"✅ Written {len(content)} characters to {path}"
+
+
+@tool
+def delete_file(path: str) -> str:
+    """
+    Delete a file from the filesystem.
+    If the file does not exist, returns a message — accept it and continue.
+    Usage: delete_file(path="/Users/me/repo/old-file.ts")
+    """
+    p = Path(path)
+    if not p.exists():
+        return (
+            f"File does not exist: {path}. "
+            "Do not retry this path. Continue with other tasks."
+        )
+    if p.is_dir():
+        return f"'{path}' is a directory. Use a different approach to remove directories."
+    p.unlink()
+    return f"✅ Deleted {path}"
 
 
 @tool

@@ -9,7 +9,7 @@ El agente **clasifica automáticamente la intención del usuario** y delega al r
 ```
 agent-lucho/
 ├── main.py                       # 🎯 Entry point delgado (~90 líneas)
-├── config.py                     # Configuración centralizada
+├── config.py                     # Configuración centralizada (recursion, tokens, judge)
 ├── cache.py                      # Persistencia SQLite (análisis + historial de sesión)
 ├── llm_wrapper.py                # Wrapper de BaseChatModel (reasoning_content)
 ├── analyzer.py                   # Generación del análisis cacheado
@@ -21,7 +21,9 @@ agent-lucho/
 ├── orchestration/                # ⚙️ Capa de aplicación
 │   ├── router.py                 #   Clasificador keyword-based de intención
 │   ├── agent_builder.py          #   Factory: construye agente LangChain por rol
-│   └── session.py                #   Sesión con memoria, persistencia, summary auto
+│   ├── session.py                #   Sesión con memoria, persistencia, summary auto, judge
+│   ├── execute_bootstrap.py      #   Preload tasks, hints, repo layout, review→correction
+│   └── tool_dedupe.py            #   Explore budget, ToolBudgetExceeded, dedupe, write enforcement
 │
 ├── display/                      # 🖥️ Adaptador de presentation
 │   ├── console.py                #   Streaming con rich + paneles
@@ -31,24 +33,30 @@ agent-lucho/
 │   ├── classifier.md             #   Prompt del clasificador (legacy)
 │   ├── analyze.md                #   System prompt del rol Análisis
 │   ├── plan.md                   #   System prompt del rol Planificación
-│   ├── execute.md                #   System prompt del rol Ejecución
-│   ├── review.md                 #   System prompt del rol Revisión
+│   ├── execute.md                #   System prompt del rol Ejecución (regla #1, flujo)
+│   ├── review.md                 #   System prompt del rol Revisión (checklist exhaustivo)
+│   ├── judge.md                  #   System prompt del Judge LLM (valida reviews)
 │   └── chat.md                   #   System prompt del rol Charla
 │
 ├── tools/                        # 🔧 Capa de infraestructura (tools)
-│   ├── __init__.py               #   Pool completo + subsets por rol
-│   ├── filesystem.py             #   list/read/write/edit files
+│   ├── __init__.py               #   Pool completo (21 tools) + subsets por rol
+│   ├── filesystem.py             #   list/read/write/edit/delete files
 │   ├── git.py                    #   Git + GitHub PRs
 │   ├── routes.py                 #   Detección de endpoints multi-lenguaje
 │   ├── search.py                 #   Búsqueda regex en código
-│   ├── verify.py                 #   run_lint / run_tests / run_build (auto-detect)
+│   ├── verify.py                 #   run_install / run_lint / run_tests / run_build
 │   ├── mcp_client.py             #   Cliente MCP (codebase-memory-mcp)
 │   └── _helpers.py               #   Helpers compartidos
 │
-├── tests/                        # 🧪 Pruebas
-│   ├── test_filesystem.py        #   6 tests de filesystem tools
-│   ├── test_git.py               #   7 tests de git tools
-│   ├── test_routes.py            #   13 tests de detección de endpoints
+├── tests/                        # 🧪 Pruebas (96 unit + 43 e2e)
+│   ├── test_cache_snapshot.py    #   snapshot cache invalidation
+│   ├── test_execute_bootstrap.py #   task preload, hints, review correction, minimal plan
+│   ├── test_filesystem.py        #   filesystem tools
+│   ├── test_git.py               #   git tools
+│   ├── test_llm_tool_recovery.py #   parse text tool calls
+│   ├── test_router_dedupe.py     #   intent classifier, dedupe, explore budget, exceptions
+│   ├── test_routes.py            #   endpoint detection (13 frameworks)
+│   ├── test_verify.py            #   stack detection, lint/test/build resolution
 │   ├── test_e2e_orchestrator.py  #   43 tests end-to-end del orquestador
 │   └── TEST_REPORT.md            #   Informe de pruebas
 │
@@ -101,7 +109,7 @@ main.py (thin)
 | **🔍 Análisis** (analyzer) | 10 | Read-only: explorar, preguntar, entender. No codea. |
 | **📋 Planificación** (planner) | 11 | Read-only + write_file: diseña solución en .md. No codea. |
 | **🛠️ Ejecución** (executor) | 19 | All tools + lint/tests/build: codea, verifica, commitea, pushea, crea PRs. |
-| **🔎 Revisión** (reviewer) | 13 | Read-only + lint/tests/build: revisa PRs, busca bugs, audita. No codea. |
+| **🔎 Revisión** (reviewer) | 14 | Read-only + lint/tests/build: revisa PRs, busca bugs, audita. Budget anti-loop. |
 | **💬 Charla** (chat) | 0 | Sin tools: conversación general. |
 
 ### Classifier keyword-based
@@ -402,13 +410,13 @@ El orquestador **detecta automáticamente** la intención y carga el rol adecuad
 
 ## Tests
 
-### Unit tests (26 tests)
+### Unit tests (96 tests)
 
 ```bash
 python -m pytest tests/ -v --ignore=tests/test_e2e_orchestrator.py
 ```
 
-Cubren: filesystem tools (6), git tools (7), route detection (13) — Next.js/Express/FastAPI/Go/Rust/Spring/Laravel/ASP.NET.
+Cubren: filesystem (11), git (7), route detection (13), dedupe + explore budget (13), cache snapshot (3), execute bootstrap (28), llm recovery (4), routes (13), verify (10) — frameworks: Next.js/Express/FastAPI/Go/Rust/Spring/Laravel/ASP.NET.
 
 ### E2E tests (43 tests)
 
@@ -446,3 +454,46 @@ Cubren: core domain (15), classifier (15), session flow con LLM real (13):
 - `/new` resetea el historial instantáneamente sin perder el análisis cacheado del repo
 - `max_tokens=2048` (chat) / `1024` (análisis) son los límites estables
 - Cada turno muestra tiempo y tokens (in/out/cacheados) y el acumulado de sesión
+
+## Protección anti-loop
+
+El modelo 4B tiende a ignorar instrucciones de texto y repetir tool calls hasta agotar el `recursion_limit`. El sistema usa múltiples capas de defensa:
+
+### `ToolBudgetExceeded` (exception-based enforcement)
+
+Tres capas de defensa progresiva:
+
+1. **Explore/Dedupe → STRING STOP**: Cuando explore tools o dedupe se agotan, devuelven un string `⛔` que le dice al modelo que escriba. El modelo puede reintentar con otra herramienta (ej: después de `list_files` bloqueado, intenta `edit_file`).
+2. **Read limit → STRING STOP**: Misma lógica tras agotar `max_reads_after_explore`.
+3. **`max_tools_before_write` → EXCEPTION**: Si el modelo acumula N tool calls sin escribir nada, se lanza `ToolBudgetExceeded` que **interrumpe el turno forzosamente**. Esto rompe loops infinitos que el 4B ignora.
+
+### Explore budget (`ExploreBudget`)
+
+| Rol | `max_calls` | `max_reads_after_explore` | `max_tools_before_write` | Descripción |
+|-----|-------------|--------------------------|--------------------------|-------------|
+| EXECUTE | 2 | 2 | 4 | Explora, luego escribe |
+| EXECUTE (hints) | 0 | 2 | 4 | No explora, directo a escribir |
+| REVIEW | 1 | 5 | 10 | Explora mínimo, lee diffs |
+| REVIEW (hints) | 0 | 2 | 5 | No explora, lee diffs del git context |
+
+`max_calls=0` activa `_explore_exhausted=True` inmediatamente y usa exceptions (no strings) para detener loops del modelo 4B.
+
+### Dedupe (`ToolCallDedupe`)
+
+Rastreía llamadas idénticas `(tool_name, args)`. Tras `max_repeats=2` (o 1 con hints), la tercera llamada idéntica devuelve `⛔ STOP` (string), permitiendo al modelo reintentar con otra herramienta.
+
+### Preload hints
+
+`execute_bootstrap.py` detecta el tipo de repo (Node/NestJS, Python, Go, Java/Spring) e inyecta hints de layout en el prompt, junto con el checklist de aceptación de tareas. Esto reduce la necesidad de explorar el repo.
+
+### Flujo de interrupción
+
+```
+Explores agotados → ⛔ STRING STOP → modelo puede reintentar (write/edit/delete)
+  ↓ (si el modelo sigue sin escribir)
+max_tools_before_write excedido → ToolBudgetExceeded raised
+  → stream_agent_turn aborts
+  → session.py catches exception
+  → muestra "⚡ Presupuesto de tools agotado"
+  → vuelve al prompt
+```

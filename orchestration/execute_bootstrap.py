@@ -206,7 +206,8 @@ def build_paste_correction_suffix(user_input: str) -> str:
         "\n\nINSTRUCCIÓN: "
         + block
         + "Los hallazgos YA ESTÁN en el mensaje. NO re-leas los mismos archivos en loop. "
-        "Aplicá las correcciones YA con edit_file/write_file según esos hallazgos. "
+        "Aplicá las correcciones YA con edit_file, write_file o delete_file según esos hallazgos. "
+        "Si un hallazgo pide eliminar un archivo, usá delete_file(path=...). "
         "Máximo 1 read_file por archivo tocado. "
         "Cumplí cada CRITICAL/WARNING antes de terminar; "
         "no agregues refactors fuera de lo pedido."
@@ -542,6 +543,79 @@ def inject_repo_hints(repo_path: str | None, *, max_chars: int = 8_000) -> str:
 
 
 
+def inject_git_context(repo_path: str | None, *, max_chars: int = 6_000) -> str:
+    """Captura el estado de git: archivos modificados, staged, y diff resumido.
+
+    Así el modelo sabe qué código ya existe y qué falta implementar.
+    Cuando la rama actual no es main, SIEMPRE muestra el diff contra main
+    (archivos commiteados en la rama) para que el review pueda verlos.
+    """
+    if not repo_path:
+        return ""
+    root = Path(repo_path)
+    if not root.is_dir():
+        return ""
+
+    import subprocess as _sub
+
+    def _git(args: list[str]) -> str:
+        try:
+            r = _sub.run(
+                ["git"] + args, cwd=root, capture_output=True, text=True, timeout=10,
+            )
+            return (r.stdout or "").strip()
+        except Exception:
+            return ""
+
+    branch = _git(["branch", "--show-current"]) or "HEAD"
+    status = _git(["status", "--short"])
+
+    parts: list[str] = []
+    budget = max_chars
+
+    def _take(label: str, text: str) -> None:
+        nonlocal budget
+        if budget <= 0 or not text:
+            return
+        chunk = text if len(text) <= budget else text[:budget] + "\n… (truncated)"
+        budget -= len(chunk)
+        parts.append(f"--- {label} (YA CARGADO — no gastes exploraciones en esto) ---")
+        parts.append(chunk)
+        parts.append(f"--- FIN {label} ---")
+        parts.append("")
+
+    # Working tree changes (unstaged + staged)
+    if status:
+        _take(f"git status (branch: {branch})", status)
+        staged_diff = _git(["diff", "--cached", "--stat"])
+        if staged_diff:
+            _take("git diff --cached --stat (staged)", staged_diff)
+        unstaged_diff = _git(["diff", "--stat"])
+        if unstaged_diff:
+            _take("git diff --stat (unstaged)", unstaged_diff)
+
+    # SIEMPRE mostrar diff contra main cuando la rama actual no es main
+    # (incluye archivos commiteados en la rama + pending changes)
+    if branch and branch != "main":
+        diff_stat = _git(["diff", f"main...{branch}", "--stat"])
+        if diff_stat:
+            _take(f"git diff main...{branch} --stat (all changes on branch)", diff_stat)
+        log = _git(["log", "--oneline", "-10", f"main...{branch}"])
+        if log:
+            _take(f"git log main...{branch} (last 10 commits)", log)
+        changed = _git(["diff", f"main...{branch}", "--name-only"])
+        if changed:
+            _take(f"git diff main...{branch} --name-only (files to review)", changed)
+
+    if not parts:
+        return ""
+
+    return (
+        "ESTADO DE GIT (qué código ya existe — usalo para decidir qué falta):\n\n"
+        + "\n".join(parts)
+    )
+
+
 def _build_preload_parts(
     user_input: str,
     cited: list[Path],
@@ -625,13 +699,13 @@ def _build_preload_parts(
         "INSTRUCCIÓN OBLIGATORIA: "
         + scope_rule
         + "El contenido relevante YA ESTÁ ARRIBA (tasks + layout + .env.example + main). "
-        "TU PRIMERA ACCIÓN DEBE SER write_file o edit_file — no explores. "
+        "TU PRIMERA ACCIÓN DEBE SER write_file, edit_file o delete_file — no explores. "
         "DIFF MÍNIMO: seguí el PLAN DE ARCHIVOS MÍNIMOS; no inventes CRUD/controllers/secrets. "
         "ENV.md en la RAÍZ del repo (solo vars del AC). "
         "Adapter = integración HTTP genérica (get/post/put/delete/request), no service de dominio. "
         "Máximo 1 list_files(recursive=false) SOLO si falta un path concreto. "
         "recursive=true está PROHIBIDO. Timeout HTTP REAL si el AC lo pide. "
-        "Antes de terminar: checklist verde + run_lint / run_tests / run_build."
+        "Antes de terminar: checklist verde + run_install (si falta deps) + run_lint / run_tests / run_build."
     )
     return "\n".join(p for p in parts if p is not None)
 
@@ -649,12 +723,16 @@ def preload_cited_files(user_input: str, repo_path: str | None = None) -> str:
     task_nums = extract_requested_task_numbers(user_input)
     out = _build_preload_parts(user_input, cited, task_nums, mode="execute", repo_path=repo_path)
     hints = inject_repo_hints(repo_path)
-    if hints:
+    git_ctx = inject_git_context(repo_path)
+    if hints or git_ctx:
         marker = "INSTRUCCIÓN OBLIGATORIA:"
-        if marker in out:
-            out = out.replace(marker, hints + "\n" + marker, 1)
-        else:
-            out = out + "\n\n" + hints
+        if git_ctx:
+            out = out + "\n\n" + git_ctx
+        if hints:
+            if marker in out:
+                out = out.replace(marker, hints + "\n" + marker, 1)
+            else:
+                out = out + "\n\n" + hints
         # Banner al INICIO: el 4B ignora instrucciones al final y se pone a list_files
         banner = (
             "⛔ PROHIBIDO usar list_files / search_code / inspect_routes en este turno. "
@@ -668,10 +746,36 @@ def preload_cited_files(user_input: str, repo_path: str | None = None) -> str:
 
 
 def preload_for_review(user_input: str, repo_path: str | None = None) -> str:
-    """Igual que preload EXECUTE pero con instrucciones de review AC-aware."""
-    cited = _collect_cited_paths(user_input, repo_path)
-    if not cited:
-        return user_input
+    """Igual que preload EXECUTE pero con instrucciones de review AC-aware.
 
+    Si el usuario no cita archivos, inyecta el git status automáticamente
+    para que el review se centre en los archivos modificados.
+
+    Cuando el working tree está clean (código ya commiteado), muestra el diff
+    contra main y obliga al reviewer a LEER los archivos listados.
+    """
+    cited = _collect_cited_paths(user_input, repo_path)
     task_nums = extract_requested_task_numbers(user_input)
-    return _build_preload_parts(user_input, cited, task_nums, mode="review", repo_path=repo_path)
+    git_ctx = inject_git_context(repo_path)
+
+    if cited:
+        out = _build_preload_parts(user_input, cited, task_nums, mode="review", repo_path=repo_path)
+        if git_ctx:
+            out = out + "\n\n" + git_ctx
+        return out
+
+    # Sin archivos citados: inyectar git context para review de cambios recientes
+    if git_ctx:
+        return (
+            user_input
+            + "\n\n" + git_ctx
+            + "\n\nINSTRUCCIÓN OBLIGATORIA (REVIEW AC-AWARE): "
+            "El git status YA ESTÁ ARRIBA. "
+            "LEÉ CADA archivo listado en `git diff main...BRANCH --name-only` con read_file. "
+            "Si ese bloque no existe, leé los archivos del git status. "
+            "Clasificá CRITICAL / WARNING / SUGGESTION. "
+            "Cita archivo:línea para cada hallazgo. "
+            "Emítí el informe UNA vez y terminá."
+        )
+
+    return user_input

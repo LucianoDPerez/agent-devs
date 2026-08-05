@@ -1,0 +1,220 @@
+{
+  "summary": "43/43 passed",
+  "results": [
+    {
+      "name": "analyze → analyzer",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "plan → planner",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "execute → executor",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "review → reviewer",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "chat → chat",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "analyze: 10 tools",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "plan: 11 tools",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "execute: 19 tools",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "review: 13 tools",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "chat: 0 tools",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "Prompt analyzer",
+      "passed": true,
+      "detail": "896 chars"
+    },
+    {
+      "name": "Prompt planner",
+      "passed": true,
+      "detail": "589 chars"
+    },
+    {
+      "name": "Prompt executor",
+      "passed": true,
+      "detail": "935 chars"
+    },
+    {
+      "name": "Prompt reviewer",
+      "passed": true,
+      "detail": "734 chars"
+    },
+    {
+      "name": "Prompt chat",
+      "passed": true,
+      "detail": "291 chars"
+    },
+    {
+      "name": "'analizame este codigo'",
+      "passed": true,
+      "detail": "got=analyze"
+    },
+    {
+      "name": "'explorá la estructura del proyecto'",
+      "passed": true,
+      "detail": "got=analyze"
+    },
+    {
+      "name": "'cómo funciona este módulo?'",
+      "passed": true,
+      "detail": "got=analyze"
+    },
+    {
+      "name": "'hacé un plan para implementar login'",
+      "passed": true,
+      "detail": "got=plan"
+    },
+    {
+      "name": "'desglosá en tareas la feature X'",
+      "passed": true,
+      "detail": "got=plan"
+    },
+    {
+      "name": "'creá un plan para migrar a Postgres'",
+      "passed": true,
+      "detail": "got=plan"
+    },
+    {
+      "name": "'escribí el código del endpoint'",
+      "passed": true,
+      "detail": "got=execute"
+    },
+    {
+      "name": "'implementá el cambio y comitealo'",
+      "passed": true,
+      "detail": "got=execute"
+    },
+    {
+      "name": "'editá el archivo main.py'",
+      "passed": true,
+      "detail": "got=execute"
+    },
+    {
+      "name": "'revisá este PR por bugs'",
+      "passed": true,
+      "detail": "got=review"
+    },
+    {
+      "name": "'hacé code review del PR #5'",
+      "passed": true,
+      "detail": "got=review"
+    },
+    {
+      "name": "'buscá bugs en el último commit'",
+      "passed": true,
+      "detail": "got=review"
+    },
+    {
+      "name": "'hola como estas?'",
+      "passed": true,
+      "detail": "got=chat"
+    },
+    {
+      "name": "'gracias por tu ayuda'",
+      "passed": true,
+      "detail": "got=chat"
+    },
+    {
+      "name": "' qué hace esta función?'",
+      "passed": true,
+      "detail": "got=analyze"
+    },
+    {
+      "name": "Session start",
+      "passed": true,
+      "detail": "tools=10+14"
+    },
+    {
+      "name": "Turn 1 (chat): rol=chat",
+      "passed": true,
+      "detail": "rol=chat"
+    },
+    {
+      "name": "Turn 1 (chat): respuesta",
+      "passed": true,
+      "detail": "235 tokens, 21.7s"
+    },
+    {
+      "name": "Turn 2 (analyze): rol=analyzer",
+      "passed": true,
+      "detail": "rol=analyzer"
+    },
+    {
+      "name": "Turn 2 (analyze): respuesta",
+      "passed": true,
+      "detail": "174 tokens, 15.6s"
+    },
+    {
+      "name": "Turn 3 (plan): rol=planner",
+      "passed": true,
+      "detail": "rol=planner"
+    },
+    {
+      "name": "Turn 3 (plan): respuesta",
+      "passed": true,
+      "detail": "489 tokens, 29.3s"
+    },
+    {
+      "name": "Turn 4 (review): rol=reviewer",
+      "passed": true,
+      "detail": "rol=reviewer"
+    },
+    {
+      "name": "Turn 4 (review): respuesta",
+      "passed": true,
+      "detail": "2510 tokens, 504.0s"
+    },
+    {
+      "name": "Turn 5 (execute): rol=executor",
+      "passed": true,
+      "detail": "rol=executor"
+    },
+    {
+      "name": "Turn 5 (execute): respuesta",
+      "passed": true,
+      "detail": "180 tokens, 85.2s"
+    },
+    {
+      "name": "Execute: archivo creado",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "Execute: contenido correcto",
+      "passed": true,
+      "detail": ""
+    }
+  ]
+}

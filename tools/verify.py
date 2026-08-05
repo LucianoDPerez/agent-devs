@@ -157,6 +157,38 @@ def _resolve_command(root: Path, action: str) -> list[str] | str:
     return f"Unknown action: {action}"
 
 
+def _needs_node_install(root: Path) -> bool:
+    """Detects if node_modules is missing or stale."""
+    if not (root / "package.json").is_file():
+        return False
+    if not (root / "node_modules").is_dir():
+        return True
+    # node_modules/.package-lock.json missing → likely incomplete install
+    pm = _node_package_manager(root)
+    lockfile = f"node_modules/.{pm}-install"
+    return not (root / lockfile).is_file() and not (root / "node_modules/.package-lock.json").is_file()
+
+
+def _run_node_install(root: Path) -> str:
+    pm = _node_package_manager(root)
+    cmd = [pm, "install"] if pm != "pnpm" else ["pnpm", "install", "--frozen-lockfile"]
+    # Fall back to plain install if frozen-lockfile fails
+    result = _run_command(str(root), cmd)
+    if "FAILED" in result and "frozen-lockfile" in result:
+        result = _run_command(str(root), ["pnpm", "install"])
+    return result
+
+
+def _run_python_install(root: Path) -> str:
+    venv = root / ".venv"
+    if not venv.is_dir():
+        return _run_command(str(root), ["python3", "-m", "venv", ".venv"])
+    pip = venv / "bin" / "pip"
+    if not pip.is_file():
+        return f"No pip in {venv}"
+    return _run_command(str(root), [str(pip), "install", "-e", "."])
+
+
 def _run_verify(path: str, action: str) -> str:
     error = _validate_cwd(path)
     if error:
@@ -167,7 +199,17 @@ def _run_verify(path: str, action: str) -> str:
     if isinstance(command, str):
         return command
 
-    return _run_command(path, command)
+    result = _run_command(path, command)
+
+    # Auto-detect missing dependencies and suggest install
+    if "FAILED" in result:
+        stack = _detect_stack(root)
+        if stack == "node" and _needs_node_install(root):
+            result += "\n⚠️  node_modules missing or incomplete. Run: run_install(path=...) first."
+        elif stack == "python" and not (root / ".venv").is_dir():
+            result += "\n⚠️  .venv missing. Run: run_install(path=...) first."
+
+    return result
 
 
 @tool
@@ -198,3 +240,31 @@ def run_build(path: str) -> str:
     Usage: run_build(path="/Users/me/repo")
     """
     return _run_verify(path, "build")
+
+
+@tool
+def run_install(path: str) -> str:
+    """
+    Install project dependencies (auto-detects Node/Python/Go).
+    Node: npm/pnpm/yarn install. Python: pip install -e . Go: go mod download.
+    Run this BEFORE run_lint / run_tests / run_build if dependencies are missing.
+    Usage: run_install(path="/Users/me/repo")
+    """
+    error = _validate_cwd(path)
+    if error:
+        return error
+
+    root = Path(path)
+    stack = _detect_stack(root)
+    if stack is None:
+        return f"Could not detect project type in {root}"
+
+    if stack == "node":
+        if _needs_node_install(root):
+            return _run_node_install(root)
+        return "✅ Dependencies already installed (node_modules exists)."
+    if stack == "go":
+        return _run_command(str(root), ["go", "mod", "download"])
+    if stack == "python":
+        return _run_python_install(root)
+    return f"Unknown stack: {stack}"

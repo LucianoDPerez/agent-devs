@@ -15,6 +15,14 @@ from config import (
     EXECUTE_MAX_READS_AFTER_EXPLORE,
     EXECUTE_MAX_TOOLS_BEFORE_WRITE,
     EXECUTE_RECURSION_LIMIT,
+    JUDGE_BASE_URL,
+    REVIEW_EXPLORE_BUDGET,
+    REVIEW_MAX_READS_AFTER_EXPLORE,
+    REVIEW_MAX_TOOLS_BEFORE_WRITE,
+    JUDGE_ENABLED,
+    JUDGE_MAX_TOKENS,
+    JUDGE_MODEL_NAME,
+    JUDGE_TEMPERATURE,
     TURN_IDLE_TIMEOUT,
 )
 from core.roles import Role, role_for_intent
@@ -28,8 +36,8 @@ from orchestration.execute_bootstrap import (
     preload_cited_files,
     preload_for_review,
 )
-from orchestration.router import classify_intent
-from orchestration.tool_dedupe import ExploreBudget, ToolCallDedupe
+from orchestration.router import _extract_command_prefix, classify_intent
+from orchestration.tool_dedupe import ExploreBudget, ToolBudgetExceeded, ToolCallDedupe
 
 _ROLE_LABELS = {
     Role.ANALYZE: "🔍 Análisis", Role.PLAN: "📋 Planificación",
@@ -41,6 +49,41 @@ _ROLE_LABELS = {
 _CONTEXT_LIMIT = 28800
 _SUMMARY_THRESHOLD = 0.90
 _WARNING_THRESHOLD = 0.85
+
+def _load_judge_prompt() -> str:
+    """Carga el prompt del judge."""
+    from pathlib import Path
+    prompt_path = Path(__file__).resolve().parent.parent / "prompts" / "judge.md"
+    return prompt_path.read_text(encoding="utf-8")
+
+
+_REVIEW_CORRECTION_KEYWORDS = (
+    "cambios del review", "cambios propuestos", "corregir los hallazgos",
+    "implementar los cambios", "aplicar el review", "fix the",
+    "implementar el review", "resolver los hallazgos",
+)
+
+
+def _is_review_correction(user_input: str) -> bool:
+    """Detecta si el usuario pide corregir los hallazgos de un review previo.
+    Usa el comando del usuario (primeras 120 chars) para no matchear keywords
+    en contenido pegado (checklists con 'Implementación', etc.)."""
+    prefix = _extract_command_prefix(user_input).lower()
+    has_action = any(k in prefix for k in ("implement", "correg", "aplicar", "fix", "resolver"))
+    has_review = any(k in prefix for k in ("review", "hallazgo", "reporte", "cambios propuesto"))
+    return has_action and has_review
+
+
+def _build_review_correction_suffix() -> str:
+    """Instrucción para aplicar correcciones del review previo (en history)."""
+    return (
+        "\n\n⛔ INSTRUCCIÓN (CORRECCIÓN POST-REVIEW): "
+        "El reporte del review está en el historial de esta conversación (último mensaje del asistente). "
+        "NO busques archivos. NO explores. LEÉ el review en el historial y aplicá cada hallazgo CRITICAL y WARNING. "
+        "Usá read_file UNA VEZ por archivo que debas modificar, luego edit_file/write_file/delete_file. "
+        "Si el review pide eliminar un archivo, usá delete_file. "
+        "Máximo 2 archivos a leer. Después: stage, commit, install, lint, tests, build."
+    )
 
 
 def _git_branch(repo_path: str) -> str:
@@ -239,9 +282,14 @@ class Session:
         # Reset dedupe + explore budget cada turno (siempre restaurar defaults)
         self._dedupe.reset()
         self._explore_budget.reset()
-        self._explore_budget.max_calls = EXECUTE_EXPLORE_BUDGET
-        self._explore_budget.max_reads_after_explore = EXECUTE_MAX_READS_AFTER_EXPLORE
-        self._explore_budget.max_tools_before_write = EXECUTE_MAX_TOOLS_BEFORE_WRITE
+        if new_role == Role.EXECUTE:
+            self._explore_budget.max_calls = EXECUTE_EXPLORE_BUDGET
+            self._explore_budget.max_reads_after_explore = EXECUTE_MAX_READS_AFTER_EXPLORE
+            self._explore_budget.max_tools_before_write = EXECUTE_MAX_TOOLS_BEFORE_WRITE
+        elif new_role == Role.REVIEW:
+            self._explore_budget.max_calls = REVIEW_EXPLORE_BUDGET
+            self._explore_budget.max_reads_after_explore = REVIEW_MAX_READS_AFTER_EXPLORE
+            self._explore_budget.max_tools_before_write = REVIEW_MAX_TOOLS_BEFORE_WRITE
 
         # Acumular el mensaje del usuario en el historial
         agent_input = user_input
@@ -253,10 +301,11 @@ class Session:
                 hints_on = "CONTEXTO DE REPO PRECARGADO" in agent_input
                 # Con hints ya inyectados, explore=0: el 4B igual llama list_files y quema el turno
                 if hints_on:
-                    self._explore_budget.max_calls = 0
-                    self._explore_budget.max_reads_after_explore = 1
-                    self._explore_budget.max_tools_before_write = 3
-                extra = " · explore=0 (hints)" if hints_on else ""
+                    self._explore_budget.max_calls = 1
+                    self._explore_budget.max_reads_after_explore = 5
+                    self._explore_budget.max_tools_before_write = 8
+                    self._dedupe.max_repeats = 1
+                extra = " · explore=1 (hints)" if hints_on else ""
                 console.print(
                     f"[dim]📎 Archivos de tareas pre-cargados{scope} "
                     f"+ checklist AC{extra}.[/dim]\n"
@@ -267,9 +316,21 @@ class Session:
                 for k in ("correc", "problema", "falta", "critical", "crític")
             ):
                 agent_input = user_input + build_paste_correction_suffix(user_input)
+            # Review → corrección: "implementar los cambios del review"
+            elif _is_review_correction(user_input):
+                agent_input = user_input + _build_review_correction_suffix()
+                self._explore_budget.max_calls = 0
+                self._explore_budget.max_tools_before_write = 4
+                console.print("[dim]🔗 Corrección post-review — explore=0, force write.[/dim]\n")
         elif new_role == Role.REVIEW:
             agent_input = preload_for_review(user_input, self.repo_path)
+            self._dedupe.max_repeats = 1
             if agent_input != user_input:
+                # Con git context precargado, no necesita explorar
+                self._explore_budget.max_calls = 1
+                # Reviewer needs to read ALL modified files + run verify tools
+                self._explore_budget.max_reads_after_explore = 15
+                self._explore_budget.max_tools_before_write = 30
                 nums = extract_requested_task_numbers(user_input)
                 scope = f" (Tarea(s) {', '.join(map(str, nums))})" if nums else ""
                 console.print(
@@ -323,6 +384,13 @@ class Session:
         except asyncio.CancelledError:
             interrupted = True
             interrupted_by_esc = watcher.interrupted.is_set()
+        except ToolBudgetExceeded as e:
+            interrupted = True
+            print(
+                f"\n\n⚡ Presupuesto de tools agotado: {e} "
+                "Reintentá pidiendo implementar directamente o con un path más concreto.",
+                flush=True,
+            )
         except Exception as e:
             name = type(e).__name__
             if "Recursion" in name or "recursion" in str(e).lower():
@@ -352,6 +420,10 @@ class Session:
         if not interrupted:
             self._messages.append(AIMessage(self._last_response or "(respuesta generada)"))
 
+        # Judge: valida reviews que dicen APROBADO
+        if new_role == Role.REVIEW and not interrupted:
+            self._maybe_judge_review(user_input)
+
         try:
             save_turn(
                 session_id=self.session_id,
@@ -377,6 +449,98 @@ class Session:
             console.print(f"\n[yellow]⚠️  Contexto al {pct:.0f}% — usá /new para empezar sesión nueva[/yellow]\n")
         elif ctx_status == "summary":
             self._maybe_summarize()
+
+    def _maybe_judge_review(self, user_input: str) -> None:
+        """Si el review dice APROBADO, llama al judge LLM para validar."""
+        if not JUDGE_ENABLED:
+            return
+
+        response = self._last_response or ""
+        if not any(k in response for k in ("APROBADO", "APROBADA", "✅ APROBAR")):
+            return
+
+        console.print("\n[bold yellow]⚖️  JUDGE — validando review con modelo externo…[/bold yellow]")
+
+        # Get git diff
+        diff = self._get_git_diff()
+        if not diff:
+            console.print("[dim]   (sin diff para evaluar, se omite judge)[/dim]\n")
+            return
+
+        # Load judge prompt
+        judge_prompt = _load_judge_prompt()
+
+        # Build judge message
+        judge_message = (
+            f"## DIFF DE LA RAMA\n\n{diff}\n\n"
+            f"## INFORME DE REVIEW DEL AGENTE\n\n{response}\n\n"
+            f"## CONTEXTO DEL USUARIO\n\n{user_input}\n\n"
+            "## TU TAREA: Validá si el review fue exhaustivo y si el veredicto es correcto."
+        )
+
+        # Call judge LLM
+        try:
+            judge_llm = LocalLLM(
+                base_url=JUDGE_BASE_URL,
+                model_name=JUDGE_MODEL_NAME,
+                temperature=JUDGE_TEMPERATURE,
+                max_tokens=JUDGE_MAX_TOKENS,
+                api_key="not-needed",
+            )
+            result = judge_llm.invoke(judge_message)
+            verdict = result.content or ""
+
+            # Print verdict
+            if "NO APROBAR" in verdict or "CRITICAL" in verdict:
+                console.print("\n[bold red]⛔ JUDGE: NO APROBAR[/bold red]")
+            elif "REVISAR" in verdict:
+                console.print("\n[bold yellow]⚠️  JUDGE: REVISAR[/bold yellow]")
+            else:
+                console.print("\n[bold green]✅ JUDGE: APROBADO (confirmado)[/bold green]")
+
+            console.print(f"\n[dim]{verdict}[/dim]\n")
+        except Exception as e:
+            console.print(f"[dim red]⚠️  Judge falló: {e}[/dim red]\n")
+
+    def _get_git_diff(self) -> str:
+        """Get the diff of changed files in the repo."""
+        try:
+            branch = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=self.repo_path, capture_output=True, text=True, timeout=3,
+            ).stdout.strip()
+            if not branch:
+                return ""
+
+            # Diff against main or upstream
+            result = subprocess.run(
+                ["git", "diff", f"main...{branch}", "--stat"],
+                cwd=self.repo_path, capture_output=True, text=True, timeout=10,
+            )
+            stat = result.stdout.strip()
+
+            result = subprocess.run(
+                ["git", "diff", f"main...{branch}"],
+                cwd=self.repo_path, capture_output=True, text=True, timeout=10,
+            )
+            diff = result.stdout.strip()
+            if not diff:
+                # Try last N commits if diff is empty
+                result = subprocess.run(
+                    ["git", "diff", "--cached"],
+                    cwd=self.repo_path, capture_output=True, text=True, timeout=10,
+                )
+                diff = result.stdout.strip()
+            if not diff:
+                result = subprocess.run(
+                    ["git", "log", "-3", "--diff-filter=d", "--patch"],
+                    cwd=self.repo_path, capture_output=True, text=True, timeout=10,
+                )
+                diff = result.stdout.strip()
+
+            return f"### STAT\n{stat}\n\n### DIFF\n{diff[:15000]}" if diff else ""
+        except Exception:
+            return ""
 
     def get_recent_history(self, limit: int = 5) -> list[dict]:
         """Devuelve los últimos N turnos del repo (de cualquier sesión)."""
