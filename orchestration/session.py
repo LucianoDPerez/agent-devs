@@ -9,12 +9,20 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from cache import load_recent_turns, save_turn
+from config import AGENT_RECURSION_LIMIT, EXECUTE_EXPLORE_BUDGET, TURN_IDLE_TIMEOUT
 from core.roles import Role, role_for_intent
 from display.console import console, print_role_switch, print_turn_summary, stream_agent_turn
 from display.esc_watcher import EscWatcher
 from llm_wrapper import LocalLLM, get_usage, reset_turn_usage
 from orchestration.agent_builder import build_agent, init_mcp
+from orchestration.execute_bootstrap import (
+    build_paste_correction_suffix,
+    extract_requested_task_numbers,
+    preload_cited_files,
+    preload_for_review,
+)
 from orchestration.router import classify_intent
+from orchestration.tool_dedupe import ExploreBudget, ToolCallDedupe
 
 _ROLE_LABELS = {
     Role.ANALYZE: "🔍 Análisis", Role.PLAN: "📋 Planificación",
@@ -91,8 +99,11 @@ class Session:
         self.current_role: Role = Role.ANALYZE
         self.agent: Any = None
         self._tools: list = []
-        self._mcp_count: int = 0
+        self._mcp_available: int = 0  # total MCP cargados
+        self._mcp_count: int = 0      # MCP activos en el rol actual
         self._local_count: int = 0
+        self._dedupe = ToolCallDedupe(max_repeats=2)
+        self._explore_budget = ExploreBudget(max_calls=EXECUTE_EXPLORE_BUDGET)
         self._session_time: float = 0.0
         self.session_id: str = str(uuid.uuid4())[:8]
 
@@ -103,11 +114,15 @@ class Session:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            self._tools, self._mcp_count = loop.run_until_complete(init_mcp())
+            self._tools, self._mcp_available = loop.run_until_complete(init_mcp())
             self.current_role = Role.ANALYZE
             self._load_previous_sessions()
-            self.agent, self._local_count = loop.run_until_complete(
-                build_agent(self.llm, Role.ANALYZE, self.repo_path, self.cached_analysis, self._tools)
+            self.agent, self._local_count, self._mcp_count = loop.run_until_complete(
+                build_agent(
+                    self.llm, Role.ANALYZE, self.repo_path,
+                    self.cached_analysis, self._tools, self._dedupe,
+                    self._explore_budget,
+                )
             )
         finally:
             loop.close()
@@ -157,8 +172,12 @@ class Session:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            self.agent, self._local_count = loop.run_until_complete(
-                build_agent(self.llm, role, self.repo_path, self.cached_analysis, self._tools)
+            self.agent, self._local_count, self._mcp_count = loop.run_until_complete(
+                build_agent(
+                    self.llm, role, self.repo_path,
+                    self.cached_analysis, self._tools, self._dedupe,
+                    self._explore_budget,
+                )
             )
         finally:
             loop.close()
@@ -206,12 +225,44 @@ class Session:
         if status:
             print(status, flush=True)
 
+        # Reset dedupe + explore budget cada turno
+        self._dedupe.reset()
+        self._explore_budget.reset()
+
         # Acumular el mensaje del usuario en el historial
-        self._messages.append(HumanMessage(user_input))
+        agent_input = user_input
+        if new_role == Role.EXECUTE:
+            agent_input = preload_cited_files(user_input, self.repo_path)
+            if agent_input != user_input:
+                nums = extract_requested_task_numbers(user_input)
+                scope = f" (solo Tarea(s) {', '.join(map(str, nums))})" if nums else ""
+                console.print(
+                    f"[dim]📎 Archivos de tareas pre-cargados{scope} "
+                    "+ checklist AC (sin gastar exploración).[/dim]\n"
+                )
+            # Correcciones pegadas (sin path a tasks.md): forzar escritura
+            elif len(user_input) > 400 and any(
+                k in user_input.lower()
+                for k in ("correc", "problema", "falta", "critical", "crític")
+            ):
+                agent_input = user_input + build_paste_correction_suffix(user_input)
+        elif new_role == Role.REVIEW:
+            agent_input = preload_for_review(user_input, self.repo_path)
+            if agent_input != user_input:
+                nums = extract_requested_task_numbers(user_input)
+                scope = f" (Tarea(s) {', '.join(map(str, nums))})" if nums else ""
+                console.print(
+                    f"[dim]📎 Checklist AC pre-cargado para review{scope}.[/dim]\n"
+                )
+
+        self._messages.append(HumanMessage(agent_input))
 
         reset_turn_usage()
         start = time.monotonic()
-        config = {"configurable": {"thread_id": f"session-{id(self)}"}}
+        config = {
+            "configurable": {"thread_id": f"session-{id(self)}"},
+            "recursion_limit": AGENT_RECURSION_LIMIT,
+        }
 
         # Pasar todo el historial al agente
         messages_for_agent = list(self._messages)
@@ -219,7 +270,12 @@ class Session:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         task = loop.create_task(
-            stream_agent_turn(self.agent, messages_for_agent, config)
+            stream_agent_turn(
+                self.agent,
+                messages_for_agent,
+                config,
+                idle_timeout=TURN_IDLE_TIMEOUT,
+            )
         )
 
         # Watcher de ESC: permite interrumpir el streaming y volver al prompt.
@@ -244,7 +300,16 @@ class Session:
             interrupted = True
             interrupted_by_esc = watcher.interrupted.is_set()
         except Exception as e:
-            print(f"\n\n❌ Error en la iteración: {e}", flush=True)
+            name = type(e).__name__
+            if "Recursion" in name or "recursion" in str(e).lower():
+                print(
+                    f"\n\n⚠️  Turno cortado: demasiados pasos de exploración "
+                    f"(límite {AGENT_RECURSION_LIMIT}). "
+                    "Reintentá pidiendo implementar directamente o con un path más concreto.",
+                    flush=True,
+                )
+            else:
+                print(f"\n\n❌ Error en la iteración: {e}", flush=True)
         finally:
             watcher.stop()
             loop.close()
@@ -252,20 +317,12 @@ class Session:
         elapsed = time.monotonic() - start
         self._session_time += elapsed
 
-        # Capturar la respuesta del agente para persistir
-        # El stream_agent_turn imprime pero no retorna el texto. Lo reconstruimos
-        # del último AIMessage del historial del agente. Por simplicidad,
-        # guardamos lo que sabemos: el user_input y un placeholder.
         usage = get_usage()
         turn_tokens = usage["turn"]["prompt"] + usage["turn"]["completion"]
 
-        # Acumular respuesta en el historial (para que el agente la recuerde)
-        # Como no tenemos el texto exacto del response, usamos un AIMessage placeholder
-        # que el agente verá en próximos turnos como contexto.
         if not interrupted:
             self._messages.append(AIMessage(self._last_response or "(respuesta generada)"))
 
-        # Persistir en SQLite
         try:
             save_turn(
                 session_id=self.session_id,
@@ -285,7 +342,6 @@ class Session:
             interrupt_source="ESC" if interrupted_by_esc else None,
         )
 
-        # Warning de contexto
         ctx_status = self._check_context()
         if ctx_status == "warning":
             pct = _estimate_tokens(self._messages) / _CONTEXT_LIMIT * 100

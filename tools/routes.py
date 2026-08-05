@@ -9,7 +9,7 @@ y Ruby (Rails, Sinatra).
 import re
 from pathlib import Path
 
-from langchain_core.tools import ToolException, tool
+from langchain_core.tools import tool
 
 from config import MAX_SEARCH_RESULT_CHARS
 
@@ -291,7 +291,10 @@ def inspect_routes(path: str) -> str:
     """
     root = Path(path)
     if not root.exists():
-        raise ToolException(f"Path does not exist: {path}")
+        return (
+            f"Path does not exist: {path}. "
+            "Do not retry this path. Use list_files on a parent that exists."
+        )
 
     groups: dict[str, list[str]] = {}
     used = 0

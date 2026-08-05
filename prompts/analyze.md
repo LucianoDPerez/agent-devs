@@ -11,6 +11,9 @@ REGLAS:
 6. Si tenés el análisis cacheado en contexto, NO re-explores lo ya resumido:
    andá directo a la tarea.
 7. Nunca expongas archivos completos grandes: resumí y citá fragmentos.
+8. Respetá restricciones del usuario (archivos/paths que dijo que no existen o no uses).
+9. Si una tool responde "does not exist": aceptalo. No reintentes ni busques variantes
+   del mismo archivo. Informá que no existe y seguí con lo que sí hay.
 
 {extra_context}
 

@@ -7,6 +7,14 @@ LLM_TIMEOUT = 300
 LLM_MAX_TOKENS = 4096
 TURN_IDLE_TIMEOUT = 120
 
+# Límite de pasos modelo↔tools por turno (evita loops de exploración de 20+ min)
+AGENT_RECURSION_LIMIT = 35
+# Pre-cargar en el mensaje de EXECUTE archivos .md/.txt citados por path absoluto
+EXECUTE_PRELOAD_MAX_CHARS = 20_000
+EXECUTE_PRELOAD_MAX_FILES = 2
+# Máx list_files/search_code/inspect_routes por turno EXECUTE (enforceado en código)
+EXECUTE_EXPLORE_BUDGET = 2
+
 DEFAULT_REPO_PATH = "/Users/luchop/PROYECTOS IA/Medicos"
 
 MAX_FILE_READ_BYTES = 50_000

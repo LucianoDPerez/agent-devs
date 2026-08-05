@@ -4,9 +4,30 @@ import re
 
 from core.intents import Intent
 
+_EXECUTE_VERBS = [
+    "implementá", "implementa", "implement", "implementar",
+    "escribí", "escribi", "escribe código", "escribí código",
+    "codeá", "codea",
+    "creá un archivo", "crea un archivo",
+    "creá un commit", "crea un commit",
+    "modificá", "modifica", "modificar",
+    "editá", "edita", "editar",
+    "commit", "commitea", "pusheá", "push",
+    "creá un pr", "crea un pr", "abrí un pr",
+    "write file", "create file", "edit file",
+    "agregá un endpoint", "agrega un endpoint",
+    "aplicá", "aplica", "aplicar",
+    "corregí", "corrige", "corregir",
+]
+
 
 def classify_intent(_llm, user_message: str) -> Intent:
     text = user_message.strip().lower()
+
+    # EXECUTE gana si hay verbo de acción — aunque el paste diga "revisión/críticos"
+    # (ej. "implementar estas correcciones detectadas ### PROBLEMAS CRÍTICOS…")
+    if _has_any(text, _EXECUTE_VERBS):
+        return Intent.EXECUTE
 
     # Review patterns (most specific)
     if _has_any(text, [
@@ -16,8 +37,7 @@ def classify_intent(_llm, user_message: str) -> Intent:
     ]):
         return Intent.REVIEW
 
-    # Plan patterns (must come before execute — "plan" overrides "implementar")
-    # Match as whole tokens so paths like "lucho-plans/tasks.md" don't trigger PLAN.
+    # Plan patterns — whole tokens so paths like "lucho-plans/tasks.md" don't trigger PLAN
     if _has_any(text, [
         "plan", "planific", "planifi",
         "diseñá", "diseña", "diseño", "diseñ",
@@ -28,22 +48,6 @@ def classify_intent(_llm, user_message: str) -> Intent:
         "qué archivos", "que archivos",
     ]):
         return Intent.PLAN
-
-    # Execute patterns
-    if _has_any(text, [
-        "implementá", "implementa", "implement", "implementar",
-        "escribí", "escribi", "escribe código", "escribí código",
-        "codeá", "codea",
-        "creá un archivo", "crea un archivo",
-        "creá un commit", "crea un commit",
-        "modificá", "modifica", "modificar",
-        "editá", "edita", "editar",
-        "commit", "commitea", "pusheá", "push",
-        "creá un pr", "crea un pr", "abrí un pr",
-        "write file", "create file", "edit file",
-        "agregá un endpoint", "agrega un endpoint",
-    ]):
-        return Intent.EXECUTE
 
     # Chat patterns
     if _has_any(text, [
@@ -72,7 +76,10 @@ def _has_any(text: str, patterns: list[str]) -> bool:
                 return True
             continue
         # Stem (ends mid-word intentionally) → prefix at token start
-        if p in {"planific", "planifi", "diseñ", "revis", "crític", "critic", "implement"}:
+        if p in {
+            "planific", "planifi", "diseñ", "revis", "crític", "critic",
+            "implement", "aplic", "correg",
+        }:
             if re.search(rf"(?<!\w){re.escape(p)}\w*", text):
                 return True
             continue

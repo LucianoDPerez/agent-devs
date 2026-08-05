@@ -41,8 +41,16 @@ def _ensure_analysis(llm: LocalLLM, repo_path: str, status: str | None = None) -
     cached = load_analysis(repo_path)
     if cached:
         current = snapshot_hash(repo_path)
-        if current and cached["snapshot_hash"] == current:
+        analysis = (cached.get("analysis") or "").strip()
+        poison = (
+            "resumen en español de 80-120 palabras",
+            "qué hace el proyecto, arquitectura general y estructura de carpetas",
+        )
+        is_poison = any(p in analysis.lower() for p in poison) or len(analysis) < 40
+        if current and cached["snapshot_hash"] == current and not is_poison:
             return cached
+        if is_poison:
+            print("⚠️  Análisis cacheado inválido; se regenera.\n", flush=True)
     if status:
         print(status, flush=True)
     try:
@@ -58,6 +66,18 @@ def _ensure_analysis(llm: LocalLLM, repo_path: str, status: str | None = None) -
     print(result["analysis"])
     print()
     return result
+
+
+def _format_cached_context(cached: dict) -> str:
+    """Contexto compacto para el system prompt (lenguaje + stack + summary)."""
+    parts = []
+    if cached.get("language"):
+        parts.append(f"Lenguaje: {cached['language']}")
+    if cached.get("tech_stack"):
+        parts.append(f"Stack: {cached['tech_stack']}")
+    if cached.get("analysis"):
+        parts.append(cached["analysis"])
+    return "\n".join(parts)
 
 
 def do_analyze(llm: LocalLLM, repo_path: str):
@@ -103,17 +123,14 @@ def main():
         status="🤔 Analizando el repositorio... (puede tardar 1-2 min). Ctrl+C para cancelar.",
     )
 
-    session = Session(_make_llm(), repo_path, cached_analysis=cached.get("analysis", ""))
+    session = Session(_make_llm(), repo_path, cached_analysis=_format_cached_context(cached))
     session.start()
     print_welcome(repo_path, LLM_MODEL_NAME, LLM_BASE_URL, LLM_TEMPERATURE, (session._local_count, session._mcp_count))
 
-    has_cache = bool(cached.get("analysis"))
-    if has_cache:
+    if cached.get("analysis"):
         print("📚 Análisis cacheado encontrado. No se re-explora.")
-        initial_msg = "El análisis del repositorio ya está en tu contexto. ¿Qué querés que haga o analice?"
-    else:
-        initial_msg = f"Explorá el repositorio en {repo_path}: listá los archivos del nivel raíz y dame un resumen breve."
-    session.run_turn(initial_msg)
+    print("💡 Decime qué querés hacer (implementá, planificá, revisá, analizá…).\n")
+    # No correr un turn LLM inicial: gastaba tokens y confundía al modelo 4B.
 
     try:
         while True:

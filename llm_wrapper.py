@@ -4,10 +4,19 @@ Custom ChatOpenAI wrapper que captura `reasoning_content` del llama-server.
 El llama-server con `--jinja` envía la salida del modelo a `reasoning_content`
 en vez de `content` durante streaming. LangChain's ChatOpenAI no lo lee.
 Este wrapper resuelve ese problema.
+
+También:
+- NO mezcla reasoning en `content` (si no, el grafo del agente cree que el
+  turno terminó en texto y no ejecuta tools).
+- Recupera tool calls emitidos como XML/texto (fallo típico del modelo 4B).
 """
+
+from __future__ import annotations
 
 import asyncio
 import json
+import re
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -26,17 +35,110 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from openai import AsyncOpenAI
 from pydantic import PrivateAttr
 
+# XML / pseudo-tool formats that small local models emit instead of native tool_calls
+_FUNCTION_XML_RE = re.compile(
+    r"<function=(?P<name>[\w.-]+)>\s*(?P<body>.*?)\s*</function>",
+    re.DOTALL,
+)
+_PARAM_XML_RE = re.compile(
+    r"<parameter=(?P<key>[\w.-]+)>\s*(?P<val>.*?)\s*</parameter>",
+    re.DOTALL,
+)
+# e.g. 🔧 read_file{"path":"..."}  or  read_file{"path":"..."}
+_INLINE_JSON_RE = re.compile(
+    r"(?:🔧\s*)?(?P<name>[a-zA-Z_][\w]*)\{(?P<args>[^{}]*)\}",
+)
+
+
+def _coerce_value(raw: str) -> Any:
+    text = raw.strip()
+    low = text.lower()
+    if low in ("true", "false"):
+        return low == "true"
+    if low in ("null", "none"):
+        return None
+    try:
+        if text.isdigit() or (text.startswith("-") and text[1:].isdigit()):
+            return int(text)
+        return float(text)
+    except ValueError:
+        pass
+    if (text.startswith('"') and text.endswith('"')) or (
+        text.startswith("'") and text.endswith("'")
+    ):
+        return text[1:-1]
+    return text
+
+
+def parse_text_tool_calls(content: str) -> list[dict[str, Any]]:
+    """Extrae tool calls de XML/texto cuando el modelo no usa function-calling nativo."""
+    if not content or not content.strip():
+        return []
+
+    calls: list[dict[str, Any]] = []
+
+    for match in _FUNCTION_XML_RE.finditer(content):
+        name = match.group("name")
+        body = match.group("body") or ""
+        args: dict[str, Any] = {}
+        for pm in _PARAM_XML_RE.finditer(body):
+            args[pm.group("key")] = _coerce_value(pm.group("val"))
+        calls.append({
+            "id": f"call_xml_{uuid.uuid4().hex[:8]}",
+            "name": name,
+            "args": args,
+            "type": "tool_call",
+        })
+
+    if calls:
+        return calls
+
+    for match in _INLINE_JSON_RE.finditer(content):
+        name = match.group("name")
+        raw_args = "{" + match.group("args") + "}"
+        try:
+            args = json.loads(raw_args)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(args, dict):
+            continue
+        calls.append({
+            "id": f"call_txt_{uuid.uuid4().hex[:8]}",
+            "name": name,
+            "args": args,
+            "type": "tool_call",
+        })
+
+    return calls
+
+
+def _openai_tool_calls_to_lc(msg) -> list[dict[str, Any]]:
+    """Convierte tool_calls de la API OpenAI al formato LangChain AIMessage."""
+    raw = getattr(msg, "tool_calls", None) or []
+    out: list[dict[str, Any]] = []
+    for tc in raw:
+        fn = getattr(tc, "function", None)
+        if fn is None and isinstance(tc, dict):
+            fn = tc.get("function") or {}
+            name = fn.get("name") if isinstance(fn, dict) else None
+            arguments = fn.get("arguments") if isinstance(fn, dict) else "{}"
+            tc_id = tc.get("id") or f"call_{uuid.uuid4().hex[:8]}"
+        else:
+            name = getattr(fn, "name", None)
+            arguments = getattr(fn, "arguments", None) or "{}"
+            tc_id = getattr(tc, "id", None) or f"call_{uuid.uuid4().hex[:8]}"
+        if not name:
+            continue
+        try:
+            args = json.loads(arguments) if isinstance(arguments, str) else (arguments or {})
+        except json.JSONDecodeError:
+            args = {}
+        out.append({"id": tc_id, "name": name, "args": args, "type": "tool_call"})
+    return out
+
 
 class _UsageTracker:
-    """Contador de tokens compartido entre instancias (sobrevive a model_copy).
-
-    prompt_tokens y cached_tokens usan max() en vez de += porque cada API call
-    incluye el contexto COMPLETO (no solo tokens nuevos). Sumar los
-    prompt_tokens de multiples calls infla el conteo (cuenta el system prompt
-    N veces). El max() representa el tamano real del contexto.
-
-    completion_tokens si se suma: cada call genera tokens nuevos.
-    """
+    """Contador de tokens compartido entre instancias (sobrevive a model_copy)."""
 
     def __init__(self):
         self.turn = {"prompt": 0, "completion": 0, "cached": 0}
@@ -159,12 +261,11 @@ class LocalLLM(BaseChatModel):
 
         choice = response.choices[0]
         msg = choice.message
+        # NUNCA mezclar reasoning en content: el agente lo toma como respuesta final.
         content = msg.content or ""
-        reasoning = getattr(msg, "reasoning_content", "") or ""
-
-        all_content = content
-        if reasoning and not content:
-            all_content = reasoning
+        tool_calls = _openai_tool_calls_to_lc(msg)
+        if not tool_calls:
+            tool_calls = parse_text_tool_calls(content)
 
         usage = response.usage
         prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
@@ -180,7 +281,7 @@ class LocalLLM(BaseChatModel):
         }
 
         generation = ChatGeneration(
-            message=AIMessage(content=all_content),
+            message=AIMessage(content=content, tool_calls=tool_calls),
             generation_info=token_usage,
         )
         return ChatResult(generations=[generation])
@@ -197,6 +298,9 @@ class LocalLLM(BaseChatModel):
             stream_options={"include_usage": True},
         )
 
+        saw_native_tool = False
+        content_parts: list[str] = []
+
         async for chunk in stream:
             if chunk.usage:
                 prompt_tokens = getattr(chunk.usage, "prompt_tokens", 0) or 0
@@ -209,30 +313,57 @@ class LocalLLM(BaseChatModel):
                 continue
             delta = chunk.choices[0].delta
 
-            combined = delta.content or ""
+            content = delta.content or ""
             reasoning = getattr(delta, "reasoning_content", "") or ""
-            is_reasoning = bool(reasoning and not combined)
-            if is_reasoning:
-                combined = reasoning
 
             tool_call_chunks = []
             for tc in delta.tool_calls or []:
-                entry = {"index": tc.index}
+                entry: dict[str, Any] = {"index": tc.index}
                 if tc.id:
                     entry["id"] = tc.id
                 if tc.function and tc.function.name:
                     entry["name"] = tc.function.name
+                    saw_native_tool = True
                 if tc.function and tc.function.arguments:
                     entry["args"] = tc.function.arguments
-                if entry:
+                if len(entry) > 1:
                     tool_call_chunks.append(entry)
 
-            if combined or tool_call_chunks:
-                extra = {"is_reasoning": True} if is_reasoning else {}
+            # Reasoning: solo UI — content vacío para no contaminar el AIMessage del grafo
+            if reasoning and not content:
                 yield ChatGenerationChunk(
                     message=AIMessageChunk(
-                        content=combined,
+                        content="",
+                        additional_kwargs={
+                            "is_reasoning": True,
+                            "reasoning_content": reasoning,
+                        },
+                    )
+                )
+
+            if content:
+                content_parts.append(content)
+
+            if content or tool_call_chunks:
+                yield ChatGenerationChunk(
+                    message=AIMessageChunk(
+                        content=content,
                         tool_call_chunks=tool_call_chunks,
-                        additional_kwargs=extra,
+                    )
+                )
+
+        # Fallback: modelo escribió tools como XML/texto en content
+        if not saw_native_tool:
+            recovered = parse_text_tool_calls("".join(content_parts))
+            for i, tc in enumerate(recovered):
+                yield ChatGenerationChunk(
+                    message=AIMessageChunk(
+                        content="",
+                        tool_call_chunks=[{
+                            "index": i,
+                            "id": tc["id"],
+                            "name": tc["name"],
+                            "args": json.dumps(tc["args"]),
+                        }],
                     )
                 )

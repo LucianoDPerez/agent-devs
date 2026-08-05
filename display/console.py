@@ -51,8 +51,9 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                 console.print("💭 [dim]Razonando…[/dim]")
 
             if is_reasoning:
-                if chunk.content:
-                    console.print(chunk.content, end="", style="dim cyan", highlight=False, soft_wrap=True)
+                reasoning_text = chunk.additional_kwargs.get("reasoning_content") or chunk.content
+                if reasoning_text:
+                    console.print(reasoning_text, end="", style="dim cyan", highlight=False, soft_wrap=True)
             else:
                 if not response_started:
                     response_started = True

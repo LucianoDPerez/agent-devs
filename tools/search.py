@@ -3,7 +3,7 @@
 import re
 from pathlib import Path
 
-from langchain_core.tools import ToolException, tool
+from langchain_core.tools import tool
 
 from config import MAX_LINE_CHARS, MAX_SEARCH_RESULT_CHARS
 
@@ -19,7 +19,10 @@ def search_code(path: str, pattern: str) -> str:
     """
     root = Path(path)
     if not root.exists():
-        raise ToolException(f"Path does not exist: {path}")
+        return (
+            f"Path does not exist: {path}. "
+            "Accept this and continue — do not retry variants of this path."
+        )
 
     compiled = re.compile(pattern, re.IGNORECASE)
     matches: list[str] = []

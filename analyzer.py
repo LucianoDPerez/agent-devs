@@ -234,6 +234,22 @@ def stream_llm(llm: LocalLLM, messages, on_token, timeout: float = 150.0) -> str
     return "".join(accumulated)
 
 
+def _is_valid_summary(summary: str) -> bool:
+    """Rechaza summaries que son eco del prompt o basura inutilizable."""
+    text = (summary or "").strip()
+    if len(text) < 40:
+        return False
+    low = text.lower()
+    poison = (
+        "resumen en español de 80-120 palabras",
+        "qué hace el proyecto, arquitectura general y estructura de carpetas",
+        "respondé únicamente con un json",
+    )
+    if any(p in low for p in poison):
+        return False
+    return True
+
+
 def run_analysis(repo_path: str, llm: LocalLLM, on_token=None, timeout: float = 150.0) -> dict:
     """Ejecuta el análisis con streaming y devuelve el dict listo para cachear."""
     on_token = on_token or (lambda _tok: None)
@@ -255,20 +271,22 @@ def run_analysis(repo_path: str, llm: LocalLLM, on_token=None, timeout: float = 
 Respondé ÚNICAMENTE con un JSON válido en este formato:
 {{
   "stack": "tecnologías principales en 1 línea (ej: Spring Boot 3 + MySQL, o FastAPI + SQLite, o React + Vite + Express)",
-  "summary": "resumen en español de 80-120 palabras: qué hace el proyecto, arquitectura general y estructura de carpetas"
+  "summary": "descripción concreta del proyecto en español (80-120 palabras): propósito, módulos principales y cómo está organizado"
 }}
-No agregues texto fuera del JSON."""
+No agregues texto fuera del JSON. El campo summary debe describir ESTE repo, no repetir estas instrucciones."""
 
     on_token("\n📄 Generando análisis...\n")
     text = stream_llm(llm, [HumanMessage(prompt)], on_token, timeout=timeout)
 
     data = _extract_json(text)
-    if data and data.get("summary"):
+    if data and _is_valid_summary(str(data.get("summary") or "")):
         stack = str(data.get("stack") or fallback_stack)
-        summary = str(data["summary"])
+        summary = str(data["summary"]).strip()
     else:
         stack = fallback_stack
         summary = fallback_summary
+        if data and data.get("summary") and not _is_valid_summary(str(data["summary"])):
+            on_token("\n⚠️  Summary inválido (eco del prompt); se usa fallback determinista.\n")
 
     return {
         "path": repo_path,

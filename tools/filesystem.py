@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from langchain_core.tools import ToolException, tool
+from langchain_core.tools import tool
 
 from config import MAX_FILE_READ_BYTES, MAX_LIST_RESULTS
 
@@ -14,13 +14,29 @@ def list_files(path: str, recursive: bool = False) -> str:
     """
     List files in a directory. If recursive=True, traverse the entire tree.
     Filters out common noise directories (.git, node_modules, __pycache__, etc).
+    If the path does not exist, returns a message — do not retry the same path.
     Usage: list_files(path="/Users/luchop/PROYECTOS IA/Medicos")
     """
     root = Path(path)
     if not root.exists():
-        return f"Path does not exist: {path}"
+        return (
+            f"Path does not exist: {path}. "
+            "Do not retry this path or search for name variants. Continue with another approach."
+        )
     if not root.is_dir():
         return f"'{path}' is a file, not a directory. Use read_file to view it."
+
+    if recursive:
+        try:
+            top_level = sum(1 for _ in root.iterdir())
+        except OSError:
+            top_level = 0
+        if top_level > 15:
+            return (
+                f"Refusing recursive listing of '{path}' ({top_level} top-level entries). "
+                "Use list_files(path=..., recursive=false) or a narrower subdirectory "
+                "(e.g. apps/, src/, lib/). Then search_code for symbols."
+            )
 
     results: list[str] = []
     count = 0
@@ -51,13 +67,22 @@ def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> st
     """
     Read a text file. Optionally specify line range (start_line, end_line).
     Files exceeding MAX_FILE_READ_BYTES are truncated and a notice is shown.
+    If the file does not exist (or the path is a directory), returns a message —
+    accept it and continue; do not retry the same path or hunt for name variants.
     Usage: read_file(path="/Users/luchop/PROYECTOS IA/Medicos/README.md")
     """
     p = Path(path)
     if not p.exists():
-        return f"File does not exist: {path}"
+        return (
+            f"File does not exist: {path}. "
+            "Do not retry this path or search for name variants "
+            "(e.g. README.md / README / ENV.md). If documentation is required, create the file."
+        )
     if p.is_dir():
-        return f"'{path}' is a directory, not a file. Use list_files to browse it."
+        return (
+            f"'{path}' is a directory, not a file. Use list_files to browse it. "
+            "Do not call read_file on this path again."
+        )
 
     raw = p.read_text(encoding="utf-8", errors="replace")
     total_lines = raw.splitlines()
@@ -110,15 +135,22 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
     """
     p = Path(path)
     if not p.exists():
-        return f"File does not exist: {path}"
+        return (
+            f"File does not exist: {path}. "
+            "Do not retry this path. Create it with write_file if you need to edit it."
+        )
     if p.is_dir():
-        return f"'{path}' is a directory, not a file. Use list_files to browse it."
+        return (
+            f"'{path}' is a directory, not a file. Use list_files to browse it. "
+            "Do not call edit_file on this path again."
+        )
 
     content = p.read_text(encoding="utf-8")
 
     if old_str not in content:
-        raise ToolException(
-            f"old_str not found in {path}. Cannot perform replacement."
+        return (
+            f"old_str not found in {path}. Cannot perform replacement. "
+            "Re-read the file and use an exact substring that exists."
         )
 
     occurrences = content.count(old_str)
