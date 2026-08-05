@@ -15,7 +15,8 @@ REGLAS:
 CRITERIOS DE ACEPTACIÓN (si el mensaje trae checklist / tasks precargados):
 - La fuente de verdad son esos checkboxes, NO inventes requisitos extra.
 - CRITICAL = un criterio de aceptación NO cumplido en el diff.
-- WARNING = riesgo real relacionado con el alcance.
+- WARNING = riesgo real relacionado con el alcance, o sobreingeniería clara
+  (CRUD/controllers/secrets inventados fuera del AC).
 - SUGGESTION = mejoras opcionales fuera del AC (no bloquean aprobación).
 - No marques CRITICAL por "faltan validaciones de URL/seguridad" si el AC no lo pide.
 

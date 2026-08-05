@@ -4,6 +4,9 @@ import tempfile
 from pathlib import Path
 
 from orchestration.execute_bootstrap import (
+    detect_repo_stacks,
+    inject_repo_hints,
+    suggest_minimal_files,
     build_paste_correction_suffix,
     extract_checklist_items,
     extract_requested_task_numbers,
@@ -162,3 +165,137 @@ WARNING: algo menor
         assert "edit_file" in suffix
         assert "timeout" in suffix.lower()
         assert "ENV.md" in suffix or "env.md" in suffix.lower()
+
+
+class TestRepoHints:
+    def test_detect_node(self, tmp_path):
+        (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+        assert detect_repo_stacks(tmp_path) == ["node"]
+
+    def test_detect_python(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+        assert detect_repo_stacks(tmp_path) == ["python"]
+
+    def test_detect_go(self, tmp_path):
+        (tmp_path / "go.mod").write_text("module example.com/x\n\ngo 1.22\n", encoding="utf-8")
+        assert detect_repo_stacks(tmp_path) == ["go"]
+
+    def test_detect_java(self, tmp_path):
+        (tmp_path / "pom.xml").write_text("<project/>\n", encoding="utf-8")
+        assert detect_repo_stacks(tmp_path) == ["java"]
+
+    def test_detect_multi_stack(self, tmp_path):
+        (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "go.mod").write_text("module x\n", encoding="utf-8")
+        assert detect_repo_stacks(tmp_path) == ["node", "go"]
+
+    def test_inject_node_nestjs_layout(self, tmp_path):
+        (tmp_path / "package.json").write_text('{"name":"api"}', encoding="utf-8")
+        src = tmp_path / "apps" / "api" / "src"
+        src.mkdir(parents=True)
+        (src / "main.ts").write_text("bootstrap();\n", encoding="utf-8")
+        (tmp_path / ".env.example").write_text("FOO=1\n", encoding="utf-8")
+        hints = inject_repo_hints(str(tmp_path))
+        assert "stacks detectados" in hints
+        assert "node" in hints
+        assert "main.ts" in hints
+        assert "FOO=1" in hints
+
+    def test_inject_python(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+        app = tmp_path / "app"
+        app.mkdir()
+        (app / "main.py").write_text("def main():\n    pass\n", encoding="utf-8")
+        hints = inject_repo_hints(str(tmp_path))
+        assert "python" in hints
+        assert "main.py" in hints
+        assert "def main" in hints
+
+    def test_inject_go_cmd(self, tmp_path):
+        (tmp_path / "go.mod").write_text("module example.com/svc\n\ngo 1.22\n", encoding="utf-8")
+        cmd = tmp_path / "cmd" / "server"
+        cmd.mkdir(parents=True)
+        (cmd / "main.go").write_text("package main\n\nfunc main() {}\n", encoding="utf-8")
+        (tmp_path / "internal").mkdir()
+        (tmp_path / "internal" / "svc.go").write_text("package internal\n", encoding="utf-8")
+        hints = inject_repo_hints(str(tmp_path))
+        assert "go" in hints
+        assert "cmd/server/main.go" in hints or "listing cmd" in hints
+        assert "func main" in hints
+
+    def test_inject_java_spring(self, tmp_path):
+        (tmp_path / "pom.xml").write_text("<project><modelVersion>4.0.0</modelVersion></project>\n", encoding="utf-8")
+        res = tmp_path / "src" / "main" / "resources"
+        res.mkdir(parents=True)
+        (res / "application.yml").write_text("server:\n  port: 8080\n", encoding="utf-8")
+        java = tmp_path / "src" / "main" / "java" / "com" / "demo"
+        java.mkdir(parents=True)
+        (java / "DemoApplication.java").write_text(
+            "package com.demo;\npublic class DemoApplication {}\n",
+            encoding="utf-8",
+        )
+        hints = inject_repo_hints(str(tmp_path))
+        assert "java" in hints
+        assert "application.yml" in hints or "pom.xml" in hints
+        assert "DemoApplication" in hints
+
+    def test_preload_includes_repo_hints(self, tmp_path):
+        (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+        src = tmp_path / "apps" / "api" / "src"
+        src.mkdir(parents=True)
+        (src / "main.ts").write_text("x", encoding="utf-8")
+        tasks = tmp_path / "tasks.md"
+        tasks.write_text(_SAMPLE_TASKS, encoding="utf-8")
+        out = preload_cited_files(
+            f"implementar Tarea 1 de {tasks}",
+            repo_path=str(tmp_path),
+        )
+        assert "CONTEXTO DE REPO PRECARGADO" in out or "stack-aware" in out
+        assert "PRIMERA ACCIÓN" in out
+        assert "node" in out
+
+    def test_preload_bans_explore_at_top(self, tmp_path):
+        (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+        src = tmp_path / "apps" / "api" / "src"
+        src.mkdir(parents=True)
+        (src / "main.ts").write_text("x", encoding="utf-8")
+        tasks = tmp_path / "tasks.md"
+        tasks.write_text(_SAMPLE_TASKS, encoding="utf-8")
+        out = preload_cited_files(
+            f"implementar Tarea 1 de {tasks}",
+            repo_path=str(tmp_path),
+        )
+        assert out.startswith("⛔ PROHIBIDO")
+        assert "CONTEXTO DE REPO PRECARGADO" in out
+
+
+
+class TestMinimalPlan:
+    def test_suggest_env_and_adapter_node(self):
+        items = [
+            "Se agregan las nuevas variables de entorno (URL, API_KEY, timeout)",
+            "Existe validación de configuración al iniciar la aplicación",
+            "Se documentan las nuevas variables en README/ENV.md",
+            "Cliente HTTP con timeout configurado (5s)",
+            "Reutilizable desde distintos casos de uso",
+        ]
+        plan = suggest_minimal_files(items, ["node"])
+        assert "ENV.md en la RAÍZ" in plan
+        assert "SIN CRUD de dominio" in plan
+        assert "app.module" in plan
+        assert ".env.example" in plan
+
+    def test_preload_includes_minimal_plan(self, tmp_path):
+        (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+        src = tmp_path / "apps" / "api" / "src"
+        src.mkdir(parents=True)
+        (src / "main.ts").write_text("x", encoding="utf-8")
+        tasks = tmp_path / "tasks.md"
+        tasks.write_text(_SAMPLE_TASKS, encoding="utf-8")
+        out = preload_cited_files(
+            f"implementar Tarea 1 y Tarea 2 de {tasks}",
+            repo_path=str(tmp_path),
+        )
+        assert "PLAN DE ARCHIVOS MÍNIMOS" in out
+        assert "ENV.md en la RAÍZ" in out
+        assert "SIN CRUD" in out

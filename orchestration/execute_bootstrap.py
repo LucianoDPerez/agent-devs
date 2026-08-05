@@ -116,6 +116,65 @@ def format_done_checklist(items: list[str], *, mode: str = "execute") -> str:
     )
 
 
+
+def suggest_minimal_files(checklist: list[str], stacks: list[str] | None = None) -> str:
+    """Plan de archivos mínimos según checkboxes (anti-sobreingeniería del 4B)."""
+    if not checklist:
+        return ""
+    joined = " ".join(checklist).lower()
+    stacks = stacks or []
+    files: list[str] = []
+
+    # broader: env-related checkboxes
+    if any(k in joined for k in ("variable", "entorno", "env.md", "readme/env", "configuración", "configuracion")):
+        files.append(".env.example — agregar SOLO las vars del AC (URL, API_KEY, timeout, etc.)")
+        files.append("ENV.md en la RAÍZ del repo — documentar SOLO esas vars (no bajo src/, no volcar todo el .env)")
+        if "node" in stacks:
+            files.append("apps/api/src/main.ts (o bootstrap/config existente) — validación al iniciar")
+        elif "python" in stacks:
+            files.append("settings/config/main existente — validación al iniciar")
+        elif "go" in stacks:
+            files.append("cmd/*/main.go o config — validación al iniciar")
+        elif "java" in stacks:
+            files.append("application.yml + validación al boot")
+        else:
+            files.append("entry/config existente — validación al iniciar")
+
+    if any(k in joined for k in ("adaptador", "adapter", "http", "cliente", "client", "integraci")):
+        if "node" in stacks:
+            files.append(
+                "1 adapter/client de integración (ej. *.adapter.ts) con métodos HTTP "
+                "(get/post/put/delete/request) + registrar en app.module — "
+                "SIN CRUD de dominio (createBanner/updateBanner/etc.), SIN controllers"
+            )
+        elif "python" in stacks:
+            files.append(
+                "1 client/adapter de integración (métodos HTTP genéricos) — "
+                "SIN routers/endpoints de negocio inventados"
+            )
+        elif "go" in stacks:
+            files.append(
+                "1 package client/adapter (métodos HTTP) — SIN handlers HTTP de negocio inventados"
+            )
+        elif "java" in stacks:
+            files.append(
+                "1 clase client/adapter (métodos HTTP) — SIN controllers inventados"
+            )
+        else:
+            files.append("1 archivo adapter/client HTTP de integración — métodos HTTP genéricos")
+
+    if not files:
+        return ""
+
+    lines = "\n".join(f"- {f}" for f in files)
+    return (
+        "\n\nPLAN DE ARCHIVOS MÍNIMOS (no creés más que esto salvo que el AC lo exija):\n"
+        f"{lines}\n"
+        "PROHIBIDO: inventar CRUD de dominio, controllers, secrets extra, o features fuera del checklist.\n"
+        "ENV.md siempre en la RAÍZ del repositorio.\n"
+    )
+
+
 def extract_review_findings(user_input: str, limit: int = 12) -> list[str]:
     """Extrae líneas de hallazgos CRITICAL/WARNING/falta del paste de review."""
     findings: list[str] = []
@@ -190,12 +249,306 @@ def _collect_cited_paths(user_input: str, repo_path: str | None) -> list[Path]:
     return cited
 
 
+
+# Perfiles de hints por stack. Solo se inyecta lo que exista en el repo.
+# Orden de detección: marcadores de raíz (pueden coexistir en monorepos).
+_HINT_ENV_FILES = (".env.example", ".env.sample", ".env.template", "env.example")
+
+_HINT_PROFILES: dict[str, dict[str, tuple[str, ...]]] = {
+    "node": {
+        "list_dirs": (
+            "apps/api/src",
+            "apps/web/src",
+            "apps/api",
+            "apps/web",
+            "packages",
+            "src",
+            "app",
+            "lib",
+            "server",
+        ),
+        "entry_files": (
+            "apps/api/src/main.ts",
+            "apps/api/src/app.module.ts",
+            "apps/api/src/index.ts",
+            "src/main.ts",
+            "src/index.ts",
+            "src/app.ts",
+            "src/server.ts",
+            "app/main.ts",
+            "server.js",
+            "index.js",
+            "package.json",
+        ),
+    },
+    "python": {
+        "list_dirs": (
+            "src",
+            "app",
+            "apps",
+            "backend",
+            "api",
+            "services",
+            "pkg",
+        ),
+        "entry_files": (
+            "main.py",
+            "app/main.py",
+            "src/main.py",
+            "api/main.py",
+            "src/app.py",
+            "app/__init__.py",
+            "manage.py",
+            "pyproject.toml",
+            "requirements.txt",
+        ),
+    },
+    "go": {
+        "list_dirs": (
+            "cmd",
+            "internal",
+            "pkg",
+            "api",
+            "src",
+        ),
+        "entry_files": (
+            "main.go",
+            "cmd/server/main.go",
+            "cmd/api/main.go",
+            "cmd/main.go",
+            "go.mod",
+        ),
+    },
+    "java": {
+        "list_dirs": (
+            "src/main/java",
+            "src/main/resources",
+            "src/main",
+            "app/src/main/java",
+            "src",
+        ),
+        "entry_files": (
+            "src/main/resources/application.yml",
+            "src/main/resources/application.yaml",
+            "src/main/resources/application.properties",
+            "pom.xml",
+            "build.gradle",
+            "build.gradle.kts",
+            "settings.gradle",
+            "settings.gradle.kts",
+        ),
+    },
+    "generic": {
+        "list_dirs": (
+            "src",
+            "app",
+            "apps",
+            "lib",
+            "cmd",
+            "internal",
+            "pkg",
+            "backend",
+            "api",
+        ),
+        "entry_files": (),
+    },
+}
+
+
+def detect_repo_stacks(root: Path) -> list[str]:
+    """Detecta stacks presentes por marcadores de raíz (orden estable)."""
+    found: list[str] = []
+
+    def _add(name: str) -> None:
+        if name not in found:
+            found.append(name)
+
+    if (root / "package.json").is_file():
+        _add("node")
+    if (root / "go.mod").is_file():
+        _add("go")
+    if any(
+        (root / name).is_file()
+        for name in ("pom.xml", "build.gradle", "build.gradle.kts")
+    ):
+        _add("java")
+    # Java en submódulo típico
+    if "java" not in found:
+        for sub in ("app", "backend", "api", "service", "services"):
+            d = root / sub
+            if any(
+                (d / name).is_file()
+                for name in ("pom.xml", "build.gradle", "build.gradle.kts")
+            ):
+                _add("java")
+                break
+    if any(
+        (root / name).is_file()
+        for name in ("pyproject.toml", "requirements.txt", "setup.py", "Pipfile")
+    ):
+        _add("python")
+
+    return found or ["generic"]
+
+
+def _collect_go_cmd_mains(root: Path, limit: int = 3) -> list[Path]:
+    """Encuentra cmd/*/main.go sin explorar todo el árbol."""
+    cmd = root / "cmd"
+    if not cmd.is_dir():
+        return []
+    found: list[Path] = []
+    try:
+        for child in sorted(cmd.iterdir()):
+            if not child.is_dir():
+                continue
+            main = child / "main.go"
+            if main.is_file():
+                found.append(main)
+                if len(found) >= limit:
+                    break
+    except OSError:
+        return []
+    return found
+
+
+def _collect_java_application_files(root: Path, limit: int = 2) -> list[Path]:
+    """Busca *Application.java bajo src/main/java (acotado)."""
+    bases = [root / "src" / "main" / "java", root / "app" / "src" / "main" / "java"]
+    found: list[Path] = []
+    for base in bases:
+        if not base.is_dir():
+            continue
+        try:
+            for hit in base.rglob("*Application.java"):
+                if hit.is_file():
+                    found.append(hit)
+                    if len(found) >= limit:
+                        return found
+        except OSError:
+            continue
+    return found
+
+
+def inject_repo_hints(repo_path: str | None, *, max_chars: int = 8_000) -> str:
+    """Precarga layout + env + entrypoints según stacks detectados.
+
+    Stack-aware (node/python/go/java/generic). Solo inyecta paths que existan.
+    """
+    if not repo_path:
+        return ""
+    root = Path(repo_path)
+    if not root.is_dir():
+        return ""
+
+    stacks = detect_repo_stacks(root)
+    parts: list[str] = []
+    budget = max_chars
+
+    def _take(label: str, text: str) -> None:
+        nonlocal budget
+        if budget <= 0 or not text:
+            return
+        chunk = text if len(text) <= budget else text[:budget] + "\n… (truncated)"
+        budget -= len(chunk)
+        parts.append(f"--- {label} (YA CARGADO — no lo vuelvas a listar/leer) ---")
+        parts.append(chunk)
+        parts.append(f"--- FIN {label} ---")
+        parts.append("")
+
+    _take("stacks detectados", ", ".join(stacks))
+
+    list_dirs: list[str] = []
+    entry_files: list[str] = []
+    seen_dirs: set[str] = set()
+    seen_files: set[str] = set()
+    for stack in stacks:
+        profile = _HINT_PROFILES.get(stack, _HINT_PROFILES["generic"])
+        for d in profile["list_dirs"]:
+            if d not in seen_dirs:
+                seen_dirs.add(d)
+                list_dirs.append(d)
+        for f in profile["entry_files"]:
+            if f not in seen_files:
+                seen_files.add(f)
+                entry_files.append(f)
+
+    listed = 0
+    for rel in list_dirs:
+        if listed >= 2 or budget <= 0:
+            break
+        d = root / rel
+        if not d.is_dir():
+            continue
+        try:
+            names = sorted(p.name for p in d.iterdir())[:50]
+        except OSError:
+            continue
+        _take(f"listing {rel}", "\n".join(names))
+        listed += 1
+
+    for name in _HINT_ENV_FILES:
+        if budget <= 0:
+            break
+        env_ex = root / name
+        if env_ex.is_file():
+            try:
+                _take(name, env_ex.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                pass
+            break
+
+    loaded_entries = 0
+    for rel in entry_files:
+        if loaded_entries >= 3 or budget <= 0:
+            break
+        f = root / rel
+        if not f.is_file():
+            continue
+        try:
+            _take(rel, f.read_text(encoding="utf-8", errors="replace"))
+            loaded_entries += 1
+        except OSError:
+            continue
+
+    if "go" in stacks and loaded_entries < 3:
+        for main in _collect_go_cmd_mains(root):
+            if loaded_entries >= 3 or budget <= 0:
+                break
+            try:
+                rel = str(main.relative_to(root))
+                _take(rel, main.read_text(encoding="utf-8", errors="replace"))
+                loaded_entries += 1
+            except OSError:
+                continue
+
+    if "java" in stacks and loaded_entries < 3:
+        for app_file in _collect_java_application_files(root):
+            if loaded_entries >= 3 or budget <= 0:
+                break
+            try:
+                rel = str(app_file.relative_to(root))
+                _take(rel, app_file.read_text(encoding="utf-8", errors="replace"))
+                loaded_entries += 1
+            except OSError:
+                continue
+
+    if not parts:
+        return ""
+    return (
+        "CONTEXTO DE REPO PRECARGADO (stack-aware; no gastes exploraciones en esto):\n\n"
+        + "\n".join(parts)
+    )
+
+
+
+
 def _build_preload_parts(
     user_input: str,
     cited: list[Path],
     task_nums: list[int],
     *,
     mode: str,
+    repo_path: str | None = None,
 ) -> str:
     parts = [user_input, ""]
     budget = EXECUTE_PRELOAD_MAX_CHARS
@@ -238,6 +591,9 @@ def _build_preload_parts(
             checklist.append(item)
 
     parts.append(format_done_checklist(checklist, mode=mode))
+    if mode == "execute" and checklist:
+        stacks = detect_repo_stacks(Path(repo_path)) if repo_path else []
+        parts.append(suggest_minimal_files(checklist, stacks))
 
     if mode == "review":
         scope_rule = ""
@@ -268,12 +624,13 @@ def _build_preload_parts(
     parts.append(
         "INSTRUCCIÓN OBLIGATORIA: "
         + scope_rule
-        + "El contenido relevante YA ESTÁ ARRIBA. Implementá YA con write_file/edit_file. "
-        "Máximo 2 exploraciones (list_files recursive=false / search_code en subpath). "
-        "No re-leas el archivo de tareas. No explores el repo entero. "
-        "Wire módulos/providers si creás servicios. "
-        "Timeout real en HTTP saliente si el AC lo pide. "
-        "Si faltan vars nuevas y no hay README.md, documentá en ENV.md. "
+        + "El contenido relevante YA ESTÁ ARRIBA (tasks + layout + .env.example + main). "
+        "TU PRIMERA ACCIÓN DEBE SER write_file o edit_file — no explores. "
+        "DIFF MÍNIMO: seguí el PLAN DE ARCHIVOS MÍNIMOS; no inventes CRUD/controllers/secrets. "
+        "ENV.md en la RAÍZ del repo (solo vars del AC). "
+        "Adapter = integración HTTP genérica (get/post/put/delete/request), no service de dominio. "
+        "Máximo 1 list_files(recursive=false) SOLO si falta un path concreto. "
+        "recursive=true está PROHIBIDO. Timeout HTTP REAL si el AC lo pide. "
         "Antes de terminar: checklist verde + run_lint / run_tests / run_build."
     )
     return "\n".join(p for p in parts if p is not None)
@@ -290,7 +647,24 @@ def preload_cited_files(user_input: str, repo_path: str | None = None) -> str:
         return user_input
 
     task_nums = extract_requested_task_numbers(user_input)
-    return _build_preload_parts(user_input, cited, task_nums, mode="execute")
+    out = _build_preload_parts(user_input, cited, task_nums, mode="execute", repo_path=repo_path)
+    hints = inject_repo_hints(repo_path)
+    if hints:
+        marker = "INSTRUCCIÓN OBLIGATORIA:"
+        if marker in out:
+            out = out.replace(marker, hints + "\n" + marker, 1)
+        else:
+            out = out + "\n\n" + hints
+        # Banner al INICIO: el 4B ignora instrucciones al final y se pone a list_files
+        banner = (
+            "⛔ PROHIBIDO usar list_files / search_code / inspect_routes en este turno. "
+            "El layout del repo, .env.example y entrypoints YA ESTÁN ABAJO "
+            "(bloque CONTEXTO DE REPO PRECARGADO). "
+            "Tu PRIMERA tool call DEBE ser write_file o edit_file.\n\n"
+        )
+        out = banner + out
+    return out
+
 
 
 def preload_for_review(user_input: str, repo_path: str | None = None) -> str:
@@ -300,4 +674,4 @@ def preload_for_review(user_input: str, repo_path: str | None = None) -> str:
         return user_input
 
     task_nums = extract_requested_task_numbers(user_input)
-    return _build_preload_parts(user_input, cited, task_nums, mode="review")
+    return _build_preload_parts(user_input, cited, task_nums, mode="review", repo_path=repo_path)

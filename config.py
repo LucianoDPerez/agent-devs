@@ -9,11 +9,17 @@ TURN_IDLE_TIMEOUT = 120
 
 # Límite de pasos modelo↔tools por turno (evita loops de exploración de 20+ min)
 AGENT_RECURSION_LIMIT = 35
+# EXECUTE: con explore=0 + diff mínimo, 24 cortaba mid-verify; 32 da margen
+EXECUTE_RECURSION_LIMIT = 32
 # Pre-cargar en el mensaje de EXECUTE archivos .md/.txt citados por path absoluto
 EXECUTE_PRELOAD_MAX_CHARS = 20_000
 EXECUTE_PRELOAD_MAX_FILES = 2
 # Máx list_files/search_code/inspect_routes por turno EXECUTE (enforceado en código)
 EXECUTE_EXPLORE_BUDGET = 2
+# Tras agotar explore: máx read_file antes de forzar write
+EXECUTE_MAX_READS_AFTER_EXPLORE = 2
+# Si no escribió nada tras N tool calls → forzar write_file
+EXECUTE_MAX_TOOLS_BEFORE_WRITE = 5
 
 DEFAULT_REPO_PATH = "/Users/luchop/PROYECTOS IA/Medicos"
 

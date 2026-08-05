@@ -9,7 +9,14 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from cache import load_recent_turns, save_turn
-from config import AGENT_RECURSION_LIMIT, EXECUTE_EXPLORE_BUDGET, TURN_IDLE_TIMEOUT
+from config import (
+    AGENT_RECURSION_LIMIT,
+    EXECUTE_EXPLORE_BUDGET,
+    EXECUTE_MAX_READS_AFTER_EXPLORE,
+    EXECUTE_MAX_TOOLS_BEFORE_WRITE,
+    EXECUTE_RECURSION_LIMIT,
+    TURN_IDLE_TIMEOUT,
+)
 from core.roles import Role, role_for_intent
 from display.console import console, print_role_switch, print_turn_summary, stream_agent_turn
 from display.esc_watcher import EscWatcher
@@ -103,7 +110,11 @@ class Session:
         self._mcp_count: int = 0      # MCP activos en el rol actual
         self._local_count: int = 0
         self._dedupe = ToolCallDedupe(max_repeats=2)
-        self._explore_budget = ExploreBudget(max_calls=EXECUTE_EXPLORE_BUDGET)
+        self._explore_budget = ExploreBudget(
+            max_calls=EXECUTE_EXPLORE_BUDGET,
+            max_reads_after_explore=EXECUTE_MAX_READS_AFTER_EXPLORE,
+            max_tools_before_write=EXECUTE_MAX_TOOLS_BEFORE_WRITE,
+        )
         self._session_time: float = 0.0
         self.session_id: str = str(uuid.uuid4())[:8]
 
@@ -225,9 +236,12 @@ class Session:
         if status:
             print(status, flush=True)
 
-        # Reset dedupe + explore budget cada turno
+        # Reset dedupe + explore budget cada turno (siempre restaurar defaults)
         self._dedupe.reset()
         self._explore_budget.reset()
+        self._explore_budget.max_calls = EXECUTE_EXPLORE_BUDGET
+        self._explore_budget.max_reads_after_explore = EXECUTE_MAX_READS_AFTER_EXPLORE
+        self._explore_budget.max_tools_before_write = EXECUTE_MAX_TOOLS_BEFORE_WRITE
 
         # Acumular el mensaje del usuario en el historial
         agent_input = user_input
@@ -236,9 +250,16 @@ class Session:
             if agent_input != user_input:
                 nums = extract_requested_task_numbers(user_input)
                 scope = f" (solo Tarea(s) {', '.join(map(str, nums))})" if nums else ""
+                hints_on = "CONTEXTO DE REPO PRECARGADO" in agent_input
+                # Con hints ya inyectados, explore=0: el 4B igual llama list_files y quema el turno
+                if hints_on:
+                    self._explore_budget.max_calls = 0
+                    self._explore_budget.max_reads_after_explore = 1
+                    self._explore_budget.max_tools_before_write = 3
+                extra = " · explore=0 (hints)" if hints_on else ""
                 console.print(
                     f"[dim]📎 Archivos de tareas pre-cargados{scope} "
-                    "+ checklist AC (sin gastar exploración).[/dim]\n"
+                    f"+ checklist AC{extra}.[/dim]\n"
                 )
             # Correcciones pegadas (sin path a tasks.md): forzar escritura
             elif len(user_input) > 400 and any(
@@ -259,9 +280,12 @@ class Session:
 
         reset_turn_usage()
         start = time.monotonic()
+        recursion = (
+            EXECUTE_RECURSION_LIMIT if new_role == Role.EXECUTE else AGENT_RECURSION_LIMIT
+        )
         config = {
             "configurable": {"thread_id": f"session-{id(self)}"},
-            "recursion_limit": AGENT_RECURSION_LIMIT,
+            "recursion_limit": recursion,
         }
 
         # Pasar todo el historial al agente
@@ -302,9 +326,14 @@ class Session:
         except Exception as e:
             name = type(e).__name__
             if "Recursion" in name or "recursion" in str(e).lower():
+                lim = (
+                    EXECUTE_RECURSION_LIMIT
+                    if new_role == Role.EXECUTE
+                    else AGENT_RECURSION_LIMIT
+                )
                 print(
                     f"\n\n⚠️  Turno cortado: demasiados pasos de exploración "
-                    f"(límite {AGENT_RECURSION_LIMIT}). "
+                    f"(límite {lim}). "
                     "Reintentá pidiendo implementar directamente o con un path más concreto.",
                     flush=True,
                 )

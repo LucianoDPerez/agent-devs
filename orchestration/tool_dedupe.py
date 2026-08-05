@@ -1,4 +1,4 @@
-"""Evita loops de tools idénticas y acota exploración en EXECUTE."""
+"""Evita loops de tools idénticas y fuerza escritura en EXECUTE."""
 
 from __future__ import annotations
 
@@ -9,6 +9,11 @@ from langchain_core.tools import BaseTool, StructuredTool
 
 # Tools que gastan presupuesto de exploración (solo EXECUTE)
 EXPLORE_TOOL_NAMES = frozenset({"list_files", "search_code", "inspect_routes"})
+WRITE_TOOL_NAMES = frozenset({
+    "write_file", "edit_file", "stage_files", "create_commit", "push", "create_pr",
+})
+# Tras explorar, estas también se acotan si no hubo write
+READISH_TOOL_NAMES = frozenset({"read_file", "changed_files", "git_status", "git_log"})
 
 
 class ToolCallDedupe:
@@ -35,31 +40,93 @@ class ToolCallDedupe:
 
 
 class ExploreBudget:
-    """Límite duro de exploraciones por turno (list_files/search_code/inspect_routes)."""
+    """Límite duro de exploraciones + presión a escribir (EXECUTE).
 
-    def __init__(self, max_calls: int = 2):
+    El 4B ignora mensajes STOP y sigue con read_file hasta recursion_limit.
+    Por eso también limitamos reads post-explore y tool calls totales sin write.
+    """
+
+    def __init__(
+        self,
+        max_calls: int = 2,
+        max_reads_after_explore: int = 2,
+        max_tools_before_write: int = 5,
+    ):
         self.max_calls = max_calls
+        self.max_reads_after_explore = max_reads_after_explore
+        self.max_tools_before_write = max_tools_before_write
         self._count = 0
+        self._reads_after = 0
+        self._total = 0
+        self._wrote = False
+        self._explore_exhausted = False
 
     def reset(self) -> None:
         self._count = 0
+        self._reads_after = 0
+        self._total = 0
+        self._wrote = False
+        self._explore_exhausted = False
 
     @property
     def used(self) -> int:
         return self._count
 
-    def consume(self, name: str) -> str | None:
-        """Si la tool es de exploración y se agotó el budget, devuelve STOP message."""
-        if name not in EXPLORE_TOOL_NAMES:
+    def consume(self, name: str, kwargs: dict[str, Any] | None = None) -> str | None:
+        """Devuelve mensaje STOP si la llamada no debe ejecutarse."""
+        kwargs = kwargs or {}
+        self._total += 1
+
+        if name in WRITE_TOOL_NAMES:
+            self._wrote = True
             return None
-        self._count += 1
-        if self._count > self.max_calls:
+
+        # VERIFY / git RO siempre permitidos una vez que ya escribió
+        # (y también antes, con tope de tools sin write)
+
+        # recursive=true prohibido en EXECUTE
+        if name == "list_files" and kwargs.get("recursive"):
             return (
-                f"STOP: exploration budget exhausted "
-                f"({self.max_calls} list_files/search_code/inspect_routes). "
-                "ESCRIBÍ YA con write_file/edit_file. No explores más. "
-                "Si ya escribiste, verificá checklist + run_lint/run_tests/run_build."
+                "STOP: list_files(recursive=true) está prohibido en EXECUTE. "
+                "Usá recursive=false en un subpath concreto, o mejor ESCRIBÍ YA "
+                "con write_file/edit_file (el layout del repo ya está en el mensaje)."
             )
+
+        if name in EXPLORE_TOOL_NAMES:
+            self._count += 1
+            if self._count >= self.max_calls:
+                self._explore_exhausted = True
+            if self._count > self.max_calls:
+                return (
+                    "STOP: exploration budget exhausted "
+                    f"({self.max_calls} list_files/search_code/inspect_routes). "
+                    "NO llames más list_files ni search_code. "
+                    "TU PRÓXIMA ACCIÓN OBLIGATORIA: write_file o edit_file. "
+                    "Implementá YA según el checklist (env, adapter, validación, docs)."
+                )
+            return None
+
+        # Tras agotar explore, limitar read_file / git_status loops
+        if self._explore_exhausted:
+            if name in READISH_TOOL_NAMES or name == "read_file":
+                self._reads_after += 1
+                if self._reads_after > self.max_reads_after_explore:
+                    return (
+                        "STOP: demasiados read_file tras explorar. "
+                        "NO leas más. ESCRIBÍ YA con write_file/edit_file. "
+                        "Usá el contenido precargado (tasks, env example, entrypoints, listing)."
+                    )
+
+        # Sin ninguna escritura tras N tools → forzar write
+        if not self._wrote and self._total > self.max_tools_before_write:
+            if name not in WRITE_TOOL_NAMES:
+                return (
+                    "STOP: no escribiste código en este turno "
+                    f"(ya van {self._total} tool calls). "
+                    "TU ÚNICA ACCIÓN PERMITIDA AHORA: write_file o edit_file. "
+                    "Implementá las tareas del checklist YA."
+                )
+
         return None
 
 
@@ -68,7 +135,7 @@ def wrap_tools_with_dedupe(
     dedupe: ToolCallDedupe,
     explore_budget: ExploreBudget | None = None,
 ) -> list:
-    """Envuelve tools: dedupe idéntico + (opcional) explore budget."""
+    """Envuelve tools: dedupe idéntico + (opcional) explore/write guard."""
     wrapped: list[BaseTool] = []
     for t in tools:
         wrapped.append(_wrap_one(t, dedupe, explore_budget))
@@ -84,7 +151,7 @@ def _wrap_one(
 
     def _invoke(**kwargs):
         if explore_budget is not None:
-            stop = explore_budget.consume(name)
+            stop = explore_budget.consume(name, kwargs)
             if stop:
                 return stop
         n = dedupe.register(name, kwargs)
