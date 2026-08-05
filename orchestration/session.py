@@ -36,6 +36,7 @@ from orchestration.execute_bootstrap import (
     preload_cited_files,
     preload_for_review,
 )
+from orchestration.framework_rules import inject_framework_rules
 from orchestration.router import _extract_command_prefix, classify_intent
 from orchestration.tool_dedupe import ExploreBudget, ToolBudgetExceeded, ToolCallDedupe
 

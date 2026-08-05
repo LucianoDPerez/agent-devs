@@ -30,9 +30,18 @@ DIFF MÍNIMO (obligatorio):
   (solo las vars del AC). No copies todo el .env a ENV.md. No creés ENV.md bajo src/.
 - No "mejores" código ajeno ni agregues secrets/extras fuera del AC.
 
+FRAMEWORK PATTERNS (obligatorio — seguí EXACTAMENTE el patrón del repo):
+{framework_rules}
+- **Timeout HTTP REAL**: Configurá timeout en el cliente HTTP (no inventes timeouts en variables sin usarlos).
+  Si el AC pide "5 segundos", el código debe usar ese valor en el request (ej: `timeout: 5000`, `5 * time.Second`, etc).
+- **Logging estructurado**: Si el AC pide campos específicos en el logging, inclúyelos TODOS en cada log.
+  Usá key=value format. NO uses console.log si el stack tiene Logger nativo.
+
 DEFINITION OF DONE:
 - Cumplí CADA checkbox del alcance. Nada más.
 - Timeout HTTP REAL si el AC lo pide.
+- Logging estructurado con TODOS los campos del AC.
+- DI correcto según el framework.
 - Luego verify (lint/tests/build) y cerrá.
 
 {extra_context}

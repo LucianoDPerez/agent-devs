@@ -7,16 +7,16 @@ LLM_TIMEOUT = 300
 LLM_MAX_TOKENS = 3584
 # EXECUTE: modelo 4B quema tokens en razonamiento; 2560 obliga a actuar rápido
 EXECUTE_MAX_TOKENS = 2560
-# REVIEW: 2048 suficiente para leer diffs y emitir informe
-REVIEW_MAX_TOKENS = 2048
-TURN_IDLE_TIMEOUT = 120
+# REVIEW: 4096 para leer archivos, correr verify y emitir informe detallado
+REVIEW_MAX_TOKENS = 4096
+TURN_IDLE_TIMEOUT = 180  # 3 min — el modelo 4B tarda en razonar reviews complejos
 
 # Judge LLM: modelo más grande que valida reviews antes de aprobar.
 # Si JUDGE_ENABLED es True y el review dice APROBADO, se llama al judge.
 # El judge lee el diff + review report y decide si aprobar o bloquear.
 # IMPORTANTE: usá un modelo DISTINTO y MÁS GRANDE que el executor (4B).
 # Ejemplo: "Qwen3-14B", "Llama-3-8B", "deepseek-r1-distill-14B", etc.
-JUDGE_ENABLED = True
+JUDGE_ENABLED = False  # Desactivado: el 4B tarda demasiado como judge. Activá cuando tengas un modelo más grande.
 JUDGE_BASE_URL = "http://localhost:8080/v1"
 JUDGE_MODEL_NAME = "agents-a1-4b"  # ← CAMBIAR por un modelo más grande
 JUDGE_TEMPERATURE = 0.3

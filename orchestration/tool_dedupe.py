@@ -181,9 +181,13 @@ def _wrap_one(
                 return stop
         n = dedupe.register(name, kwargs)
         if n > dedupe.max_repeats:
-            return (
+            # RAISE instead of return string — the 4B model ignores text responses
+            # and keeps calling the same tool, burning recursion limit.
+            raise ToolBudgetExceeded(
                 f"⛔ Called {name} with same args {n} times. "
-                "Do NOT call it again. Use write_file/edit_file to implement changes."
+                "STOP: Do NOT call it again. If this is write_file/edit_file, "
+                "the path may be wrong or a directory exists at that path. "
+                "Choose a different file path."
             )
         return tool.invoke(kwargs)
 

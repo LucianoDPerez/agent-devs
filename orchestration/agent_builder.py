@@ -4,6 +4,7 @@ from langchain.agents import create_agent
 
 from config import EXECUTE_MAX_TOKENS, REVIEW_MAX_TOKENS
 from core.roles import Role, load_prompt, tools_for_role
+from orchestration.framework_rules import inject_framework_rules
 from orchestration.tool_dedupe import ExploreBudget, ToolCallDedupe, wrap_tools_with_dedupe
 from tools.mcp_client import load_mcp_tools, mcp_tool_count
 
@@ -61,8 +62,10 @@ async def build_agent(
             f"ANÁLISIS CACHÉ (usalo como contexto base; no re-explores lo resumido):\n"
             f"{cached_analysis}\n"
         )
+    fw_rules = inject_framework_rules(repo_path)
     system_prompt = prompt_template.format(
         repo_path=repo_path,
+        framework_rules=fw_rules,
         extra_context=extra_context,
     )
 

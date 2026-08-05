@@ -47,8 +47,9 @@ def test_dedupe_blocks_third_identical_call(tmp_path):
     r2 = tool.invoke(args)
     assert "consola" in r1 or "log" in r1
     assert "⛔" not in r2 or r2 == r1
-    r3 = tool.invoke(args)
-    assert "same args" in r3
+    # 3rd identical call raises ToolBudgetExceeded (halts the loop)
+    with pytest.raises(ToolBudgetExceeded, match="same args"):
+        tool.invoke(args)
 
 
 def test_explore_budget_allows_two_then_stops(tmp_path):
