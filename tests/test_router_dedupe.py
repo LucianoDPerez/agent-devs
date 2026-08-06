@@ -25,8 +25,18 @@ def test_implementar_correcciones_with_review_paste_is_execute():
     assert classify_intent(None, msg) == Intent.EXECUTE
 
 
+def test_implementar_observaciones_del_review_is_execute():
+    """'implementar las ... del review' NO debe ir a REVIEW — es corrección post-review."""
+    assert classify_intent(None, "implementar las observaciones del review") == Intent.EXECUTE
+    assert classify_intent(None, "implementar las sugerencias del review") == Intent.EXECUTE
+    assert classify_intent(None, "aplicar los hallazgos del review") == Intent.EXECUTE
+    assert classify_intent(None, "aplicar los cambios del review") == Intent.EXECUTE
+
+
 def test_plain_review_still_review():
     assert classify_intent(None, "revisá este PR por bugs") == Intent.REVIEW
+    assert classify_intent(None, "hacer code review de la Tarea 3") == Intent.REVIEW
+    assert classify_intent(None, "revisá los cambios") == Intent.REVIEW
 
 
 def test_implementar_tasks_still_execute():
@@ -47,9 +57,27 @@ def test_dedupe_blocks_third_identical_call(tmp_path):
     r2 = tool.invoke(args)
     assert "consola" in r1 or "log" in r1
     assert "⛔" not in r2 or r2 == r1
-    # 3rd identical call raises ToolBudgetExceeded (halts the loop)
+    # read_file repetido ahora devuelve STRING (no exception): no debe disparar
+    # un retry completo por releer un archivo
+    r3 = tool.invoke(args)
+    assert "⛔" in r3 or "Ya leíste" in r3
+
+
+def test_dedupe_still_raises_write_dupes(tmp_path):
+    """write_file repetido demasiadas veces SÍ levanta ToolBudgetExceeded."""
+    from tools.filesystem import write_file
+    import tempfile
+    dedupe = ToolCallDedupe(max_repeats=1)
+    tools = wrap_tools_with_dedupe([write_file], dedupe)
+    tool = tools[0]
+    target = str(tmp_path / "out.ts")
+    # 1era y 2da con repeats=1+2 margen → strings; 4ta levanta
+    r1 = tool.invoke({"path": target, "content": "a"})
+    r2 = tool.invoke({"path": target, "content": "a"})
+    r3 = tool.invoke({"path": target, "content": "a"})
+    assert "✅" in r1 or "ya se ejecutó" in r1 or "⛔" in r1
     with pytest.raises(ToolBudgetExceeded, match="same args"):
-        tool.invoke(args)
+        tool.invoke({"path": target, "content": "a"})
 
 
 def test_explore_budget_allows_two_then_stops(tmp_path):

@@ -6,11 +6,23 @@ import json
 from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
+from langgraph.errors import GraphBubbleUp
 
 
-class ToolBudgetExceeded(Exception):
+class ToolBudgetExceeded(GraphBubbleUp):
     """Raised when a tool call is blocked by dedupe or explore budget.
-    The 4B model ignores STOP strings; this exception forcibly halts the agent turn."""
+
+    Inherits GraphBubbleUp (NOT Exception) so that LangGraph's ToolNode
+    RE-RAISES it instead of catching it as a regular tool error and
+    converting it to a ToolMessage string. The 4B model ignores strings.
+
+    GraphBubbleUp propagation:
+      tool.invoke() → BaseTool.run() → re-raises
+      ToolNode._execute_tool_sync → `except GraphBubbleUp: raise` → propagates
+      agent.astream() → raises
+      stream_agent_turn → propagates (finally cleans up stream)
+      session.py → caught by `except ToolBudgetExceeded`
+    """
     pass
 
 
@@ -159,11 +171,17 @@ def wrap_tools_with_dedupe(
     tools: list,
     dedupe: ToolCallDedupe,
     explore_budget: ExploreBudget | None = None,
+    read_cache: dict | None = None,
 ) -> list:
-    """Envuelve tools: dedupe idéntico + (opcional) explore/write guard."""
+    """Envuelve tools: dedupe idéntico + (opcional) explore/write guard.
+
+    ``read_cache`` (dict path→content): si se provee, cada read_file exitoso
+    almacena su contenido. El retry write-only inyecta ese contenido como
+    anclaje para que el modelo pueda reescribir archivos sin necesidad de leer.
+    """
     wrapped: list[BaseTool] = []
     for t in tools:
-        wrapped.append(_wrap_one(t, dedupe, explore_budget))
+        wrapped.append(_wrap_one(t, dedupe, explore_budget, read_cache))
     return wrapped
 
 
@@ -171,6 +189,7 @@ def _wrap_one(
     tool: BaseTool,
     dedupe: ToolCallDedupe,
     explore_budget: ExploreBudget | None,
+    read_cache: dict | None = None,
 ) -> BaseTool:
     name = tool.name
 
@@ -180,7 +199,29 @@ def _wrap_one(
             if stop:
                 return stop
         n = dedupe.register(name, kwargs)
+        # VERIFY tools (lint/tests/build) son idempotentes: re-correrlas tras
+        # cada edición es correcto y NO es un loop. Nunca bloquearlas por dedupe.
+        if name in VERIFY_TOOL_NAMES:
+            return tool.invoke(kwargs)
+        if name == "read_file" and n > dedupe.max_repeats:
+            # Releer el MISMO archivo no es un loop crítico como la exploración:
+            # devolver STRING (no exception) para no disparar un retry completo.
+            # El modelo ignora a veces, pero read_file no quema recursion como explore.
+            return (
+                f"⛔ Ya leíste {kwargs.get('path','')} ({n} veces). "
+                "No lo vuelvas a leer con los mismos args. Trabajá con lo que "
+                "ya tenés o escribí/edita el código."
+            )
         if n > dedupe.max_repeats:
+            # Para write tools: devolver STRING (no exception) — el archivo ya
+            # está escrito, dejar que el modelo continúe (commit/verify).
+            # Solo RAISE si repite demasiado (evita loop infinito).
+            if name in WRITE_TOOL_NAMES and n <= dedupe.max_repeats + 2:
+                return (
+                    f"✅ {name} ya se ejecutó con estos args ({n} veces). "
+                    "El código ya está escrito. NO lo escribas de nuevo. "
+                    "Continuá con stage_files + create_commit, o con run_lint/run_tests."
+                )
             # RAISE instead of return string — the 4B model ignores text responses
             # and keeps calling the same tool, burning recursion limit.
             raise ToolBudgetExceeded(
@@ -189,7 +230,13 @@ def _wrap_one(
                 "the path may be wrong or a directory exists at that path. "
                 "Choose a different file path."
             )
-        return tool.invoke(kwargs)
+        result = tool.invoke(kwargs)
+        # Cache contenido leído: el retry write-only lo inyecta como anclaje
+        if read_cache is not None and name == "read_file":
+            path = kwargs.get("path")
+            if isinstance(result, str) and path:
+                read_cache[path] = result
+        return result
 
     return StructuredTool.from_function(
         func=_invoke,

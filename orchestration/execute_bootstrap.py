@@ -699,11 +699,13 @@ def _build_preload_parts(
         "INSTRUCCIÓN OBLIGATORIA: "
         + scope_rule
         + "El contenido relevante YA ESTÁ ARRIBA (tasks + layout + .env.example + main). "
-        "TU PRIMERA ACCIÓN DEBE SER write_file, edit_file o delete_file — no explores. "
+        "PLAN: leé los ARCHIVOS de la tarea con read_file (los archivos de enganche "
+        "están citados en la tarea; leélos TODOS antes de escribir, sin list_files). "
+        "Después escribí con write_file o edit_file la implementación completa. "
         "DIFF MÍNIMO: seguí el PLAN DE ARCHIVOS MÍNIMOS; no inventes CRUD/controllers/secrets. "
         "ENV.md en la RAÍZ del repo (solo vars del AC). "
         "Adapter = integración HTTP genérica (get/post/put/delete/request), no service de dominio. "
-        "Máximo 1 list_files(recursive=false) SOLO si falta un path concreto. "
+        "NO uses list_files ni search_code: los paths de la tarea bastan. "
         "recursive=true está PROHIBIDO. Timeout HTTP REAL si el AC lo pide. "
         "Antes de terminar: checklist verde + run_install (si falta deps) + run_lint / run_tests / run_build."
     )
@@ -733,12 +735,11 @@ def preload_cited_files(user_input: str, repo_path: str | None = None) -> str:
                 out = out.replace(marker, hints + "\n" + marker, 1)
             else:
                 out = out + "\n\n" + hints
-        # Banner al INICIO: el 4B ignora instrucciones al final y se pone a list_files
+        # Banner al INICIO: leé los archivos de la tarea (para el read_cache) y
+        # luego escribí. Sin list_files — los paths de la tarea bastan.
         banner = (
-            "⛔ PROHIBIDO usar list_files / search_code / inspect_routes en este turno. "
-            "El layout del repo, .env.example y entrypoints YA ESTÁN ABAJO "
-            "(bloque CONTEXTO DE REPO PRECARGADO). "
-            "Tu PRIMERA tool call DEBE ser write_file o edit_file.\n\n"
+            "PLAN: leé los archivos de la tarea con read_file (sin list_files), "
+            "después ESCRIBÍ con write_file o edit_file. El layout ya está abajo.\n\n"
         )
         out = banner + out
     return out

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 
 from langchain_core.messages import AIMessageChunk
 from rich.console import Console
@@ -11,14 +12,72 @@ from rich.panel import Panel
 console = Console()
 
 
-async def stream_agent_turn(agent, messages, config, idle_timeout: float | None = 120.0):
+class ReasoningOnlyResponse(Exception):
+    """Raised when the model produces ONLY reasoning_content with no actual output.
+
+    The 4B model can consume its entire token budget on thinking, leaving
+    zero tokens for content or tool_calls. This exception lets the session
+    layer catch it and retry with a forceful instruction + trimmed context.
+    """
+
+    def __init__(self, reasoning_text: str = "", reason: str = "reasoning-only"):
+        self.reasoning_text = reasoning_text
+        self.reason = reason
+        super().__init__(
+            f"Model produced only reasoning ({len(reasoning_text)} chars) "
+            f"with no content/tool_calls. Reason: {reason}. Turn should be retried."
+        )
+
+
+class ToolCallLimitExceeded(ReasoningOnlyResponse):
+    """Raised when the total number of tool calls in a turn exceeds the limit.
+
+    The 4B model can enter read-loops (reading the same file 7+ times)
+    because LangChain's StructuredTool catches dedupe exceptions and returns
+    them as error strings, which the 4B model ignores. This is a hard limit
+    enforced at the streaming layer — cannot be ignored.
+    """
+
+    def __init__(self, total_calls: int, limit: int):
+        self.total_calls = total_calls
+        self.limit = limit
+        super().__init__(
+            f"Exceeded {limit} tool calls in one turn (made {total_calls})",
+            reason="tool-call-limit",
+        )
+
+
+async def stream_agent_turn(agent, messages, config, idle_timeout: float | None = 120.0,
+                            max_reasoning_seconds: float | None = None,
+                            max_tool_calls: int | None = None,
+                            require_write: bool = False):
     """Ejecuta el agente con streaming. Reasoning en dim, response normal.
 
     Retorna el texto completo de la respuesta (sin razonamiento) para persistencia.
+    Levanta ReasoningOnlyResponse si el modelo solo razonó (sin content/tool_calls).
+
+    ``max_reasoning_seconds``: si el modelo lleva razonando más tiempo que este
+    límite sin producir content/tool_calls, corta el stream.
+
+    ``max_tool_calls``: límite duro de tool calls (contados por nombre) en toda
+    la conversación del turno. Si se supera, corta el stream.
+
+    ``require_write`` (EXECUTE retry): si el turno termina sin haber hecho
+    NINGÚN write_file/edit_file/delete_file, levanta ReasoningOnlyResponse.
+    El 4B a veces "responde" con texto/monólogo sin escribir nada real.
     """
     reasoning_started = False
     response_started = False
     response_parts: list[str] = []
+    reasoning_text: list[str] = []
+    saw_tool_call = False
+    produced_output = False
+    reasoning_since: float | None = None
+    total_tool_calls = 0
+    tool_call_limit_hit = False
+    wrote_something = False
+
+    WRITE_NAMES = frozenset({"write_file", "edit_file", "delete_file", "stage_files", "create_commit"})
 
     stream = agent.astream(
         {"messages": messages},
@@ -48,12 +107,20 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
 
             if is_reasoning and not reasoning_started:
                 reasoning_started = True
+                reasoning_since = time.monotonic()
                 console.print("💭 [dim]Razonando…[/dim]")
 
             if is_reasoning:
-                reasoning_text = chunk.additional_kwargs.get("reasoning_content") or chunk.content
-                if reasoning_text:
-                    console.print(reasoning_text, end="", style="dim cyan", highlight=False, soft_wrap=True)
+                reasoning_text.append(chunk.additional_kwargs.get("reasoning_content") or "")
+                if max_reasoning_seconds is not None and reasoning_since is not None:
+                    elapsed = time.monotonic() - reasoning_since
+                    if elapsed > max_reasoning_seconds and not produced_output:
+                        console.print(
+                            f"\n⏱️  Razonamiento excesivo ({elapsed:.0f}s sin output). "
+                            "Cortando y reintentando...[/yellow]",
+                            style="yellow",
+                        )
+                        break
             else:
                 if not response_started:
                     response_started = True
@@ -63,18 +130,48 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                 if chunk.content:
                     console.print(chunk.content, end="", highlight=False, soft_wrap=True)
                     response_parts.append(str(chunk.content))
+                    produced_output = True
 
                 for tc in chunk.tool_call_chunks or []:
                     if tc.get("name"):
+                        total_tool_calls += 1
+                        if tc["name"] in WRITE_NAMES:
+                            wrote_something = True
                         console.print(f"\n  [bold blue]🔧 {tc['name']}[/bold blue]", end="", highlight=False)
+                        if max_tool_calls is not None and total_tool_calls > max_tool_calls:
+                            tool_call_limit_hit = True
+                            break
                     if tc.get("args"):
                         console.print(f"[blue]{tc['args']}[/blue]", end="", highlight=False)
+                    saw_tool_call = True
+                    produced_output = True
+                if tool_call_limit_hit:
+                    break
     except StopAsyncIteration:
         pass
     finally:
         console.print("\n")
         with contextlib.suppress(Exception):
             await stream.aclose()
+
+    if tool_call_limit_hit:
+        console.print(
+            f"\n[red]⛔ Límite de {max_tool_calls} tool calls alcanzado en un turno. "
+            "El 4B entró en loop. Corte forzado → retry con contexto recortado.[/red]",
+            style="red",
+        )
+        raise ToolCallLimitExceeded(total_tool_calls, max_tool_calls)
+
+    if reasoning_started and not produced_output:
+        raise ReasoningOnlyResponse("".join(reasoning_text))
+
+    if require_write and not wrote_something:
+        console.print(
+            "\n[red]⛔ EXECUTE retry: el modelo respondió sin escribir ningún archivo. "
+            "Forzando retry con instrucción de escritura estricta.[/red]",
+            style="red",
+        )
+        raise ReasoningOnlyResponse("".join(response_parts), reason="no-write")
 
     return "".join(response_parts)
 

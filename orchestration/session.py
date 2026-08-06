@@ -24,9 +24,12 @@ from config import (
     JUDGE_MODEL_NAME,
     JUDGE_TEMPERATURE,
     TURN_IDLE_TIMEOUT,
+    REASONING_RETRY_ENABLED,
+    MAX_REASONING_SECONDS,
+    MAX_TOOL_CALLS_PER_TURN,
 )
 from core.roles import Role, role_for_intent
-from display.console import console, print_role_switch, print_turn_summary, stream_agent_turn
+from display.console import console, print_role_switch, print_turn_summary, stream_agent_turn, ReasoningOnlyResponse, ToolCallLimitExceeded
 from display.esc_watcher import EscWatcher
 from llm_wrapper import LocalLLM, get_usage, reset_turn_usage
 from orchestration.agent_builder import build_agent, init_mcp
@@ -51,6 +54,20 @@ _CONTEXT_LIMIT = 28800
 _SUMMARY_THRESHOLD = 0.90
 _WARNING_THRESHOLD = 0.85
 
+# Mensaje para el retry write-only: el 4B NO debe leer, debe escribir directo.
+_EXECUTE_FORCE_WRITE_MSG = (
+    "\n\n⛔ RETRY TRAS LOOP: NO tenés tools de lectura. El contexto de la tarea "
+    "y el layout YA están arriba.\n"
+    "ESCRIBÍ el código AHORA:\n"
+    "- NUNCA escribas/edites/borres tasks.md ni archivos de planificación (están "
+    "protegidos — si lo intentás, la tool te lo va a rechazar).\n"
+    "- Si un archivo ya existe y necesitás modificarlo: usá write_file para "
+    "REESCRIBIR el archivo completo (no uses edit_file, no conocés el texto exacto).\n"
+    "- Si es un archivo nuevo: crealo con write_file.\n"
+    "Tratá cada archivo como si lo reescribieras entero con los cambios requeridos. "
+    "No intentes leer ni explorar. No razones en voz alta: ejecutá una tool call directa."
+)
+
 def _load_judge_prompt() -> str:
     """Carga el prompt del judge."""
     from pathlib import Path
@@ -70,8 +87,11 @@ def _is_review_correction(user_input: str) -> bool:
     Usa el comando del usuario (primeras 120 chars) para no matchear keywords
     en contenido pegado (checklists con 'Implementación', etc.)."""
     prefix = _extract_command_prefix(user_input).lower()
-    has_action = any(k in prefix for k in ("implement", "correg", "aplicar", "fix", "resolver"))
-    has_review = any(k in prefix for k in ("review", "hallazgo", "reporte", "cambios propuesto"))
+    has_action = any(k in prefix for k in ("implement", "correg", "aplicar", "fix", "resolver", "arregl"))
+    has_review = any(k in prefix for k in (
+        "review", "hallazgo", "hallazgos", "reporte", "cambios propuesto",
+        "sugerencias", "sugerencia", "observaciones", "correcciones",
+    ))
     return has_action and has_review
 
 
@@ -81,8 +101,10 @@ def _build_review_correction_suffix() -> str:
         "\n\n⛔ INSTRUCCIÓN (CORRECCIÓN POST-REVIEW): "
         "El reporte del review está en el historial de esta conversación (último mensaje del asistente). "
         "NO busques archivos. NO explores. LEÉ el review en el historial y aplicá cada hallazgo CRITICAL y WARNING. "
+        "NUNCA escribas/edites/borres tasks.md ni archivos de planificación (están protegidos). "
         "Usá read_file UNA VEZ por archivo que debas modificar, luego edit_file/write_file/delete_file. "
         "Si el review pide eliminar un archivo, usá delete_file. "
+        "NO razones en voz alta: aplicá las correcciones YA con una tool call directa. "
         "Máximo 2 archivos a leer. Después: stage, commit, install, lint, tests, build."
     )
 
@@ -165,6 +187,10 @@ class Session:
         self._messages: list = []  # historial de la sesión actual
         self._last_response: str = ""  # respuesta del último turno
 
+        # Cache de archivos leídos (read_file) durante el turno: el retry
+        # write-only lo inyecta como anclaje para reescribir sin leer.
+        self._read_cache: dict[str, str] = {}
+
     def start(self) -> str:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -232,11 +258,35 @@ class Session:
                     self.llm, role, self.repo_path,
                     self.cached_analysis, self._tools, self._dedupe,
                     self._explore_budget,
+                    read_cache=self._read_cache,
                 )
             )
         finally:
             loop.close()
         return True
+
+    def _rebuild_agent_write_only(self):
+        """Reconstruye el agente EXECUTE con SOLO tools de escritura.
+
+        Se llama en el retry tras un loop de lectura. El 4B con read_file/
+        list_files disponibles entra en loops infinitos de lectura y nunca
+        escribe. Sin esas tools, escribe directo (verificado en pruebas).
+        """
+        self.current_role = Role.EXECUTE
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            self.agent, self._local_count, self._mcp_count = loop.run_until_complete(
+                build_agent(
+                    self.llm, Role.EXECUTE, self.repo_path,
+                    self.cached_analysis, self._tools, self._dedupe,
+                    self._explore_budget,
+                    force_write=True,
+                    read_cache=self._read_cache,
+                )
+            )
+        finally:
+            loop.close()
 
     def _check_context(self) -> str | None:
         """Verifica el contexto. Devuelve warning o None."""
@@ -265,6 +315,50 @@ class Session:
             *recent,
         ]
         console.print("[green]✅ Resumen generado. Historial comprimido.[/green]\n")
+
+    def _retry_with_read_anchor(self) -> str:
+        """Construye el mensaje de retry write-only incluyendo el contenido
+        de los archivos que read_file cacheó en el PASS1. El 4B sin tools de
+        lectura NECESITA este anclaje para reescribir código real (si no,
+        razona en círculos)."""
+        anchor = ""
+        already_committed = self._repo_has_recent_commit()
+        if self._read_cache:
+            blocks = []
+            for path, content in list(self._read_cache.items())[:6]:
+                blocks.append(f"--- CONTENIDO REAL DE {path} ---\n{content[:4000]}\n--- FIN {path} ---")
+            if blocks:
+                anchor = (
+                    "\n\nCONTENIDO DE ARCHIVOS YA LEÍDOS (úsalo como base para "
+                    "reescribir, NO los vuelvas a pedir):\n" + "\n".join(blocks)
+                )
+        if already_committed:
+            return (
+                "\n\n⛔ RETRY: el intento anterior YA escribió y commiteó código "
+                "(se detectó un commit reciente). NO reescribas los mismos archivos "
+                "ni dupliques commits. "
+                "Corré run_lint, run_tests y run_build para confirmar que todo "
+                "está verde, y si ya lo están, terminá con un resumen breve. "
+                "NO hagas write_file de archivos que ya modificaste." + anchor
+            )
+        return _EXECUTE_FORCE_WRITE_MSG + anchor
+
+    def _repo_has_recent_commit(self) -> bool:
+        """Detecta si el repo tiene un commit en los últimos ~5 minutos
+        (el intento anterior pudo haber commiteado antes de ser cortado)."""
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["git", "log", "-1", "--format=%ct"],
+                cwd=self.repo_path, capture_output=True, text=True, timeout=5,
+            )
+            ts = result.stdout.strip()
+            if not ts.isdigit():
+                return False
+            import time as _t
+            return ( _t.time() - int(ts) ) < 300
+        except Exception:
+            return False
 
     def run_turn(self, user_input: str, status: str | None = None) -> None:
         """Clasifica, cambia rol, ejecuta con historial, persiste en SQLite."""
@@ -300,13 +394,16 @@ class Session:
                 nums = extract_requested_task_numbers(user_input)
                 scope = f" (solo Tarea(s) {', '.join(map(str, nums))})" if nums else ""
                 hints_on = "CONTEXTO DE REPO PRECARGADO" in agent_input
-                # Con hints ya inyectados, explore=0: el 4B igual llama list_files y quema el turno
+                # Con hints ya inyectados, explore=0: cualquier list_files/search_code
+                # lanza ToolBudgetExceeded (GraphBubbleUp) → propaga → retry write-only.
+                # El 4B con max_calls=1 recibe strings STOP y los ignora, quemando el
+                # recursion limit sin escribir. Con 0, la excepción corta de inmediato.
                 if hints_on:
-                    self._explore_budget.max_calls = 1
+                    self._explore_budget.max_calls = 0
                     self._explore_budget.max_reads_after_explore = 5
                     self._explore_budget.max_tools_before_write = 8
                     self._dedupe.max_repeats = 1
-                extra = " · explore=1 (hints)" if hints_on else ""
+                extra = " · explore=0 (hints)" if hints_on else ""
                 console.print(
                     f"[dim]📎 Archivos de tareas pre-cargados{scope} "
                     f"+ checklist AC{extra}.[/dim]\n"
@@ -353,64 +450,121 @@ class Session:
         # Pasar todo el historial al agente
         messages_for_agent = list(self._messages)
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        task = loop.create_task(
-            stream_agent_turn(
-                self.agent,
-                messages_for_agent,
-                config,
-                idle_timeout=TURN_IDLE_TIMEOUT,
-            )
-        )
-
-        # Watcher de ESC: permite interrumpir el streaming y volver al prompt.
-        watcher = EscWatcher(
-            cancel_cb=lambda: loop.call_soon_threadsafe(task.cancel)
-        )
-        watcher.start()
-
+        # 1 intento normal + hasta 2 retries write-only (si el primero tampoco
+        # escribe, el 2do con instrucción aún más estricta)
+        max_attempts = 1 + (2 if REASONING_RETRY_ENABLED else 0)
+        attempt = 0
         interrupted = False
         interrupted_by_esc = False
-        try:
-            loop.run_until_complete(task)
-            self._last_response = task.result() if not task.cancelled() else ""
-        except KeyboardInterrupt:
-            interrupted = True
-            task.cancel()
-            try:
-                loop.run_until_complete(asyncio.wait_for(task, timeout=2.0))
-            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
-                pass
-        except asyncio.CancelledError:
-            interrupted = True
-            interrupted_by_esc = watcher.interrupted.is_set()
-        except ToolBudgetExceeded as e:
-            interrupted = True
-            print(
-                f"\n\n⚡ Presupuesto de tools agotado: {e} "
-                "Reintentá pidiendo implementar directamente o con un path más concreto.",
-                flush=True,
+
+        while attempt < max_attempts:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            is_write_retry = attempt > 0 and REASONING_RETRY_ENABLED
+            task = loop.create_task(
+                stream_agent_turn(
+                    self.agent,
+                    messages_for_agent,
+                    config,
+                    idle_timeout=TURN_IDLE_TIMEOUT,
+                    max_reasoning_seconds=MAX_REASONING_SECONDS,
+                    max_tool_calls=MAX_TOOL_CALLS_PER_TURN,
+                    require_write=is_write_retry,
+                )
             )
-        except Exception as e:
-            name = type(e).__name__
-            if "Recursion" in name or "recursion" in str(e).lower():
-                lim = (
-                    EXECUTE_RECURSION_LIMIT
-                    if new_role == Role.EXECUTE
-                    else AGENT_RECURSION_LIMIT
+
+            # Watcher de ESC: permite interrumpir el streaming y volver al prompt.
+            watcher = EscWatcher(
+                cancel_cb=lambda: loop.call_soon_threadsafe(task.cancel)
+            )
+            watcher.start()
+
+            try:
+                loop.run_until_complete(task)
+                self._last_response = task.result() if not task.cancelled() else ""
+                break
+            except KeyboardInterrupt:
+                interrupted = True
+                task.cancel()
+                try:
+                    loop.run_until_complete(asyncio.wait_for(task, timeout=2.0))
+                except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                    pass
+                break
+            except asyncio.CancelledError:
+                interrupted = True
+                interrupted_by_esc = watcher.interrupted.is_set()
+                break
+            except ToolBudgetExceeded as e:
+                if attempt + 1 >= max_attempts:
+                    interrupted = True
+                    print(
+                        f"\n\n⚡ Presupuesto de tools agotado: {e} "
+                        "Reintentá pidiendo implementar directamente o con un path más concreto.",
+                        flush=True,
+                    )
+                    break
+                attempt += 1
+                self._messages = self._messages[-3:] if len(self._messages) > 3 else self._messages
+                self._messages.append(HumanMessage(self._retry_with_read_anchor()))
+                messages_for_agent = list(self._messages)
+                self._rebuild_agent_write_only()
+                console.print(
+                    f"\n[yellow]⚠️  Tool budget agotado: {e}. "
+                    "Reintentando con SOLO tools de escritura (sin read_file)...[/yellow]"
                 )
-                print(
-                    f"\n\n⚠️  Turno cortado: demasiados pasos de exploración "
-                    f"(límite {lim}). "
-                    "Reintentá pidiendo implementar directamente o con un path más concreto.",
-                    flush=True,
-                )
-            else:
-                print(f"\n\n❌ Error en la iteración: {e}", flush=True)
-        finally:
-            watcher.stop()
-            loop.close()
+                continue
+            except ReasoningOnlyResponse as e:
+                if attempt + 1 >= max_attempts:
+                    if isinstance(e, ToolCallLimitExceeded):
+                        print(
+                            f"\n\n⚠️  El modelo hizo {e.total_calls} tool calls (límite {e.limit}) "
+                            "y entró en loop. Reinicia con /new o reduce el prompt.",
+                            flush=True,
+                        )
+                    else:
+                        print(
+                            f"\n\n⚠️  El modelo gastó todo el output ({len(e.reasoning_text)} chars) "
+                            "en razonamiento sin producir acción. Reinicia con /new o reduce el prompt.",
+                            flush=True,
+                        )
+                    break
+                attempt += 1
+                self._messages = self._messages[-3:] if len(self._messages) > 3 else self._messages
+                self._messages.append(HumanMessage(self._retry_with_read_anchor()))
+                messages_for_agent = list(self._messages)
+                self._rebuild_agent_write_only()
+                if isinstance(e, ToolCallLimitExceeded):
+                    console.print(
+                        f"\n[yellow]⚠️  El modelo hizo {e.total_calls} tool calls (loop de reads). "
+                        "Reintentando con SOLO tools de escritura (sin read_file)...[/yellow]"
+                    )
+                else:
+                    console.print(
+                        f"\n[yellow]⚠️  El modelo gastó {len(e.reasoning_text)} chars en razonamiento "
+                        "sin actuar. Reintentando con SOLO tools de escritura (sin read_file)...[/yellow]"
+                    )
+                continue
+            except Exception as e:
+                name = type(e).__name__
+                if "Recursion" in name or "recursion" in str(e).lower():
+                    lim = (
+                        EXECUTE_RECURSION_LIMIT
+                        if new_role == Role.EXECUTE
+                        else AGENT_RECURSION_LIMIT
+                    )
+                    print(
+                        f"\n\n⚠️  Turno cortado: demasiados pasos de exploración "
+                        f"(límite {lim}). "
+                        "Reintentá pidiendo implementar directamente o con un path más concreto.",
+                        flush=True,
+                    )
+                else:
+                    print(f"\n\n❌ Error en la iteración: {e}", flush=True)
+                break
+            finally:
+                watcher.stop()
+                loop.close()
 
         elapsed = time.monotonic() - start
         self._session_time += elapsed

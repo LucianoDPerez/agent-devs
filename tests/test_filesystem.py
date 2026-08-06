@@ -3,7 +3,7 @@
 import tempfile
 from pathlib import Path
 
-from tools.filesystem import edit_file, list_files, read_file, write_file
+from tools.filesystem import delete_file, edit_file, list_files, read_file, write_file
 
 
 def _create_repo(files: dict[str, str]) -> str:
@@ -99,3 +99,33 @@ class TestSoftErrors:
         result = write_file.invoke({"path": repo, "content": "hello"})
         assert "directory" in result.lower()
         assert "⛔" in result
+
+    def test_write_protected_tasks_md(self):
+        """El 4B no debe poder reescribir tasks.md (planificación protegida)."""
+        repo = tempfile.mkdtemp()
+        result = write_file.invoke({
+            "path": str(Path(repo) / ".agent-devs" / "tasks.md"),
+            "content": "# plan corrupto",
+        })
+        assert "PLANIFICACIÓN" in result
+        assert "PROHIBIDO" in result
+        assert not (Path(repo) / ".agent-devs" / "tasks.md").exists()
+
+    def test_edit_protected_prd(self):
+        repo = tempfile.mkdtemp()
+        p = Path(repo) / "PRD.md"
+        p.write_text("original", encoding="utf-8")
+        result = edit_file.invoke({
+            "path": str(p), "old_str": "original", "new_str": "corrupto",
+        })
+        assert "PROHIBIDO" in result
+        assert p.read_text(encoding="utf-8") == "original"
+
+    def test_delete_protected_plan(self):
+        repo = tempfile.mkdtemp()
+        p = Path(repo) / "plans" / "plan.md"
+        p.parent.mkdir(parents=True)
+        p.write_text("x", encoding="utf-8")
+        result = delete_file.invoke({"path": str(p)})
+        assert "PROHIBIDO" in result
+        assert p.exists()

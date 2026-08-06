@@ -278,10 +278,10 @@ class TestRepoHints:
             repo_path=str(tmp_path),
         )
         assert "CONTEXTO DE REPO PRECARGADO" in out or "stack-aware" in out
-        assert "PRIMERA ACCIÓN" in out
+        assert "leé los archivos de la tarea con read_file" in out
         assert "node" in out
 
-    def test_preload_bans_explore_at_top(self, tmp_path):
+    def test_preload_permits_reads_then_write(self, tmp_path):
         (tmp_path / "package.json").write_text("{}", encoding="utf-8")
         src = tmp_path / "apps" / "api" / "src"
         src.mkdir(parents=True)
@@ -292,7 +292,9 @@ class TestRepoHints:
             f"implementar Tarea 1 de {tasks}",
             repo_path=str(tmp_path),
         )
-        assert out.startswith("⛔ PROHIBIDO")
+        assert out.startswith("PLAN: leé los archivos de la tarea con read_file")
+        assert "write_file o edit_file" in out
+        assert "sin list_files" in out
         assert "CONTEXTO DE REPO PRECARGADO" in out
 
 

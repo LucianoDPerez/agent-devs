@@ -9,7 +9,34 @@ LLM_MAX_TOKENS = 3584
 EXECUTE_MAX_TOKENS = 2560
 # REVIEW: 4096 para leer archivos, correr verify y emitir informe detallado
 REVIEW_MAX_TOKENS = 4096
+
+# Reasoning budget: el 4B puede gastar TODO su output budget en reasoning_content,
+# produciendo 0 tokens útiles. Se pasa via extra_body a llama-server.
+# Si el server no lo soporta, se ignora silenciosamente.
+EXECUTE_MAX_REASONING_TOKENS = 256
+REVIEW_MAX_REASONING_TOKENS = 512
+
+# Si el modelo produce SOLO reasoning (sin content/tool_calls), reintentar
+# una vez con instrucción forzada y contexto recortado.
+REASONING_RETRY_ENABLED = True
+# Si el modelo lleva razonando más tiempo que este límite sin producir
+# content/tool_calls, cortar el stream. El 4B puede razonar minutos sin actuar.
+MAX_REASONING_SECONDS = 30
 TURN_IDLE_TIMEOUT = 180  # 3 min — el modelo 4B tarda en razonar reviews complejos
+
+# Archivos de PLANIFICACIÓN PROTEGIDOS: el agente NUNCA debe escribir/editar/
+# borrar sobre ellos. El 4B tiende a reescribir tasks.md (precargado en el
+# prompt) como "primer objetivo", corrompiendo el plan. Estos patterns matchean
+# por nombre de archivo o por subdirectorio (case-insensitive).
+PROTECTED_TASK_FILENAMES = frozenset({
+    "tasks.md", "task.md", "plan.md", "prd.md", "roadmap.md",
+    "backlog.md", "agenda.md", "user-stories.md", "stories.md",
+    "task-dependency-analyzer.md", "story-to-plan.md",
+})
+PROTECTED_TASK_DIRS = frozenset({
+    ".agent-devs", ".agent", "plans", "planning", "_plans",
+    ".atl", "docsplans", "tasks",
+})
 
 # Judge LLM: modelo más grande que valida reviews antes de aprobar.
 # Si JUDGE_ENABLED es True y el review dice APROBADO, se llama al judge.
@@ -24,8 +51,10 @@ JUDGE_MAX_TOKENS = 4096
 
 # Límite de pasos modelo↔tools por turno (evita loops de exploración de 20+ min)
 AGENT_RECURSION_LIMIT = 35
-# EXECUTE: 4B ignora STOP y quema pasos en loops; 45 da margen real
-EXECUTE_RECURSION_LIMIT = 45
+# EXECUTE: ya no corta el loop de lectura (eso lo hacen max_calls=0 + retry
+# write-only). 30 da margen para el flujo completo: 5×write + stage + commit
+# + lint + tests + build ≈ 12-15 steps. Antes 10 cortaba antes de terminar.
+EXECUTE_RECURSION_LIMIT = 30
 # Pre-cargar en el mensaje de EXECUTE archivos .md/.txt citados por path absoluto
 EXECUTE_PRELOAD_MAX_CHARS = 20_000
 EXECUTE_PRELOAD_MAX_FILES = 2
@@ -35,6 +64,10 @@ EXECUTE_EXPLORE_BUDGET = 3
 EXECUTE_MAX_READS_AFTER_EXPLORE = 5
 # Si no escribió nada tras N tool calls → forzar write_file
 EXECUTE_MAX_TOOLS_BEFORE_WRITE = 8
+# Límite duro total de tool calls por turno (EXECUTE). Ya no previene read-loops
+# (eso lo hace max_calls=0 + retry write-only); 20 da margen al flujo completo:
+# 5-6 writes + stage + commits + verify. Solo corta si el 4B entra en runaway.
+MAX_TOOL_CALLS_PER_TURN = 20
 
 # REVIEW budgets: el reviewer no escribe, solo lee y verifica
 REVIEW_EXPLORE_BUDGET = 1

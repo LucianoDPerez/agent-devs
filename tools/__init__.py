@@ -43,6 +43,13 @@ PLANNER_TOOLS = [list_files, read_file, search_code, inspect_routes, write_file,
 EXECUTOR_TOOLS = list(ALL_TOOLS)
 REVIEWER_TOOLS = [list_files, read_file, search_code, inspect_routes, *_READONLY_GIT, *_VERIFY]
 
+# Retry de EXECUTE tras loop de lectura: SOLO escritura + git-write + verify.
+# El 4B entra en loops de read_file infinitos si las tiene; sin ellas escribe.
+WRITE_ONLY_TOOLS = [
+    write_file, edit_file, delete_file,
+    *_GIT_WRITE, *_VERIFY,
+]
+
 AGENTS: dict[str, list] = {
     "analyzer": ANALYZER_TOOLS,
     "planner": PLANNER_TOOLS,

@@ -61,6 +61,16 @@ def classify_intent(_llm, user_message: str) -> Intent:
     text = user_message.strip().lower()
     prefix = _extract_command_prefix(user_message)
 
+    # CORRECCIÓN POST-REVIEW: verbo de acción + mención de review/correcciones
+    # → EXECUTE (aplicar los hallazgos del review). Debe ir ANTES del check de
+    # REVIEW: "implementar las observaciones del review" contiene "review" pero
+    # es una acción de implementación, no una petición de revisar.
+    if _has_any(prefix, _EXECUTE_VERBS) and _has_any(prefix, (
+        "review", "hallazgo", "observaciones", "sugerencias", "correcciones",
+        "cambios", "code review", "critical", "crítico", "crític",
+    )):
+        return Intent.EXECUTE
+
     # LEADING INTENT: user's own command (first ~120 chars) takes priority
     # over keywords found in pasted completion reports/checklists.
     if _has_any(prefix, _REVIEW_LEADING):

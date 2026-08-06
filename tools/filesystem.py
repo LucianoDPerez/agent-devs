@@ -4,9 +4,33 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
-from config import MAX_FILE_READ_BYTES, MAX_LIST_RESULTS
+from config import (
+    MAX_FILE_READ_BYTES,
+    MAX_LIST_RESULTS,
+    PROTECTED_TASK_DIRS,
+    PROTECTED_TASK_FILENAMES,
+)
 
 from ._helpers import _is_excluded
+
+
+def _is_protected_task_path(path: str) -> bool:
+    """True si el path corresponde a un archivo de planificación que el agente
+    NUNCA debe escribir/editar/borrar (tasks.md, .agent-devs/, plans/, etc.).
+
+    El 4B tiende a reescribir tasks.md (precargado en el prompt) corrompiendo el
+    plan. Detectamos por nombre de archivo o por subdirectorio protegido.
+    """
+    if not path:
+        return False
+    p = Path(path)
+    name_lower = p.name.lower()
+    if name_lower in PROTECTED_TASK_FILENAMES:
+        return True
+    parts_lower = {part.lower() for part in p.parts}
+    if parts_lower & PROTECTED_TASK_DIRS:
+        return True
+    return False
 
 
 @tool
@@ -118,6 +142,12 @@ def write_file(path: str, content: str) -> str:
     accept it and choose a different path.
     Usage: write_file(path="/Users/me/repo/report.md", content="# Report")
     """
+    if _is_protected_task_path(path):
+        return (
+            f"⛔ '{path}' es un archivo de PLANIFICACIÓN (tasks/PRD/plan) PROHIBIDO de escribir. "
+            "NO lo toques: es tu fuente de verdad de la tarea. Implementá el código "
+            "en los archivos del repo, no reescribas tasks.md ni planes."
+        )
     p = Path(path)
     if p.exists() and p.is_dir():
         return (
@@ -142,6 +172,11 @@ def delete_file(path: str) -> str:
     If the file does not exist, returns a message — accept it and continue.
     Usage: delete_file(path="/Users/me/repo/old-file.ts")
     """
+    if _is_protected_task_path(path):
+        return (
+            f"⛔ '{path}' es un archivo de PLANIFICACIÓN (tasks/PRD/plan) PROHIBIDO de borrar. "
+            "NO lo elimines: es tu fuente de verdad de la tarea."
+        )
     p = Path(path)
     if not p.exists():
         return (
@@ -161,6 +196,11 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
     Only replaces the first occurrence. Use carefully.
     Usage: edit_file(path="file.py", old_str="old code", new_str="new code")
     """
+    if _is_protected_task_path(path):
+        return (
+            f"⛔ '{path}' es un archivo de PLANIFICACIÓN (tasks/PRD/plan) PROHIBIDO de editar. "
+            "NO lo toques: es tu fuente de verdad. Implementá el código en los archivos del repo."
+        )
     p = Path(path)
     if not p.exists():
         return (

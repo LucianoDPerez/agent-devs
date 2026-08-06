@@ -236,11 +236,11 @@ Mientras escribís, una barra inferior muestra en tiempo real:
 brew install llama.cpp
 ```
 
-Levantá el servidor:
+Levantá el servidor con el **presupuesto de razonamiento limitado** (⚠️ **requerido** para el modelo Agents-A1-4B con template `--jinja`):
 
 ```bash
 llama-server \
-  -hf InternScience/Agents-A1-4B-Q4_K_M-GGUF:Q4_K_M \
+  -m /path/to/Agents-A1-4B-Q4_K_M.gguf \
   -c 32000 -ngl 99 --flash-attn on --kv-unified \
   --cache-type-k q5_0 --cache-type-v q5_0 \
   --threads 4 --threads-batch 4 \
@@ -249,8 +249,14 @@ llama-server \
   --alias agents-a1-4b --temp 0.85 \
   --top-p 0.95 --top-k 20 --min-p 0.0 \
   --presence-penalty 1.1 --repeat-penalty 1.0 \
-  --parallel 1 --jinja --cont-batching
+  --parallel 1 --jinja --cont-batching \
+  --reasoning-budget 256 \
+  --reasoning-budget-message "Ya razonaste lo suficiente. Ahora produce tu respuesta y tool calls YA."
 ```
+
+> **¿Por qué `--reasoning-budget 256`?** El modelo Agents-A1-4B usa un template `--jinja` con bloque de reasoning. Sin límite (`--reasoning-budget` no especificado, default `-1` = unlimited), el modelo puede gastar **todos** sus tokens de salida en `reasoning_content` y nunca producir `content` ni `tool_calls`, especialmente con prompts complejos. `--reasoning-budget 256` corta el pensamiento a 256 tokens; el `--reasoning-budget-message` fuerza el modelo a emitir `content`/`tool_calls` inmediatamente después.
+>
+> **Verificá que el flag esté activo:** `ps aux | grep llama-server | grep reasoning-budget`
 
 ### 2. git + GitHub CLI
 
@@ -446,13 +452,15 @@ Cubren: core domain (15), classifier (15), session flow con LLM real (13):
 
 ## Notas de rendimiento
 
-- El modelo local (Agents-A1-4B) **piensa en voz alta** antes de cada acción — esa salida se muestra en vivo (streaming)
+- El modelo local (Agents-A1-4B) **piensa en voz alta** antes de cada acción — esa salida se muestra en vivo (streaming) como `💭 Razonando…`
+- **Con `--reasoning-budget 256` en el server**: el thinking se corta a 256 tokens, el resto va a content/tool_calls
+- **Sin `--reasoning-budget`**: el modelo puede gastar todos los tokens en reasoning → el agente detecta esto, corta a los 30s y reintenta con contexto recortado
 - El análisis inicial puede tardar **1-2 minutos** (el modelo razona mucho)
 - El clasificador keyword-based es **instantáneo** (no gasta tokens del LLM)
 - La memoria entre turnos **acumula tokens** — el contexto crece con cada mensaje
 - Al 90% de contexto, el agente **genera un summary automáticamente** (~2-3s extra)
 - `/new` resetea el historial instantáneamente sin perder el análisis cacheado del repo
-- `max_tokens=2048` (chat) / `1024` (análisis) son los límites estables
+- `max_tokens=2048` (chat) / `1024` (análisis) son los límites estables; EXECUTE usa `2560` (con reasoning budget server-side limitando el thinking)
 - Cada turno muestra tiempo y tokens (in/out/cacheados) y el acumulado de sesión
 
 ## Protección anti-loop
@@ -489,11 +497,84 @@ Rastreía llamadas idénticas `(tool_name, args)`. Tras `max_repeats=2` (o 1 con
 ### Flujo de interrupción
 
 ```
-Explores agotados → ⛔ STRING STOP → modelo puede reintentar (write/edit/delete)
-  ↓ (si el modelo sigue sin escribir)
-max_tools_before_write excedido → ToolBudgetExceeded raised
-  → stream_agent_turn aborts
-  → session.py catches exception
-  → muestra "⚡ Presupuesto de tools agotado"
-  → vuelve al prompt
+Dedupe repetida → ToolBudgetExceeded (GraphBubbleUp) → PROPAGA through LangGraph ToolNode
+  ↓ (NO es atrapada como tool error — el 4B ignora strings de error)
+session.py la atrapa → recorta contexto a 3 msgs + instrucción forzada → RETRY
+  ↓ (si retry también falla)
+max_tool_calls=12 → ToolCallLimitExceeded → corta stream → retry
+  ↓
+Max 1 retry → turno termina con mensaje claro al usuario
 ```
+
+### Protección contra reasoning-only (4B con template `--jinja`)
+
+El modelo `agents-a1-4b` (template `--jinja`) **siempre razoné antes de producir contenido**. Con prompts complejos (system + cache + task + hints), el razonamiento puede crecer hasta agotar todo el `max_tokens` sin producir `content` ni `tool_calls`. El sistema usa **dos capas** para manejar esto:
+
+**Capa 1 — `--reasoning-budget` (server-side, primaria)**
+
+Configurado en el `llama-server` startup (ver Instalación). Limita el reasoning a 256 tokens (EXECUTE) / 512 (REVIEW). El server inyecta `--reasoning-budget-message` cuando el presupuesto se agota, forzando `content`/`tool_calls`.
+
+**Verificá que el flag esté activo:** `ps aux | grep llama-server | grep reasoning-budget`
+
+**Capa 2 — Detección + retry (client-side, secundaria)**
+
+Si el server NO tiene `--reasoning-budget` configurado, el código cliente lo detecta y reintenta:
+
+1. `stream_agent_turn` (`display/console.py`): rastrea si se produjo `content`/`tool_calls`. Si el stream termina con **solo reasoning**, levanta `ReasoningOnlyResponse`.
+2. `MAX_REASONING_SECONDS = 30` corta el stream si el modelo lleva 30s razonando sin producir output.
+3. `MAX_TOOL_CALLS_PER_TURN = 12` corta el stream después de 12 tool calls (detiene loops de read_file). Levanta `ToolCallLimitExceeded`.
+4. `session.py` atrapa la excepción → recorta el contexto a 3 mensajes + agrega instrucción forzada ("YA RACIONALIZASTE. Tu PRIMERA acción DEBE ser write_file") → reintenta una vez.
+5. `agent_builder.py` pasa `max_reasoning_tokens` via `extra_body` (best-effort; funcionan si el server lo soporta, se ignoran si no).
+
+### Protección contra loops de read_file (4B ignora strings de error)
+
+El 4B modelo tiende a leer el mismo archivo 7+ veces porque **ignora los strings de error** que LangGraph devuelve como `ToolMessage`, y **no puede decidir cuándo parar de explorar** si tiene `read_file`/`list_files` disponibles. El sistema usa 4 mecanismos:
+
+| Mecanismo | Cómo funciona | Efectividad |
+|-----------|--------------|-------------|
+| **`ToolBudgetExceeded` (GraphBubbleUp)** | Hereda `GraphBubbleUp` → LangGraph ToolNode la RE-RAIZA (no la convierte a ToolMessage) → propaga a `session.py` → retry | ✅ Elimina loops de dedupe |
+| **`MAX_TOOL_CALLS_PER_TURN = 12`** | Contador en `stream_agent_turn`: corta el stream después de 12 tool calls → `ToolCallLimitExceeded` → retry | ✅ Límite duro, 4B no puede ignorar |
+| **Retry write-only (`force_write`)** | En el retry, `build_agent(force_write=True)` reconstruye el agente con **SOLO** `write_file`/`edit_file`/`delete_file` + git-write + verify. **SIN** `read_file`/`list_files`/`search_code`. El 4B sin lectura disponible escribe directo | ✅✅ **DEFINITIVO** (verificado: escribe controller NestJS real en el retry) |
+| **`EXECUTE_RECURSION_LIMIT = 10`** | Límite LangGraph de agent steps. Si todo lo demás falla, corta a los 10 pasos | ✅ Último recurso |
+| Stop strings (consume) | `consume()` devuelve `"⛔ ..."` como tool result | ❌ 4B las ignora |
+
+**Hallazgo clave (verificado en pruebas contra el server)**: el root cause definitivo del loop NO es el reasoning ni las excepciones — es que **el 4B no puede autolimitarse la exploración**. Con `read_file` + `list_files` disponibles, las usa infinitamente (13+ reads, 0 writes en 309s). Sin esas tools (write-only), escribe código real en ~30-70s (`write_file` con controller NestJS de 1,859 chars → logger, fire-and-forget, manejo 404, etc.).
+
+**Importante**: el prompt `execute.md` también se simplificó. Antes decía "TU PRIMERA tool call DEBE SER write_file. NO empieces con read_file" — el 4B entraba en parálisis razonando sobre la contradicción "no debo leer pero necesito entender qué hay". Ahora dice "leé máximo 2 archivos si necesitás un patrón; después escribí" y el retry fuerza write-only.
+
+**Configuración** (`config.py`):
+
+| Parámetro | Default | Rol |
+|-----------|---------|-----|
+| `MAX_TOOL_CALLS_PER_TURN` | 20 | Límite duro de tool calls por turno |
+| `EXECUTE_RECURSION_LIMIT` | 30 | Límite LangGraph de agent steps (EXECUTE) |
+| `EXECUTE_MAX_REASONING_TOKENS` | 256 | EXECUTE (via extra_body, best-effort) |
+| `REVIEW_MAX_REASONING_TOKENS` | 512 | REVIEW (via extra_body, best-effort) |
+| `MAX_REASONING_SECONDS` | 30 | Time budget para cortar stream si solo razoné |
+| `REASONING_RETRY_ENABLED` | True | Activa/desactiva retry automático |
+
+### Protección de archivos de planificación
+
+El 4B tiende a **reescribir `tasks.md`** (precargado en el prompt) como su primer `write_file`, corrompiendo el plan. Ahora está **protegido a nivel de tool** (`tools/filesystem.py`):
+
+| Tool | Comportamiento |
+|------|---------------|
+| `write_file` | Rechaza con `⛔ PLANIFICACIÓN PROHIBIDO` si el path es tarea/plan/PRD |
+| `edit_file` | Igual — no edita archivos de planificación |
+| `delete_file` | Igual — no borra archivos de planificación |
+
+**Patterns protegidos** (`config.py`):
+- **Nombres**: `tasks.md`, `task.md`, `plan.md`, `prd.md`, `roadmap.md`, `backlog.md`, `agenda.md`, etc.
+- **Directorios**: `.agent-devs`, `.agent`, `plans`, `planning`, `_plans`, `.atl`, `tasks`
+
+Esto se aplica SIEMPRE (incluyendo el retry write-only y la corrección post-review), así el modelo no puede corromper la fuente de verdad de la tarea.
+
+### Anti-duplicación de trabajo y verify idempotente
+
+El 4B a veces, tras un corte, **rehace trabajo ya commiteado** (reescribe + duplica commits) o queda bloqueado por re-correr `run_lint`/`run_tests`. Fixes en `tool_dedupe.py` + `session.py`:
+
+| Comportamiento | Fix |
+|----------------|-----|
+| `run_lint`/`run_tests`/`run_build` re-corridos | **Nunca** se bloquean por dedupe (son idempotentes — re-verificar tras cada edición es correcto) |
+| `read_file` del mismo archivo (relectura inofensiva) | Devuelve STRING informativo, NO lanza excepción → no dispara retry completo |
+| Rehacer un commit reciente tras corte | El retry detecta el commit en los últimos 5 min y ordena "NO reescribas, solo verificá y terminá" |

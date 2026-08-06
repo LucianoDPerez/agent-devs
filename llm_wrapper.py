@@ -176,6 +176,8 @@ class LocalLLM(BaseChatModel):
     temperature: float = 0.85
     max_tokens: int = 4096
     api_key: str = "not-needed"
+    max_reasoning_tokens: int = 0
+    force_tool_calls: bool = False
     _client: AsyncOpenAI | None = PrivateAttr(default=None)
     _tools: list[BaseTool] = PrivateAttr(default_factory=list)
     _tool_choice: Any | None = PrivateAttr(default=None)
@@ -230,10 +232,21 @@ class LocalLLM(BaseChatModel):
         }
         if self._tools:
             params["tools"] = [convert_to_openai_tool(t) for t in self._tools]
+            # Force tool calling: el 4B a veces responde TEXTO plano en vez de
+            # tool calls (monólogo circular). tool_choice="required" obliga al
+            # modelo a emitir un tool call siempre. Solo se usa en el retry
+            # write-only (force_tool_calls=True).
+            if self.force_tool_calls:
+                params["tool_choice"] = "required"
         if self._tool_choice is not None:
             params["tool_choice"] = self._tool_choice
         if stop:
             params["stop"] = stop
+        if self.max_reasoning_tokens > 0:
+            params["extra_body"] = {
+                **kwargs.get("extra_body", {}),
+                "max_reasoning_tokens": self.max_reasoning_tokens,
+            }
         return params
 
     @property
