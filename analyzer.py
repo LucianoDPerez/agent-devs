@@ -109,16 +109,37 @@ def _read_readme(root: Path) -> str:
 
 
 def build_context(repo_path: str) -> str:
+    """Construye un contexto genérico, focalizado, sin referencias a lenguajes."""
     root = Path(repo_path)
-    sections = [f"# Estructura del repositorio: {repo_path}\n" + _file_tree(root)]
+    sections = []
+    
+    # 1. Estructura principal (directorios de nivel raíz, genérico)
+    dirs = [d for d in root.iterdir() if d.is_dir() and not d.name.startswith('.')]
+    sections.append("# Estructura principal")
+    for d in dirs[:10]:  # solo primeros 10 dirs, genérico
+        sections.append(f"📁 {d.name}/")
+    if len(dirs) > 10:
+        sections.append(f"  ... ({len(dirs)} dirs más)")
+    
+    # 2. Manifiestos (todos los conocidos, genérico)
     manifest = _read_manifest(root)
     if manifest:
         sections.append(manifest)
+    
+    # 3. README
     readme = _read_readme(root)
     if readme:
         sections.append(readme)
+    
+    # 4. Top 10 archivos por tamaño (cualquier extension, genérico)
+    files = sorted(root.rglob("*"), key=lambda p: p.stat().st_size, reverse=True)[:10]
+    sections.append("# Archivos más grandes")
+    for f in files:
+        if f.is_file() and f.suffix:
+            sections.append(f"📄 {f.relative_to(root).as_posix()} ({f.stat().st_size//1024}kb)")
+    
     context = "\n\n".join(sections)
-    return context[:MAX_CONTEXT_CHARS]
+    return context[:MAX_CONTEXT_CHARS * 0.7]  # usar solo 70% del límite para dejar margen
 
 
 def detect_language(repo_path: str) -> str:
@@ -193,8 +214,6 @@ def _extract_json(text: str):
         if in_str:
             if esc:
                 esc = False
-            elif ch == "\\":
-                esc = True
             elif ch == '"':
                 in_str = False
             continue

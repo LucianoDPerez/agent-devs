@@ -116,8 +116,7 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                     elapsed = time.monotonic() - reasoning_since
                     if elapsed > max_reasoning_seconds and not produced_output:
                         console.print(
-                            f"\n⏱️  Razonamiento excesivo ({elapsed:.0f}s sin output). "
-                            "Cortando y reintentando...[/yellow]",
+                            f"\n⏱️  Razonamiento excesivo ({elapsed:.0f}s sin output). Cortando y reintentando...",
                             style="yellow",
                         )
                         break

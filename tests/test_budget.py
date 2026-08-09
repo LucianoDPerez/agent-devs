@@ -77,6 +77,54 @@ class TestExploreBudgetExecute:
         assert "agotada" in result.lower() or "prohibida" in result.lower()
 
 
+class TestExploreBudgetAnalyze:
+    """Modo ANALYZE/PLAN (write_pressure=False): capa la búsqueda MCP sin
+    presionar a escribir. Al agotarse lanza ToolBudgetExceeded (no string)."""
+
+    def setup_method(self):
+        self.budget = ExploreBudget(
+            max_calls=2,
+            max_reads_after_explore=3,
+            max_tools_before_write=0,
+            write_pressure=False,
+        )
+
+    def test_mcp_search_graph_consumes_explore_budget(self):
+        assert self.budget.consume("cm__search_graph", {"query": "a"}) is None
+        assert self.budget.consume("cm__search_graph", {"query": "b"}) is None
+        # Tercera búsqueda (query DISTINTA, no la atrapa el dedupe) → excepción
+        with pytest.raises(ToolBudgetExceeded, match="Exploración agotada"):
+            self.budget.consume("cm__search_graph", {"query": "c"})
+
+    def test_get_code_snippet_is_read_not_explore(self):
+        assert self.budget.consume("cm__get_code_snippet", {"qualified_name": "A"}) is None
+        assert self.budget.used == 0  # no gastó exploración
+
+    def test_reads_limited_after_explore_analyze(self):
+        budget = ExploreBudget(
+            max_calls=1,
+            max_reads_after_explore=1,
+            max_tools_before_write=0,
+            write_pressure=False,
+        )
+        budget.consume("cm__search_graph", {})  # explora 1 → explore exhausted
+        assert budget.consume("cm__get_code_snippet", {"qualified_name": "A"}) is None
+        with pytest.raises(ToolBudgetExceeded, match="Demasiadas lecturas"):
+            budget.consume("cm__get_code_snippet", {"qualified_name": "B"})
+
+    def test_analyze_never_forced_to_write(self):
+        budget = ExploreBudget(
+            max_calls=10,
+            max_reads_after_explore=50,
+            max_tools_before_write=2,
+            write_pressure=False,
+        )
+        for i in range(20):
+            assert budget.consume("cm__get_code_snippet", {"qualified_name": f"F{i}"}) is None
+        # write_pressure=False → nunca se exige write aunque haya muchas tools
+        assert budget.consume("cm__search_graph", {"query": "z"}) is None
+
+
 class TestDedupe:
     """Tool dedupe should allow N repeats then block."""
 

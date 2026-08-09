@@ -11,11 +11,15 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from cache import load_recent_turns, save_turn
 from config import (
     AGENT_RECURSION_LIMIT,
+    ANALYZE_EXPLORE_BUDGET,
+    ANALYZE_MAX_READS_AFTER_EXPLORE,
     EXECUTE_EXPLORE_BUDGET,
     EXECUTE_MAX_READS_AFTER_EXPLORE,
     EXECUTE_MAX_TOOLS_BEFORE_WRITE,
     EXECUTE_RECURSION_LIMIT,
     JUDGE_BASE_URL,
+    PLAN_EXPLORE_BUDGET,
+    PLAN_MAX_READS_AFTER_EXPLORE,
     REVIEW_EXPLORE_BUDGET,
     REVIEW_MAX_READS_AFTER_EXPLORE,
     REVIEW_MAX_TOOLS_BEFORE_WRITE,
@@ -169,6 +173,18 @@ class Session:
         self.repo_path = repo_path
         self.cached_analysis = cached_analysis
 
+        # Lógica de negocio: reglas concretas (campos requeridos, validaciones)
+        # que el 4B ignora cuando solo ve la estructura general. Se inyecta en
+        # el system prompt de TODOS los roles via cached_analysis.
+        try:
+            from business_logic import get_business_context
+            biz = get_business_context(repo_path, mcp_tools=None)
+            if biz:
+                sep = "\n\n" if self.cached_analysis else ""
+                self.cached_analysis = self.cached_analysis + sep + biz
+        except Exception:
+            pass
+
         self.current_role: Role = Role.ANALYZE
         self.agent: Any = None
         self._tools: list = []
@@ -181,6 +197,14 @@ class Session:
             max_reads_after_explore=EXECUTE_MAX_READS_AFTER_EXPLORE,
             max_tools_before_write=EXECUTE_MAX_TOOLS_BEFORE_WRITE,
         )
+        # ANALYZE/PLAN: capa la búsqueda MCP pero NUNCA presiona a escribir.
+        # Al agotarse lanza ToolBudgetExceeded → retry no_explore (no write-only).
+        self._analyze_budget = ExploreBudget(
+            max_calls=ANALYZE_EXPLORE_BUDGET,
+            max_reads_after_explore=ANALYZE_MAX_READS_AFTER_EXPLORE,
+            max_tools_before_write=0,
+            write_pressure=False,
+        )
         self._session_time: float = 0.0
         self.session_id: str = str(uuid.uuid4())[:8]
 
@@ -190,6 +214,7 @@ class Session:
         # Cache de archivos leídos (read_file) durante el turno: el retry
         # write-only lo inyecta como anclaje para reescribir sin leer.
         self._read_cache: dict[str, str] = {}
+        self._no_explore_retry = False
 
     def start(self) -> str:
         loop = asyncio.new_event_loop()
@@ -202,7 +227,7 @@ class Session:
                 build_agent(
                     self.llm, Role.ANALYZE, self.repo_path,
                     self.cached_analysis, self._tools, self._dedupe,
-                    self._explore_budget,
+                    self._explore_budget, self._analyze_budget,
                 )
             )
         finally:
@@ -246,8 +271,8 @@ class Session:
         self._load_previous_sessions()
         self._rebuild_agent(Role.ANALYZE)
 
-    def _rebuild_agent(self, role: Role) -> bool:
-        if self.agent is not None and role == self.current_role:
+    def _rebuild_agent(self, role: Role, no_explore: bool = False) -> bool:
+        if self.agent is not None and role == self.current_role and not no_explore:
             return False
         self.current_role = role
         loop = asyncio.new_event_loop()
@@ -257,8 +282,9 @@ class Session:
                 build_agent(
                     self.llm, role, self.repo_path,
                     self.cached_analysis, self._tools, self._dedupe,
-                    self._explore_budget,
+                    self._explore_budget, self._analyze_budget,
                     read_cache=self._read_cache,
+                    no_explore=no_explore,
                 )
             )
         finally:
@@ -280,7 +306,7 @@ class Session:
                 build_agent(
                     self.llm, Role.EXECUTE, self.repo_path,
                     self.cached_analysis, self._tools, self._dedupe,
-                    self._explore_budget,
+                    self._explore_budget, self._analyze_budget,
                     force_write=True,
                     read_cache=self._read_cache,
                 )
@@ -343,6 +369,156 @@ class Session:
             )
         return _EXECUTE_FORCE_WRITE_MSG + anchor
 
+    def _system_trace_for(self, user_msg: str) -> str:
+        """El SISTEMA (no el 4B) resuelve el término del usuario con
+        trace_component y devuelve el texto resultante.
+
+        El 4B en el PASS1 suele trazar componentes equivocadas (varianza).
+        En el retry, el sistema traza el término del usuario EN CÓDIGO con la
+        misma tool compuesta que funciona (resolve + source + usos + página),
+        garantizando que el ancla tenga la cadena correcta sin depender de que
+        el 4B orqueste la exploración."""
+        try:
+            from tools.graph_trace import build_trace_component
+            import asyncio, json, threading
+
+            async def _run():
+                # 1) project key: el indexado del repo actual (sandbox o repo del usuario)
+                project = ""
+                by_name = {t.name: t for t in self._tools}
+                lp = by_name.get("cm__list_projects")
+                text = ""
+                if lp:
+                    raw = await lp.ainvoke({})
+                    if isinstance(raw, list):
+                        text = "".join(
+                            b.get("text", "") for b in raw
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        )
+                    elif isinstance(raw, str):
+                        text = raw
+                    if text:
+                        data = json.loads(text)
+                        for p in data.get("projects", []):
+                            if p.get("root_path") == self.repo_path:
+                                project = p.get("name", "")
+                                break
+
+                if not project:
+                    import os
+                    basename = os.path.basename(self.repo_path.rstrip("/")).lower()
+                    if basename and text:
+                        matches = [
+                            p.get("name", "")
+                            for p in data.get("projects", [])
+                            if basename in p.get("root_path", "").lower()
+                        ]
+                        if matches:
+                            project = matches[0]
+
+                if not project:
+                    return ""
+
+                tc = build_trace_component(self._tools, self.repo_path)
+                term = self._extract_component_term(user_msg)
+                if not term:
+                    return ""
+                result = await tc.ainvoke({"component": term, "project": project})
+                return str(result)
+
+            out: dict = {"r": ""}
+
+            def _thread():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    out["r"] = loop.run_until_complete(_run())
+                finally:
+                    loop.close()
+
+            t = threading.Thread(target=_thread, daemon=True)
+            t.start()
+            t.join(timeout=120)
+            if t.is_alive():
+                print("[system_trace_for] timeout 120s", flush=True)
+            return out["r"]
+        except Exception as e:
+            print(f"[system_trace_for] error: {type(e).__name__}: {e}", flush=True)
+            return ""
+
+    def _extract_component_term(self, user_msg: str) -> str:
+        """Extrae el término de componente/bug del mensaje del usuario para
+        trace_component. Usa la frase de la pregunta directamente (trace_component
+        resuelve lenguaje natural via _extract_exported_component)."""
+        return user_msg.strip()[:120]
+
+    def _retry_analyze_anchor(self) -> str:
+        """Ancla para el retry de ANALYZE/PLAN: el contenido que trace_component
+        y read_file cachearon en el PASS1. Sin esto, el 4B no tiene NADA que
+        analizar (los ToolMessages del graph se pierden al cortar por budget)
+        y razona en círculos adivinando paths."""
+        if not self._read_cache:
+            return ""
+        # El 4B se enfoca en lo PRIMERO que ve y se confunde con componentes
+        # duplicados. Si el PASS1 cacheó traces, usar SOLO esos (en orden de
+        # exploración): el primero suele ser la componente central del bug.
+        # El trace del sistema (que puede resolver un hook y duplicar contenido)
+        # se usa SOLO como fallback cuando el PASS1 no cacheó nada.
+        pass1 = [k for k in self._read_cache.keys() if k != "[trace:sistema]"]
+        if not pass1:
+            pass1 = [k for k in self._read_cache.keys() if k == "[trace:sistema]"]
+        blocks = []
+        for key in pass1[:1]:
+            content = self._read_cache[key]
+            if key.startswith("[trace:"):
+                label = f"RESULTADO DE TRACE_COMPONENT ({key})"
+            else:
+                label = f"CONTENIDO REAL DE {key}"
+            blocks.append(f"--- {label} ---\n{content[:5000]}\n--- FIN ---")
+        return (
+            "\n\nCONTENIDO QUE YA LEÍSTE EN EL INTENTO ANTERIOR (es lo ÚNICO que "
+            "tenés; analizá EN BASE A ESTO, NO inventes otros paths).\n"
+            "🔴 LA COMPONENTE SIGUIENTE ES EL CÓDIGO REAL DEL BUG. Analizá su "
+            "código línea por línea y compará la validación del submit con la "
+            "condición del botón Guardar. Respondé el análisis AHORA.\n"
+            + "\n\n".join(blocks)
+        )
+
+    def _retry_analyze_no_explore(self, new_role: Role, reason: str) -> None:
+        """Retry de ANALYZE/PLAN: reconstruye el agente SIN tools (no write-only
+        — estos roles NUNCA escriben en el repo del usuario). El 4B usa cualquier
+        tool como muleta y razona "qué más leer" en vez de responder. El contexto
+        correcto lo arma el SISTEMA (ancla de traces + _system_trace_for); con
+        0 tools el modelo responde el análisis en texto plano (verificado)."""
+        self._no_explore_retry = True
+        user_msg = ""
+        for m in reversed(self._messages):
+            if isinstance(m, HumanMessage):
+                user_msg = str(m.content)
+                break
+        anchor = self._retry_analyze_anchor()
+        # El SISTEMA complementa el ancla SOLO si el PASS1 no cacheó traces
+        # (si exploró mal y el budget se agotó antes de tocar código). Si el
+        # PASS1 cacheó traces, esos van primero y son la pista principal; el
+        # trace del sistema resolvería hooks que DUPLICAN contenido y distraen
+        # al 4B (verificado: con usePacientes duplicado, ignora el modal).
+        if not any(k.startswith("[trace:") for k in self._read_cache):
+            sys_trace = self._system_trace_for(user_msg)
+            if sys_trace:
+                self._read_cache["[trace:sistema]"] = sys_trace
+                anchor = self._retry_analyze_anchor()
+        retry_body = f"Reanalizá la pregunta: \"{user_msg}\""
+        if anchor:
+            retry_body += anchor
+        self._messages = self._messages[-3:] if len(self._messages) > 3 else self._messages
+        self._messages.append(HumanMessage(retry_body))
+        self._rebuild_agent(new_role, no_explore=True)
+        self._analyze_budget.reset()
+        console.print(
+            f"\n[yellow]⚠️  {reason} — Reintentando sin tools de búsqueda "
+            "(responde con lo ya leído)...[/yellow]"
+        )
+
     def _repo_has_recent_commit(self) -> bool:
         """Detecta si el repo tiene un commit en los últimos ~5 minutos
         (el intento anterior pudo haber commiteado antes de ser cortado)."""
@@ -362,6 +538,7 @@ class Session:
 
     def run_turn(self, user_input: str, status: str | None = None) -> None:
         """Clasifica, cambia rol, ejecuta con historial, persiste en SQLite."""
+        self._no_explore_retry = False
         intent = classify_intent(self.llm, user_input)
         new_role = role_for_intent(intent)
 
@@ -377,6 +554,7 @@ class Session:
         # Reset dedupe + explore budget cada turno (siempre restaurar defaults)
         self._dedupe.reset()
         self._explore_budget.reset()
+        self._analyze_budget.reset()
         if new_role == Role.EXECUTE:
             self._explore_budget.max_calls = EXECUTE_EXPLORE_BUDGET
             self._explore_budget.max_reads_after_explore = EXECUTE_MAX_READS_AFTER_EXPLORE
@@ -385,6 +563,12 @@ class Session:
             self._explore_budget.max_calls = REVIEW_EXPLORE_BUDGET
             self._explore_budget.max_reads_after_explore = REVIEW_MAX_READS_AFTER_EXPLORE
             self._explore_budget.max_tools_before_write = REVIEW_MAX_TOOLS_BEFORE_WRITE
+        elif new_role == Role.ANALYZE:
+            self._analyze_budget.max_calls = ANALYZE_EXPLORE_BUDGET
+            self._analyze_budget.max_reads_after_explore = ANALYZE_MAX_READS_AFTER_EXPLORE
+        elif new_role == Role.PLAN:
+            self._analyze_budget.max_calls = PLAN_EXPLORE_BUDGET
+            self._analyze_budget.max_reads_after_explore = PLAN_MAX_READS_AFTER_EXPLORE
 
         # Acumular el mensaje del usuario en el historial
         agent_input = user_input
@@ -460,14 +644,28 @@ class Session:
         while attempt < max_attempts:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            is_write_retry = attempt > 0 and REASONING_RETRY_ENABLED
+            # require_write solo aplica a retries write-only de EXECUTE/REVIEW.
+            # ANALYZE/PLAN NUNCA deben ser forzados a escribir (el usuario los
+            # usa para analizar/planificar, no para tocar el repo).
+            is_write_retry = (
+                attempt > 0
+                and REASONING_RETRY_ENABLED
+                and new_role not in (Role.ANALYZE, Role.PLAN)
+            )
             task = loop.create_task(
                 stream_agent_turn(
                     self.agent,
                     messages_for_agent,
                     config,
                     idle_timeout=TURN_IDLE_TIMEOUT,
-                    max_reasoning_seconds=MAX_REASONING_SECONDS,
+                    # Retry no_explore (ANALYZE/PLAN con 0 tools): el modelo NO
+                    # puede entrar en loop de tools; razona 3-6 min y responde.
+                    # Cortar por MAX_REASONING_SECONDS mata justo antes de la
+                    # respuesta (verificado: responde en ~387s con ancla).
+                    # idle_timeout cubre un modelo realmente colgado.
+                    max_reasoning_seconds=(
+                        None if self._no_explore_retry else MAX_REASONING_SECONDS
+                    ),
                     max_tool_calls=MAX_TOOL_CALLS_PER_TURN,
                     require_write=is_write_retry,
                 )
@@ -505,6 +703,15 @@ class Session:
                     )
                     break
                 attempt += 1
+                if new_role in (Role.ANALYZE, Role.PLAN):
+                    # Retry SIN tools de búsqueda (no write-only): ANALYZE/PLAN
+                    # no escriben; deben responder con lo que ya leyeron.
+                    self._retry_analyze_no_explore(
+                        new_role,
+                        f"Exploración agotada en {role_label}: {e}",
+                    )
+                    messages_for_agent = list(self._messages)
+                    continue
                 self._messages = self._messages[-3:] if len(self._messages) > 3 else self._messages
                 self._messages.append(HumanMessage(self._retry_with_read_anchor()))
                 messages_for_agent = list(self._messages)
@@ -530,6 +737,17 @@ class Session:
                         )
                     break
                 attempt += 1
+                if new_role in (Role.ANALYZE, Role.PLAN):
+                    # ANALYZE/PLAN nunca van write-only: sin tools de búsqueda,
+                    # responde con el contexto que ya tiene.
+                    reason = (
+                        f"El modelo hizo {e.total_calls} tool calls (loop)"
+                        if isinstance(e, ToolCallLimitExceeded)
+                        else f"El modelo gastó {len(e.reasoning_text)} chars razonando sin actuar"
+                    )
+                    self._retry_analyze_no_explore(new_role, reason)
+                    messages_for_agent = list(self._messages)
+                    continue
                 self._messages = self._messages[-3:] if len(self._messages) > 3 else self._messages
                 self._messages.append(HumanMessage(self._retry_with_read_anchor()))
                 messages_for_agent = list(self._messages)

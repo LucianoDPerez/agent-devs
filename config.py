@@ -1,28 +1,46 @@
 from pathlib import Path
 
 LLM_BASE_URL = "http://localhost:8080/v1"
-LLM_MODEL_NAME = "agents-a1-4b"
-LLM_TEMPERATURE = 0.7
-LLM_TIMEOUT = 300
+LLM_MODEL_NAME = "mlx-community/Qwen3.5-4B-MLX-4bit"
+LLM_TEMPERATURE = 0.2
+# 600s: el 4B con razonamiento Qwen3 puede tardar 2-3 min antes de emitir la
+# respuesta final (razona 1500-2500 chars). 300s cortaba respuestas largas.
+LLM_TIMEOUT = 600
 LLM_MAX_TOKENS = 3584
 # EXECUTE: modelo 4B quema tokens en razonamiento; 2560 obliga a actuar rápido
 EXECUTE_MAX_TOKENS = 2560
 # REVIEW: 4096 para leer archivos, correr verify y emitir informe detallado
 REVIEW_MAX_TOKENS = 4096
+# ANALYZE: 4096 para que el razonamiento (~300 tokens) no consuma todo el
+# output budget y quede espacio para el análisis final. Antes 1024: el 4B
+# agotaba el budget en reasoning_content → content vacío (respuesta nula).
+ANALYZE_MAX_TOKENS = 4096
+# PLAN: 4096 para generar documentos y planes
+PLAN_MAX_TOKENS = 4096
 
 # Reasoning budget: el 4B puede gastar TODO su output budget en reasoning_content,
 # produciendo 0 tokens útiles. Se pasa via extra_body a llama-server.
 # Si el server no lo soporta, se ignora silenciosamente.
 EXECUTE_MAX_REASONING_TOKENS = 256
 REVIEW_MAX_REASONING_TOKENS = 512
+# ANALYZE: reasoning muy limitado para mantener brevidad
+ANALYZE_MAX_REASONING_TOKENS = 64
+# PLAN: reasoning moderado para estructurar el plan
+PLAN_MAX_REASONING_TOKENS = 128
 
 # Si el modelo produce SOLO reasoning (sin content/tool_calls), reintentar
 # una vez con instrucción forzada y contexto recortado.
 REASONING_RETRY_ENABLED = True
 # Si el modelo lleva razonando más tiempo que este límite sin producir
 # content/tool_calls, cortar el stream. El 4B puede razonar minutos sin actuar.
-MAX_REASONING_SECONDS = 30
-TURN_IDLE_TIMEOUT = 180  # 3 min — el modelo 4B tarda en razonar reviews complejos
+# El Qwen3.5-4B razona 1500-2500 chars (~2-3 min) ANTES de emitir content en
+# respuestas libres (retry ANALYZE/PLAN sin tools). 90s cortaba justo antes de
+# la respuesta. El server llama.cpp NO respeta reasoning_budget per-request
+# (necesita --reasoning-budget global), así que el único control es este timeout.
+# 300s da margen al razonamiento real; si el modelo se traba de verdad, igual
+# lo corta TURN_IDLE_TIMEOUT.
+MAX_REASONING_SECONDS = 300
+TURN_IDLE_TIMEOUT = 360  # 6 min — el modelo 4B tarda en razonar análisis complejos
 
 # Archivos de PLANIFICACIÓN PROTEGIDOS: el agente NUNCA debe escribir/editar/
 # borrar sobre ellos. El 4B tiende a reescribir tasks.md (precargado en el
@@ -73,6 +91,14 @@ MAX_TOOL_CALLS_PER_TURN = 20
 REVIEW_EXPLORE_BUDGET = 1
 REVIEW_MAX_READS_AFTER_EXPLORE = 15
 REVIEW_MAX_TOOLS_BEFORE_WRITE = 30
+
+# ANALYZE/PLAN budgets: capan la búsqueda en el knowledge graph MCP (cm__*).
+# El 4B se mareaba re-buscando lo mismo con queries distintas. Al agotarse
+# lanza ToolBudgetExceeded → retry SIN tools de búsqueda (nunca write-only).
+ANALYZE_EXPLORE_BUDGET = 4
+ANALYZE_MAX_READS_AFTER_EXPLORE = 8
+PLAN_EXPLORE_BUDGET = 4
+PLAN_MAX_READS_AFTER_EXPLORE = 8
 
 DEFAULT_REPO_PATH = "/Users/luchop/PROYECTOS IA/Medicos"
 

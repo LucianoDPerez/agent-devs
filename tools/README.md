@@ -13,6 +13,7 @@ Pool de tools para los agentes. Cada tool vive en un módulo por **dominio**
 | `verify.py`       | `run_lint`, `run_tests`, `run_build` (auto-detect Node/Python/Go) |
 | `git.py`          | `current_branch`, `changed_files`, `git_status`, `git_log`, `stage_files`, `create_commit`, `push`, `create_pr`, `read_pr`, `list_prs` (vía `git` + `gh`) |
 | `mcp_client.py`   | Proveedor: carga tools de `codebase-memory-mcp` expuestas como `cm__*` (graph on-demand, no en contexto) |
+| `graph_trace.py`  | `trace_component` (compuesta async: resuelve componente en el graph, trae su source y busca sus usos en el repo) |
 | `_helpers.py`     | `_is_excluded`, `_read_text` (internas compartidas)          |
 
 ## Índice (`__init__.py`)
@@ -56,6 +57,17 @@ locales (ej. `cm__search_code` vs `search_code`). Las más útiles para el agent
 El graph persiste en SQLite (`~/.codebase-memory/graph.db.zst`); **NO se
 inyecta como texto al contexto del LLM** — las queries devuelven resultados
 acotados on-demand, por eso no generan bloat de tokens.
+
+## `trace_component` (ANALYZE/PLAN)
+
+Tool compuesta que hace en CÓDIGO la cadena que el 4B no puede orquestar:
+resolver la componente (`cm__search_graph` → `cm__get_code_snippet`) + buscar
+sus usos con grep real del filesystem. Devuelve en UNA llamada el source de la
+componente y el `archivo:línea` de la página que la renderiza. Los edges
+`CALLS` del graph y `cm__search_code` están incompletos en repos React, por eso
+los usos se resuelven por filesystem. Cuenta como tool de exploración (gasta
+budget) y no se inyecta en los retries `no_explore`. Verificado con
+`CreatePacienteModal` → uso en `PacientesPage.tsx`.
 
 ## Contratos
 

@@ -10,7 +10,7 @@ Implementá la tarea del usuario. La descripción de la tarea, el checklist de a
 4. Cuando termines de escribir, respondé `LISTO` con un resumen de 2-3 líneas que liste los archivos tocados y los checkboxes cumplidos.
 
 ## Reglas
-- Usá `Logger` del framework (NestJS: `@nestjs/common`). NUNCA `console.log`.
+- Usá el logging estándar del framework (si existe). NUNCA `console.log`/print sin contexto.
 - Timeout HTTP REAL en el cliente (ej: `timeout: 5000`).
 - Logging estructurado con TODOS los campos que pida el checklist.
 - No toques código fuera de la tarea. No inventes CRUD/endpoints/features extra.

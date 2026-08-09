@@ -26,15 +26,28 @@ class ToolBudgetExceeded(GraphBubbleUp):
     pass
 
 
-# Tools que gastan presupuesto de exploración (solo EXECUTE)
-EXPLORE_TOOL_NAMES = frozenset({"list_files", "search_code", "inspect_routes"})
+# Tools MCP (cm__*) de BÚSQUEDA en el knowledge graph — gastan presupuesto de
+# exploración. El 4B en ANALYZE/PLAN se mareaba re-buscando lo mismo con
+# queries distintas (el dedupe solo frena args idénticos).
+MCP_EXPLORE_TOOL_NAMES = frozenset({
+    "cm__search_graph", "cm__trace_path", "cm__query_graph",
+    "cm__get_architecture", "cm__search_code", "cm__detect_changes",
+})
+# Tools MCP de LECTURA puntual (equivalen a read_file) — se limitan post-explore.
+MCP_READ_TOOL_NAMES = frozenset({"cm__get_code_snippet"})
+
+# Tools que gastan presupuesto de exploración (EXECUTE/REVIEW + ANALYZE/PLAN vía MCP)
+EXPLORE_TOOL_NAMES = (
+    frozenset({"list_files", "search_code", "inspect_routes", "trace_component"})
+    | MCP_EXPLORE_TOOL_NAMES
+)
 WRITE_TOOL_NAMES = frozenset({
     "write_file", "edit_file", "delete_file", "stage_files", "create_commit", "push", "create_pr",
 })
 # Tools de lectura (no son "write" pero son acción productiva)
 READISH_TOOL_NAMES = frozenset(
     {"read_file", "changed_files", "git_status", "git_log", "current_branch", "read_pr", "list_prs"}
-)
+) | MCP_READ_TOOL_NAMES
 
 # Tools de verificación (lint/tests/build) — acción productiva
 VERIFY_TOOL_NAMES = frozenset({"run_lint", "run_tests", "run_build", "run_install"})
@@ -79,10 +92,18 @@ class ExploreBudget:
         max_calls: int = 2,
         max_reads_after_explore: int = 2,
         max_tools_before_write: int = 5,
+        *,
+        write_pressure: bool = True,
     ):
+        """``write_pressure=False`` → modo ANALYZE/PLAN: capa la exploración
+        pero NUNCA presiona a escribir. Al agotar el presupuesto lanza
+        ``ToolBudgetExceeded`` de inmediato (el 4B ignora strings), lo que en
+        session.py dispara un retry SIN tools de búsqueda (no write-only).
+        """
         self.max_calls = max_calls
         self.max_reads_after_explore = max_reads_after_explore
         self.max_tools_before_write = max_tools_before_write
+        self.write_pressure = write_pressure
         self._count = 0
         self._reads_after = 0
         self._total = 0
@@ -104,6 +125,9 @@ class ExploreBudget:
         """Devuelve mensaje STOP si la llamada no debe ejecutarse."""
         kwargs = kwargs or {}
         self._total += 1
+        import sys
+        print(f"[BUDGET] total={self._total} count={self._count} max={self.max_calls} "
+              f"write_pressure={self.write_pressure} name={name}", file=sys.stderr, flush=True)
 
         # max_calls puede cambiar post-reset (hints_on → 0 en session.py)
         if self.max_calls <= 0:
@@ -128,6 +152,14 @@ class ExploreBudget:
             if self._count >= self.max_calls:
                 self._explore_exhausted = True
             if self._count > self.max_calls:
+                # Modo ANALYZE/PLAN: excepción directa (el 4B ignora strings) →
+                # session.py reintenta SIN tools de búsqueda, no write-only.
+                if not self.write_pressure:
+                    raise ToolBudgetExceeded(
+                        "Exploración agotada. NO uses más tools de búsqueda "
+                        "(cm__search_graph/cm__trace_path). "
+                        "Respondé TU ANÁLISIS/PLAN AHORA con lo que ya leíste."
+                    )
                 # Cuando el modelo ignora strings STOP (4B), usar exception
                 if self.max_calls <= 0:
                     raise ToolBudgetExceeded(
@@ -142,9 +174,14 @@ class ExploreBudget:
 
         # Tras agotar explore, limitar read_file / git_status loops
         if self._explore_exhausted:
-            if name in READISH_TOOL_NAMES or name == "read_file":
+            if name in READISH_TOOL_NAMES:
                 self._reads_after += 1
                 if self._reads_after > self.max_reads_after_explore:
+                    if not self.write_pressure:
+                        raise ToolBudgetExceeded(
+                            "Demasiadas lecturas. NO leas más. "
+                            "Respondé TU ANÁLISIS/PLAN AHORA con lo que ya leíste."
+                        )
                     if self.max_calls <= 0:
                         raise ToolBudgetExceeded(
                             "Demasiados read_file. NO leas más. "
@@ -156,8 +193,13 @@ class ExploreBudget:
                     )
 
         # Sin ninguna escritura tras N tools → forzar write (EXCEPTION — halts turn)
-        # Pero PRODUCTIVE tools (read/git/verify) sí cuentan como acción productiva
-        if not self._wrote and self._total > self.max_tools_before_write:
+        # Pero PRODUCTIVE tools (read/git/verify) sí cuentan como acción productiva.
+        # ANALYZE/PLAN (write_pressure=False) nunca se presionan a escribir.
+        if (
+            self.write_pressure
+            and not self._wrote
+            and self._total > self.max_tools_before_write
+        ):
             if name not in WRITE_TOOL_NAMES and name not in PRODUCTIVE_TOOL_NAMES:
                 raise ToolBudgetExceeded(
                     f"{self._total} tool calls sin escribir código. "
@@ -193,24 +235,33 @@ def _wrap_one(
 ) -> BaseTool:
     name = tool.name
 
-    def _invoke(**kwargs):
+    def _policy(kwargs: dict[str, Any]) -> tuple[str, Any]:
+        """Presupuesto de exploración + dedupe.
+
+        Retorna ("return", value) para devolver un string de STOP sin invocar
+        la tool, o ("proceed", None) para ejecutarla. `ToolBudgetExceeded`
+        (GraphBubbleUp) se re-lanza siempre: es la única forma de frenar el 4B.
+        """
         if explore_budget is not None:
             stop = explore_budget.consume(name, kwargs)
             if stop:
-                return stop
+                return ("return", stop)
         n = dedupe.register(name, kwargs)
         # VERIFY tools (lint/tests/build) son idempotentes: re-correrlas tras
         # cada edición es correcto y NO es un loop. Nunca bloquearlas por dedupe.
         if name in VERIFY_TOOL_NAMES:
-            return tool.invoke(kwargs)
+            return ("proceed", None)
         if name == "read_file" and n > dedupe.max_repeats:
             # Releer el MISMO archivo no es un loop crítico como la exploración:
             # devolver STRING (no exception) para no disparar un retry completo.
             # El modelo ignora a veces, pero read_file no quema recursion como explore.
             return (
-                f"⛔ Ya leíste {kwargs.get('path','')} ({n} veces). "
-                "No lo vuelvas a leer con los mismos args. Trabajá con lo que "
-                "ya tenés o escribí/edita el código."
+                "return",
+                (
+                    f"⛔ Ya leíste {kwargs.get('path','')} ({n} veces). "
+                    "No lo vuelvas a leer con los mismos args. Trabajá con lo que "
+                    "ya tenés o escribí/edita el código."
+                ),
             )
         if n > dedupe.max_repeats:
             # Para write tools: devolver STRING (no exception) — el archivo ya
@@ -218,9 +269,12 @@ def _wrap_one(
             # Solo RAISE si repite demasiado (evita loop infinito).
             if name in WRITE_TOOL_NAMES and n <= dedupe.max_repeats + 2:
                 return (
-                    f"✅ {name} ya se ejecutó con estos args ({n} veces). "
-                    "El código ya está escrito. NO lo escribas de nuevo. "
-                    "Continuá con stage_files + create_commit, o con run_lint/run_tests."
+                    "return",
+                    (
+                        f"✅ {name} ya se ejecutó con estos args ({n} veces). "
+                        "El código ya está escrito. NO lo escribas de nuevo. "
+                        "Continuá con stage_files + create_commit, o con run_lint/run_tests."
+                    ),
                 )
             # RAISE instead of return string — the 4B model ignores text responses
             # and keeps calling the same tool, burning recursion limit.
@@ -230,16 +284,47 @@ def _wrap_one(
                 "the path may be wrong or a directory exists at that path. "
                 "Choose a different file path."
             )
-        result = tool.invoke(kwargs)
+        return ("proceed", None)
+
+    def _cache_read(kwargs: dict[str, Any], result: Any) -> None:
         # Cache contenido leído: el retry write-only lo inyecta como anclaje
-        if read_cache is not None and name == "read_file":
+        if read_cache is None:
+            return
+        if name == "read_file":
             path = kwargs.get("path")
             if isinstance(result, str) and path:
                 read_cache[path] = result
+        elif name == "trace_component":
+            # El resultado de trace_component (source + página + usos) vive en el
+            # state del graph y se PIERDE al cortar por budget. Cachearlo permite
+            # que el retry no_explore de ANALYZE/PLAN lo inyecte como anclaje.
+            comp = kwargs.get("component")
+            if isinstance(result, str) and comp:
+                read_cache[f"[trace:{comp}]"] = result
+
+    def _invoke(**kwargs):
+        action, value = _policy(kwargs)
+        if action == "return":
+            return value
+        result = tool.invoke(kwargs)
+        _cache_read(kwargs, result)
         return result
 
+    async def _ainvoke(**kwargs):
+        action, value = _policy(kwargs)
+        if action == "return":
+            return value
+        result = await tool.ainvoke(kwargs)
+        _cache_read(kwargs, result)
+        return result
+
+    # MCP tools (langchain-mcp-adapters) son StructuredTool ASYNC-ONLY
+    # (solo `coroutine`, sin `func`): llamarlas con tool.invoke() lanza
+    # "StructuredTool does not support sync invocation." Por eso el wrapper
+    # expone AMBOS paths — ToolNode elige ainvoke() cuando hay coroutine.
     return StructuredTool.from_function(
         func=_invoke,
+        coroutine=_ainvoke,
         name=name,
         description=tool.description,
         args_schema=getattr(tool, "args_schema", None),

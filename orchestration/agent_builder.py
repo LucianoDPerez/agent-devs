@@ -7,15 +7,24 @@ from config import (
     EXECUTE_MAX_REASONING_TOKENS,
     REVIEW_MAX_TOKENS,
     REVIEW_MAX_REASONING_TOKENS,
+    ANALYZE_MAX_TOKENS,
+    ANALYZE_MAX_REASONING_TOKENS,
+    PLAN_MAX_TOKENS,
+    PLAN_MAX_REASONING_TOKENS,
 )
 from core.roles import Role, load_prompt, tools_for_role
 from orchestration.framework_rules import inject_framework_rules
-from orchestration.tool_dedupe import ExploreBudget, ToolCallDedupe, wrap_tools_with_dedupe
+from orchestration.tool_dedupe import (
+    ExploreBudget,
+    ToolCallDedupe,
+    wrap_tools_with_dedupe,
+)
 from tools.mcp_client import load_mcp_tools, mcp_tool_count
+from tools.graph_trace import build_trace_component
 from tools import WRITE_ONLY_TOOLS
 
 # Solo ANALYZE/PLAN usan MCP. EXECUTE y REVIEW van locales-only:
-# el 4B con 27+ schemas entra en loops y tool calls basura.
+# (el 4B con 27+ schemas entra en loops y tool calls basura)
 _ROLES_WITH_MCP = {Role.ANALYZE, Role.PLAN}
 
 _ROLE_TEMPERATURE = {
@@ -47,8 +56,10 @@ async def build_agent(
     mcp_tools: list | None = None,
     dedupe: ToolCallDedupe | None = None,
     explore_budget: ExploreBudget | None = None,
+    analyze_budget: ExploreBudget | None = None,
     force_write: bool = False,
     read_cache: dict | None = None,
+    no_explore: bool = False,
 ) -> tuple:
     """Construye un agente LangChain con tools y prompt del rol indicado.
 
@@ -60,16 +71,42 @@ async def build_agent(
     disponibles, en vez de escribir. El contexto de tareas YA está en el
     prompt, así que no necesita leer más.
 
+    ``analyze_budget``: presupuesto de exploración para ANALYZE/PLAN
+    (write_pressure=False): capa las búsquedas MCP sin presionar a escribir.
+
+    ``no_explore=True`` (retry ANALYZE/PLAN tras budget agotado): quita las
+    tools de búsqueda (locales y MCP) para que el modelo NO siga explorando
+    y responda con el contexto/código que ya leyó. Mantiene read_file y
+    cm__get_code_snippet para lecturas puntuales.
+
     ``read_cache`` (dict path→content): si se provee, read_file guarda su
     contenido ahí. El retry write-only lo inyecta como anclaje para que el
     modelo reescriba archivos sin leer.
     """
     local_tools = WRITE_ONLY_TOOLS if force_write else tools_for_role(role)
     role_mcp = _mcp_for_role(role, mcp_tools)
+    if no_explore:
+        # Retry ANALYZE/PLAN: CERO tools. El 4B usa read_file/cm__get_code_snippet/
+        # trace_component como muleta y razona "qué más leer" en vez de responder.
+        # El contexto correcto lo inyecta el SISTEMA (session._system_trace_for)
+        # en el ancla; con 0 tools el modelo responde el análisis en texto plano
+        # (verificado: responde el diagnóstico correcto en ~4 min).
+        local_tools = []
+        role_mcp = []
     all_tools = role_mcp + local_tools
+    # Tool compuesta para ANALYZE/PLAN: traza una componente en UNA llamada
+    # (resolver + source + usos). El 4B no puede orquestar esa cadena solo.
+    # En el retry no_explore NO se agrega: el sistema la usa para el ancla.
+    if role in _ROLES_WITH_MCP and mcp_tools and not no_explore:
+        all_tools = [build_trace_component(mcp_tools, repo_path)] + all_tools
     if dedupe is not None:
         # EXECUTE y REVIEW reciben explore_budget (evita loops infinitos del 4B)
-        budget = explore_budget if role in (Role.EXECUTE, Role.REVIEW) else None
+        if role in (Role.EXECUTE, Role.REVIEW):
+            budget = explore_budget
+        elif role in (Role.ANALYZE, Role.PLAN):
+            budget = analyze_budget
+        else:
+            budget = None
         all_tools = wrap_tools_with_dedupe(all_tools, dedupe, budget, read_cache)
 
     prompt_template = load_prompt(role)
@@ -88,6 +125,13 @@ async def build_agent(
             "si un archivo existe, REEISCRIBILO completo con write_file "
             "(no uses edit_file, no conocés el texto exacto). No intentes leer.\n"
         )
+    if no_explore:
+        extra_context += (
+            "\n⛔ RETRY TRAS PRESUPUESTO AGOTADO: NO tenés tools de ningún tipo. "
+            "Respondé TU ANÁLISIS/PLAN AHORA en texto plano usando el contexto "
+            "y el código que ya leíste (inyectado abajo). No intentes explorar "
+            "ni leer más.\n"
+        )
     system_prompt = prompt_template.format(
         repo_path=repo_path,
         framework_rules=fw_rules,
@@ -105,6 +149,12 @@ async def build_agent(
     elif role == Role.REVIEW:
         update_kwargs["max_tokens"] = REVIEW_MAX_TOKENS
         update_kwargs["max_reasoning_tokens"] = REVIEW_MAX_REASONING_TOKENS
+    elif role == Role.ANALYZE:
+        update_kwargs["max_tokens"] = ANALYZE_MAX_TOKENS
+        update_kwargs["max_reasoning_tokens"] = ANALYZE_MAX_REASONING_TOKENS
+    elif role == Role.PLAN:
+        update_kwargs["max_tokens"] = PLAN_MAX_TOKENS
+        update_kwargs["max_reasoning_tokens"] = PLAN_MAX_REASONING_TOKENS
     if update_kwargs:
         role_llm = llm.model_copy(update=update_kwargs, deep=False)
     if force_write:

@@ -124,6 +124,15 @@ def test_explore_budget_covers_search_code(tmp_path):
     assert "search_code" in EXPLORE_TOOL_NAMES
 
 
+def test_mcp_tool_names_classification():
+    from orchestration.tool_dedupe import MCP_READ_TOOL_NAMES, READISH_TOOL_NAMES
+
+    for name in ("cm__search_graph", "cm__trace_path", "cm__query_graph", "cm__get_architecture"):
+        assert name in EXPLORE_TOOL_NAMES, f"{name} debería gastar exploración"
+    assert "cm__get_code_snippet" in READISH_TOOL_NAMES
+    assert "cm__get_code_snippet" in MCP_READ_TOOL_NAMES
+
+
 def test_explore_budget_reset():
     budget = ExploreBudget(max_calls=1, max_tools_before_write=50)
     assert budget.consume("list_files") is None

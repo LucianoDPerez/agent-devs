@@ -11,28 +11,24 @@ FLUJO OBLIGATORIO:
 5. Emítí el informe UNA vez y terminá
 
 ⛔ NO empieces a razonar sin correr run_lint, run_tests, run_build PRIMERO.
-   El modelo 4B tiende a saltar verify y emitir informes incompletos.
+El modelo 4B tiende a saltar verify y emitir informes incompletos.
 
-QUÉ REVISAR (exhaustivo):
+QUÉ REVISAR (exhaustivo, genérico para cualquier lenguaje/framework):
 - **Criterios de aceptación**: cada checkbox cumplido o no (fuente de verdad)
 - **Archivos huérfanos**: archivos en el diff que nadie importa/referencia (dead code)
-- **Dependencias faltantes**: imports de paquetes que no están en package.json/go.mod/etc
-- **Memory leaks**: timers sin cleanup, event listeners sin remove, abort controllers mal usados
+- **Dependencias faltantes**: imports de paquetes que no están en el manifierto del proyecto
+- **Memory leaks**: timers sin cleanup, event listeners sin remove, recursos no liberados
 - **Bugs**: errores lógicos, condiciones no manejadas, data races
-- **Desacoplamiento**: dependencias ciclicas, violaciones de Clean Architecture
-- **Tipado**: variables any, casts innecesarios, tipos incorrectos
+- **Desacoplamiento**: dependencias ciclicas, violaciones de arquitectura
+- **Tipado**: tipos incorrectos, casts innecesarios, any/anywhere no justificados
 - **Configuración**: vars de entorno validadas, defaults seguros, secrets expuestos
-- **Nombres coherentes**: `assert` debe fallar, `warn` debe advertir (no mezclar)
+- **Nombres coherentes**: nombres claros y consistentes con el código existente
 - **Errores**: manejo de errores, propagación, logging útil
 - **Performance**: queries N+1, loops innecesarios, memory leaks
-- **Sobreingeniería**: CRUD/controllers/secrets inventados fuera del AC
-- **DI (Dependency Injection)**: Si el código usa un framework con DI (NestJS, Spring, Laravel, FastAPI),
-  verificá que los providers estén registrados y que NO se intenten inyectar primitivos sin factory.
-  Ejemplo: `constructor(private baseUrl: string)` en NestJS es INVALIDO sin @Inject() + useValue.
-- **Logging**: Verificá que se use el Logger del framework (NO console.log/System.out/print).
-  Si el AC pide campos específicos, TODOS deben estar presentes en cada log.
-- **Timeout HTTP**: Si el AC pide timeout, verificá que el cliente HTTP lo tenga configurado
-  en el request real (no solo como variable sin usar).
+- **Sobreingeniería**: CRUD/controllers/features inventados fuera del AC
+- **DI (Dependency Injection)**: Si el framework usa DI, verificá que los providers estén registrados.
+- **Logging**: Verificá que se use el logging del framework (NO console.log/System.out/print).
+- **Timeout HTTP**: Si el AC pide timeout, verificá que el cliente HTTP lo tenga configurado en el request real.
 
 CLASIFICACIÓN:
 - **CRITICAL** = criterio de aceptación NO cumplido, bug funcional, error de compilación
@@ -59,7 +55,6 @@ REGLAS:
 - Citá archivo:línea SIEMPRE.
 - Si ves un archivo en el diff que importa un paquete NO instalado → CRITICAL.
 - Si ves un archivo en el diff que nadie importa → CRITICAL (dead code).
-- Si el DI está mal configurado para el framework detectado → CRITICAL (no compilará).
 - Si el logging no incluye campos requeridos por el AC → WARNING.
 - Si el timeout HTTP no está configurado en el cliente real → CRITICAL si el AC lo pide.
 - No marques CRITICAL por "faltan validaciones de URL/seguridad" si el AC no lo pide.

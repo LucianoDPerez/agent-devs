@@ -9,10 +9,11 @@ El agente **clasifica automáticamente la intención del usuario** y delega al r
 ```
 agent-lucho/
 ├── main.py                       # 🎯 Entry point delgado (~90 líneas)
-├── config.py                     # Configuración centralizada (recursion, tokens, judge)
+├── config.py                     # Configuración centralizada (recursion, tokens, judge, budgets)
 ├── cache.py                      # Persistencia SQLite (análisis + historial de sesión)
 ├── llm_wrapper.py                # Wrapper de BaseChatModel (reasoning_content)
 ├── analyzer.py                   # Generación del análisis cacheado
+├── business_logic.py             # 📋 Reglas de negocio deterministas (campos requeridos, validaciones)
 │
 ├── core/                         # 🧠 Capa de dominio
 │   ├── intents.py                #   Enum Intent (analyze/plan/execute/review/chat)
@@ -46,9 +47,10 @@ agent-lucho/
 │   ├── search.py                 #   Búsqueda regex en código
 │   ├── verify.py                 #   run_install / run_lint / run_tests / run_build
 │   ├── mcp_client.py             #   Cliente MCP (codebase-memory-mcp)
+│   ├── graph_trace.py            #   Tool compuesta: traza un componente en UNA llamada
 │   └── _helpers.py               #   Helpers compartidos
 │
-├── tests/                        # 🧪 Pruebas (96 unit + 43 e2e)
+├── tests/                        # 🧪 Pruebas (147 unit + 43 e2e)
 │   ├── test_cache_snapshot.py    #   snapshot cache invalidation
 │   ├── test_execute_bootstrap.py #   task preload, hints, review correction, minimal plan
 │   ├── test_filesystem.py        #   filesystem tools
@@ -57,8 +59,12 @@ agent-lucho/
 │   ├── test_router_dedupe.py     #   intent classifier, dedupe, explore budget, exceptions
 │   ├── test_routes.py            #   endpoint detection (13 frameworks)
 │   ├── test_verify.py            #   stack detection, lint/test/build resolution
+│   ├── test_budget.py            #   explore budget EXECUTE/REVIEW + ANALYZE/PLAN (write_pressure)
+│   ├── test_business_logic.py    #   descubrimiento determinista de reglas de negocio (11)
+│   ├── harness_multi_role.py     #   18 casos (5 roles) con persistencia incremental JSON
+│   ├── harness_full_cycle.py     #   ciclo completo en un solo repo
 │   ├── test_e2e_orchestrator.py  #   43 tests end-to-end del orquestador
-│   └── TEST_REPORT.md            #   Informe de pruebas
+│   └── TEST_REPORT_2026.md       #   Informe de pruebas multi-rol (comparación de LLMs)
 │
 ├── pyproject.toml                # ruff + pytest config
 ├── requirements.txt              # Dependencias Python
@@ -240,21 +246,29 @@ Levantá el servidor con el **presupuesto de razonamiento limitado** (⚠️ **r
 
 ```bash
 llama-server \
-  -m /path/to/Agents-A1-4B-Q4_K_M.gguf \
-  -c 32000 -ngl 99 --flash-attn on --kv-unified \
+  -hf cahlen/qwen3.5-35b-a3b-compacted-GGUF:IQ3_XXS \
+  -c 35536 -ngl 99 --flash-attn on --kv-unified \
   --cache-type-k q5_0 --cache-type-v q5_0 \
   --threads 4 --threads-batch 4 \
   --batch-size 2048 --ubatch-size 1024 \
   --port 8080 --host 127.0.0.1 \
-  --alias agents-a1-4b --temp 0.85 \
+  --alias agents-a1-4b --temp 0.2 \
   --top-p 0.95 --top-k 20 --min-p 0.0 \
-  --presence-penalty 1.1 --repeat-penalty 1.0 \
-  --parallel 1 --jinja --cont-batching \
-  --reasoning-budget 256 \
-  --reasoning-budget-message "Ya razonaste lo suficiente. Ahora produce tu respuesta y tool calls YA."
+  --presence-penalty 1.1 --repeat-penalty 1.05 \
+  --parallel 1 --jinja --cont-batching
 ```
 
-> **¿Por qué `--reasoning-budget 256`?** El modelo Agents-A1-4B usa un template `--jinja` con bloque de reasoning. Sin límite (`--reasoning-budget` no especificado, default `-1` = unlimited), el modelo puede gastar **todos** sus tokens de salida en `reasoning_content` y nunca producir `content` ni `tool_calls`, especialmente con prompts complejos. `--reasoning-budget 256` corta el pensamiento a 256 tokens; el `--reasoning-budget-message` fuerza el modelo a emitir `content`/`tool_calls` inmediatamente después.
+> **Modelo recomendado:** `cahlen/qwen3.5-35b-a3b-compacted-GGUF` (35B A3B activo). En las
+> pruebas comparativas resuelve los 18 casos multi-rol (0 fallos) mientras que el 4B dejó
+> 8/18 vacíos — ver `tests/TEST_REPORT_2026.md`.
+>
+> **¿Por qué `--reasoning-budget 256` (solo 4B)?** El modelo Agents-A1-4B usa un template
+> `--jinja` con bloque de reasoning. Sin límite (`--reasoning-budget` no especificado,
+> default `-1` = unlimited), el modelo puede gastar **todos** sus tokens de salida en
+> `reasoning_content` y nunca producir `content` ni `tool_calls`, especialmente con prompts
+> complejos. `--reasoning-budget 256` corta el pensamiento a 256 tokens; el
+> `--reasoning-budget-message` fuerza el modelo a emitir `content`/`tool_calls` inmediatamente
+> después. Con el 35B no hace falta (razona y responde sin quemar el budget).
 >
 > **Verificá que el flag esté activo:** `ps aux | grep llama-server | grep reasoning-budget`
 
@@ -414,15 +428,53 @@ El orquestador **detecta automáticamente** la intención y carga el rol adecuad
 | `cm__query_graph` | Queries Cypher avanzadas |
 | ... | (6 más) |
 
+## Lógica de negocio (inyección de reglas concretas)
+
+`business_logic.py` extrae reglas de negocio **sin usar el LLM** (determinista) y las inyecta
+en el system prompt de **todos** los roles via `cached_analysis`:
+
+1. **Descubrimiento determinista:** escanea carpetas de dominio (`domain/entities/models/dto/...`)
+   y extrae interfaces/types con campos **REQUERIDOS vs opcionales** + mensajes de validación
+   ("X es requerido", "formato inválido"). Deduplica eligiendo la versión **más restrictiva**
+   (ej: el frontend exige `documento`, el backend lo permite null → gana el requerido).
+2. **Graph MCP (enriquecimiento):** entidades y endpoints HTTP desde el knowledge graph.
+3. **Persistencia:** tabla `business_rules` en `~/.agent-cache/repo_lens.db`, invalidada por
+   `snapshot_hash`.
+
+**Motivación:** el LLM ignora reglas concretas (campos requeridos, validaciones) cuando solo
+ve la estructura general del repo. Con la regla inyectada (ej: "`CreatePacienteInput` exige
+`nombre` y `documento` requeridos"), el agente detecta el bug del botón habilitado sin
+`documento`. Tests: `tests/test_business_logic.py` (11).
+
+## Retry ANALYZE/PLAN sin tools de búsqueda
+
+Los roles ANALYZE y PLAN usan un **budget de exploración propio** (`write_pressure=False` en
+`tool_dedupe.py`): capa la búsqueda MCP (`cm__search_graph`, `cm__trace_path`, etc.) y la
+lectura repetida, pero **NUNCA presiona a escribir** (el usuario los usa para analizar/
+planificar, no para tocar el repo).
+
+Cuando el presupuesto se agota, `session.py` dispara `_retry_analyze_no_explore`:
+
+1. **`_system_trace_for(user_msg)`** — el SISTEMA (no el LLM) resuelve el término del usuario
+   con la tool compuesta `trace_component` (resolve + source + usos en UNA llamada),
+   garantizando un ancla con la cadena correcta.
+2. **`build_agent(no_explore=True)`** — reconstruye el agente con **CERO tools**. El modelo
+   responde su análisis/plan en texto plano usando el contexto que ya leyó (verificado:
+   responde el diagnóstico correcto en ~4-8 min, sin loops).
+3. **`max_reasoning_seconds=None`** en el retry — el modelo razona 3-6 min y responde; cortar
+   por timeout lo mataba justo antes de la respuesta final.
+
 ## Tests
 
-### Unit tests (96 tests)
+### Unit tests (147 tests)
 
 ```bash
 python -m pytest tests/ -v --ignore=tests/test_e2e_orchestrator.py
 ```
 
-Cubren: filesystem (11), git (7), route detection (13), dedupe + explore budget (13), cache snapshot (3), execute bootstrap (28), llm recovery (4), routes (13), verify (10) — frameworks: Next.js/Express/FastAPI/Go/Rust/Spring/Laravel/ASP.NET.
+Cubren: filesystem (11), git (7), route detection (13), dedupe + explore budget (13),
+cache snapshot (3), execute bootstrap (28), llm recovery (4), routes (13), verify (10),
+business logic (11), budget ANALYZE/PLAN (6) — frameworks: Next.js/Express/FastAPI/Go/Rust/Spring/Laravel/ASP.NET.
 
 ### E2E tests (43 tests)
 
@@ -452,15 +504,16 @@ Cubren: core domain (15), classifier (15), session flow con LLM real (13):
 
 ## Notas de rendimiento
 
-- El modelo local (Agents-A1-4B) **piensa en voz alta** antes de cada acción — esa salida se muestra en vivo (streaming) como `💭 Razonando…`
-- **Con `--reasoning-budget 256` en el server**: el thinking se corta a 256 tokens, el resto va a content/tool_calls
-- **Sin `--reasoning-budget`**: el modelo puede gastar todos los tokens en reasoning → el agente detecta esto, corta a los 30s y reintenta con contexto recortado
+- El modelo local **piensa en voz alta** antes de cada acción — esa salida se muestra en vivo (streaming) como `💭 Razonando…`
+- **Con `--reasoning-budget` en el server (4B)**: el thinking se corta, el resto va a content/tool_calls
+- **Sin `--reasoning-budget`**: el modelo puede gastar todos los tokens en reasoning → el agente detecta esto, corta a los `MAX_REASONING_SECONDS` (300s) y reintenta con contexto recortado
 - El análisis inicial puede tardar **1-2 minutos** (el modelo razona mucho)
 - El clasificador keyword-based es **instantáneo** (no gasta tokens del LLM)
 - La memoria entre turnos **acumula tokens** — el contexto crece con cada mensaje
 - Al 90% de contexto, el agente **genera un summary automáticamente** (~2-3s extra)
 - `/new` resetea el historial instantáneamente sin perder el análisis cacheado del repo
-- `max_tokens=2048` (chat) / `1024` (análisis) son los límites estables; EXECUTE usa `2560` (con reasoning budget server-side limitando el thinking)
+- `max_tokens` por rol: 4096 (ANALYZE/REVIEW/PLAN) / 2560 (EXECUTE) / 3584 (default). El
+  4B quemaba el budget en razonamiento; 4096 garantiza espacio para la respuesta final
 - Cada turno muestra tiempo y tokens (in/out/cacheados) y el acumulado de sesión
 
 ## Protección anti-loop
@@ -483,8 +536,16 @@ Tres capas de defensa progresiva:
 | EXECUTE (hints) | 0 | 2 | 4 | No explora, directo a escribir |
 | REVIEW | 1 | 5 | 10 | Explora mínimo, lee diffs |
 | REVIEW (hints) | 0 | 2 | 5 | No explora, lee diffs del git context |
+| ANALYZE | 4 | 8 | 0 (`write_pressure=False`) | Capa búsquedas MCP, NUNCA fuerza a escribir |
+| PLAN | 4 | 8 | 0 (`write_pressure=False`) | Ídem |
 
-`max_calls=0` activa `_explore_exhausted=True` inmediatamente y usa exceptions (no strings) para detener loops del modelo 4B.
+`max_calls=0` activa `_explore_exhausted=True` inmediatamente y usa exceptions (no strings)
+para detener loops del modelo 4B.
+
+**`write_pressure=False` (ANALYZE/PLAN):** las búsquedas MCP (`cm__search_graph`,
+`cm__trace_path`, `cm__query_graph`, etc.) gastan presupuesto de exploración. Al agotarse
+lanza `ToolBudgetExceeded` → `session.py` dispara el retry **sin tools de búsqueda**
+(`_retry_analyze_no_explore`), no el retry write-only. Ver "Retry ANALYZE/PLAN" arriba.
 
 ### Dedupe (`ToolCallDedupe`)
 
@@ -550,7 +611,10 @@ El 4B modelo tiende a leer el mismo archivo 7+ veces porque **ignora los strings
 | `EXECUTE_RECURSION_LIMIT` | 30 | Límite LangGraph de agent steps (EXECUTE) |
 | `EXECUTE_MAX_REASONING_TOKENS` | 256 | EXECUTE (via extra_body, best-effort) |
 | `REVIEW_MAX_REASONING_TOKENS` | 512 | REVIEW (via extra_body, best-effort) |
-| `MAX_REASONING_SECONDS` | 30 | Time budget para cortar stream si solo razoné |
+| `ANALYZE_MAX_REASONING_TOKENS` | 64 | ANALYZE (via extra_body, best-effort) |
+| `PLAN_MAX_REASONING_TOKENS` | 128 | PLAN (via extra_body, best-effort) |
+| `MAX_REASONING_SECONDS` | 300 | Time budget para cortar stream si solo razoné (None en retry no_explore) |
+| `TURN_IDLE_TIMEOUT` | 360 | Idle máximo por turno (6 min) |
 | `REASONING_RETRY_ENABLED` | True | Activa/desactiva retry automático |
 
 ### Protección de archivos de planificación
