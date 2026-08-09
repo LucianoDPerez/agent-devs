@@ -139,7 +139,7 @@ def build_context(repo_path: str) -> str:
             sections.append(f"📄 {f.relative_to(root).as_posix()} ({f.stat().st_size//1024}kb)")
     
     context = "\n\n".join(sections)
-    return context[:MAX_CONTEXT_CHARS * 0.7]  # usar solo 70% del límite para dejar margen
+    return context[: int(MAX_CONTEXT_CHARS * 0.7)]  # usar solo 70% del límite para dejar margen
 
 
 def detect_language(repo_path: str) -> str:

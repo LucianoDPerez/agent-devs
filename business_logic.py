@@ -33,6 +33,11 @@ _DOMAIN_DIR_HINTS = (
     "use-cases", "usecases", "application",
 )
 
+# Versión del extractor: SIEMPRE que cambie la lógica de extracción/dedupe,
+# incrementarla para invalidar caches previos (el snapshot_hash del repo NO
+# captura cambios en business_logic.py mismo).
+EXTRACTOR_VERSION = 2
+
 _DOMAIN_FILE_HINTS = (
     "dto", "entity", "model", "schema", "validator",
     "validation", "input", "types", "domain", "rules",
@@ -244,6 +249,7 @@ def build_business_report(repo_path: str, mcp_tools: list = None) -> dict:
     graph = enrich_from_graph(mcp_tools or [], repo_path)
     report = {
         "snapshot": snapshot_hash(repo_path),
+        "extractor_version": EXTRACTOR_VERSION,
         "entities": det["entities"],
         "validations": det["validations"],
         "graph_entities": graph.get("graph_entities", []),
@@ -361,7 +367,12 @@ def get_business_context(repo_path: str, mcp_tools: list = None, force: bool = F
     """
     repo_path = normalize_path(repo_path)
     cached = load_business_rules(repo_path) if not force else None
-    if cached and cached.get("snapshot_hash") == snapshot_hash(repo_path):
+    cache_fresh = (
+        cached
+        and cached.get("snapshot_hash") == snapshot_hash(repo_path)
+        and cached.get("rules_json", {}).get("extractor_version") == EXTRACTOR_VERSION
+    )
+    if cache_fresh:
         report = cached.get("rules_json") or {}
     else:
         report = build_business_report(repo_path, mcp_tools)

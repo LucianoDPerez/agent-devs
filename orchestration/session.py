@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import subprocess
 import time
 import uuid
@@ -38,6 +39,7 @@ from display.esc_watcher import EscWatcher
 from llm_wrapper import LocalLLM, get_usage, reset_turn_usage
 from orchestration.agent_builder import build_agent, init_mcp
 from orchestration.execute_bootstrap import (
+    _collect_cited_paths,
     build_paste_correction_suffix,
     extract_requested_task_numbers,
     preload_cited_files,
@@ -91,7 +93,7 @@ def _is_review_correction(user_input: str) -> bool:
     Usa el comando del usuario (primeras 120 chars) para no matchear keywords
     en contenido pegado (checklists con 'Implementación', etc.)."""
     prefix = _extract_command_prefix(user_input).lower()
-    has_action = any(k in prefix for k in ("implement", "correg", "aplicar", "fix", "resolver", "arregl"))
+    has_action = any(k in prefix for k in ("implement", "correg", "aplic", "fix", "resolver", "arregl"))
     has_review = any(k in prefix for k in (
         "review", "hallazgo", "hallazgos", "reporte", "cambios propuesto",
         "sugerencias", "sugerencia", "observaciones", "correcciones",
@@ -111,6 +113,152 @@ def _build_review_correction_suffix() -> str:
         "NO razones en voz alta: aplicá las correcciones YA con una tool call directa. "
         "Máximo 2 archivos a leer. Después: stage, commit, install, lint, tests, build."
     )
+
+
+# Comandos EXECUTE vagos: sin paths citados ni tarea explícita. El usuario dice
+# "implementa" o "arreglá el bug" esperando que el agente retome lo analizado.
+_AMBIGUOUS_EXECUTE_RE = re.compile(
+    r"^\s*(implementa?r?|implementa?|hacelo|hace el fix|hacé el fix|arregl[aá]|"
+    r"aplic[aá]|correg[ií]|resolv[eé]|fix(a|ea)?|pong[áa]|code[aá]|escrib[ií])\b",
+    re.IGNORECASE,
+)
+
+# Extensions considered when extracting concrete file targets from a prior
+# analysis so the chained EXECUTE read them directly.
+_TARGET_FILE_RE = re.compile(r"([\w.\-/]+\.(?:tsx?|jsx?|go|py|ts|js))\b")
+
+
+def _extract_target_files(analysis: str) -> list[str]:
+    """Extrae paths de archivos mencionados en el análisis previo."""
+    if not analysis:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _TARGET_FILE_RE.finditer(analysis):
+        p = m.group(1)
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+        if len(out) >= 5:
+            break
+    return out
+
+
+def _is_ambiguous_execute(user_input: str, repo_path: str | None = None) -> bool:
+    """True si el mensaje es un comando EXECUTE vago (sin archivos, sin tarea
+    concreta). Caso típico del día a día: "analizá X" → "implementa".
+    Si hay paths/archivos citados explícitamente en el comando, NO es ambiguo
+    (el preload ya resuelve la tarea)."""
+    text = user_input.strip()
+    if not _AMBIGUOUS_EXECUTE_RE.search(text):
+        return False
+    if _is_review_correction(text):
+        return False  # lo captura el flujo de corrección post-review
+    if len(text.split()) > 8:
+        return False  # hay descripción, no es solo un verbo
+    if re.search(r"(?:\w[\w.\-/]*\.\w{1,5}\b|/[\w./-]+/|/[\w./-]+\.\w{1,5})", text):
+        return False  # menciona un path/archivo directamente
+    return not _collect_cited_paths(text, repo_path)
+
+
+def _derive_task_from_history(messages: list) -> str | None:
+    """Devuelve el contenido del ÚLTIMO mensaje del asistente (análisis/plan/
+    review) como tarea derivada. Retorna None si no hay historial útil."""
+    for m in reversed(messages):
+        if isinstance(m, AIMessage):
+            content = str(m.content or "").strip()
+            if len(content) >= 60:
+                return content
+            return None
+        if isinstance(m, HumanMessage):
+            # llegamos al turno previo del usuario sin respuesta asistente útil
+            return None
+    return None
+
+
+_DISABLED_RE = re.compile(r"disabled\s*=\s*\{([^}]*)\}")
+
+
+def _extract_edit_instruction(analysis: str, target_files: list[str]) -> str | None:
+    """Si el análisis contiene una string concreta a reemplazar (ej: un
+    `disabled={...}` viejo vs nuevo), devuelve una instrucción edit_file
+    operativa para inyectar en el agent_input. Esto fuerza al modelo a ESCRIBIR
+    en lugar de responder con texto descriptivo.
+
+    Devuelve None si no se puede derivar con confianza."""
+    matches = _DISABLED_RE.findall(analysis)
+    if not matches:
+        return None
+    old = f"disabled={{{matches[0]}}}"
+    # ¿el análisis menciona el nuevo disabled explícitamente?
+    if len(matches) >= 2:
+        new = f"disabled={{{matches[1]}}}"
+    else:
+        # Heurística: si el análisis menciona 'documento' como campo faltante,
+        # agrego || !documento.trim() al disabled viejo.
+        if "documento" in analysis.lower() and "!documento" not in matches[0]:
+            new = old.rstrip("}") + " || !documento.trim()}"
+        else:
+            new = None
+    if new is None:
+        return None
+    path = target_files[0] if target_files else ""
+    return (
+        "\n\n⛔ ACCIÓN OPERATIVA OBLIGATORIA — ejecutá EXACTAMENTE este edit_file "
+        "(NO respondas con texto, ejecutá la tool):\n"
+        f"edit_file(path=\"{path}\", old_str=\"{old}\", new_str=\"{new}\")\n"
+        "Si la string old_str no existe exacta, leé el archivo y buscá la variante "
+        "exacta (con mismos espacios), pero el new_str es el objetivo.\n"
+    )
+
+
+def _build_chained_execute_suffix(task: str, target_files: list[str] | None = None) -> str:
+    """Construye el mensaje EXECUTE cuando el usuario retoma un análisis previo
+    con un comando vago ("implementa"). Incluye el path correcto al archivo
+    real (frontend/ monorepo) si aparece en el análisis."""
+    snippet = task if len(task) <= 2000 else task[:2000] + "\n...(truncado)"
+    files_line = ""
+    if target_files:
+        files_line = (
+            "\nArchivo(s) objetivo (LEÉ ESTOS, NO explores, NO hagas list_files ni "
+            "search_code en directorios):\n"
+            + "\n".join(f"- {p}" for p in target_files[:5])
+            + "\n"
+        )
+    edit_op = _extract_edit_instruction(task, target_files or [])
+    return (
+        "\n\n⛔ INSTRUCCIÓN (RETOMANDO ANÁLISIS PREVIO): "
+        "El usuario te pidió implementar/arreglar algo analizado ANTES en esta "
+        "conversación. TU TAREA es la siguiente (del análisis previo):\n"
+        "---\n"
+        f"{snippet}\n"
+        "---\n"
+        + files_line
+        + (edit_op or "")
+        + "\nIMPORTANTE:\n"
+        "- Verificá SIEMPRE el path REAL del archivo antes de leerlo: en repos "
+        "monorepo los archivos viven bajo frontend/src/ etc. Si un read_file "
+        "falla, buscá con list_files UNA VEZ en la raíz para hallar el path.\n"
+        "- Aplicá el fix del hallazgo. Verificá con run_lint/run_tests/run_build "
+        "si es viable, y commiteá con conventional commit.\n"
+    )
+
+
+
+def _derive_task_from_history(messages: list) -> str | None:
+    """Devuelve el contenido del ÚLTIMO mensaje del asistente (análisis/plan/
+    review) como tarea derivada. Retorna None si el último turno del asistente
+    fue vacío o no hay historial útil."""
+    for m in reversed(messages):
+        if isinstance(m, AIMessage):
+            content = str(m.content or "").strip()
+            if len(content) >= 60:
+                return content
+            return None
+        if isinstance(m, HumanMessage):
+            # llegamos al turno previo del usuario sin respuesta asistente útil
+            return None
+    return None
 
 
 def _git_branch(repo_path: str) -> str:
@@ -604,6 +752,19 @@ class Session:
                 self._explore_budget.max_calls = 0
                 self._explore_budget.max_tools_before_write = 4
                 console.print("[dim]🔗 Corrección post-review — explore=0, force write.[/dim]\n")
+            # Retomar análisis previo: "implementa" / "arreglá" sin tarea explícita
+            elif _is_ambiguous_execute(user_input, self.repo_path):
+                task = _derive_task_from_history(self._messages)
+                if task:
+                    targets = _extract_target_files(task)
+                    agent_input = user_input + _build_chained_execute_suffix(
+                        task, target_files=targets
+                    )
+                    # Mismos límites que la corrección post-review: prohibir
+                    # exploración y forzar lectura-directa de los objetivos.
+                    self._explore_budget.max_calls = 0
+                    self._explore_budget.max_tools_before_write = 4
+                    console.print("[dim]🔗 Retomando análisis previo como tarea (explore=0).[/dim]\n")
         elif new_role == Role.REVIEW:
             agent_input = preload_for_review(user_input, self.repo_path)
             self._dedupe.max_repeats = 1
