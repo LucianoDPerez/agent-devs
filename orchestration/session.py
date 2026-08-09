@@ -180,43 +180,40 @@ _DISABLED_RE = re.compile(r"disabled\s*=\s*\{([^}]*)\}")
 
 
 def _extract_edit_instruction(analysis: str, target_files: list[str]) -> str | None:
-    """Si el análisis contiene una string concreta a reemplazar (ej: un
-    `disabled={...}` viejo vs nuevo), devuelve una instrucción edit_file
-    operativa para inyectar en el agent_input. Esto fuerza al modelo a ESCRIBIR
-    en lugar de responder con texto descriptivo.
-
+    """Extrae strings exactas de old_str y new_str del análisis para dar a
+    edit_file. Esto fuerza al modelo a ESCRIBIR con tool call, no con texto.
     Devuelve None si no se puede derivar con confianza."""
+    if not analysis:
+        return None
     matches = _DISABLED_RE.findall(analysis)
-    if not matches:
+    if len(matches) < 1:
         return None
     old = f"disabled={{{matches[0]}}}"
-    # ¿el análisis menciona el nuevo disabled explícitamente?
-    if len(matches) >= 2:
-        new = f"disabled={{{matches[1]}}}"
+    # Busca el nuevo disabled explícitamente (patrón "correcto:" o similar)
+    new = None
+    correct_match = re.search(r"correcto[::]?[^}]*\{([^}]*)\}", analysis, re.IGNORECASE)
+    if correct_match:
+        new = f"disabled={{{{correct_match.group(1)}}}}"
     else:
-        # Heurística: si el análisis menciona 'documento' como campo faltante,
-        # agrego || !documento.trim() al disabled viejo.
+        # Heurística: si el análisis menciona 'documento' como campo faltante
+        # y old no tiene || !documento.trim(), lo agregamos.
         if "documento" in analysis.lower() and "!documento" not in matches[0]:
             new = old.rstrip("}") + " || !documento.trim()}"
-        else:
-            new = None
     if new is None:
         return None
     path = target_files[0] if target_files else ""
     return (
-        "\n\n⛔ ACCIÓN OPERATIVA OBLIGATORIA — ejecutá EXACTAMENTE este edit_file "
-        "(NO respondas con texto, ejecutá la tool):\n"
+        "\n\n⛔ ACCIÓN OPERATIVA OBLIGATORIA — EJECUTÁ ESTE edit_file EXACTAMENTE\n"
         f"edit_file(path=\"{path}\", old_str=\"{old}\", new_str=\"{new}\")\n"
-        "Si la string old_str no existe exacta, leé el archivo y buscá la variante "
-        "exacta (con mismos espacios), pero el new_str es el objetivo.\n"
+        "NOTA: old_str debe coincidir EXACTO con el código del archivo (incluyendo espacios).\n"
+        "Si no coincide, leé el archivo con read_file y buscá la variante exacta.\n"
     )
 
 
 def _build_chained_execute_suffix(task: str, target_files: list[str] | None = None) -> str:
     """Construye el mensaje EXECUTE cuando el usuario retoma un análisis previo
-    con un comando vago ("implementa"). Incluye el path correcto al archivo
-    real (frontend/ monorepo) si aparece en el análisis."""
-    snippet = task if len(task) <= 2000 else task[:2000] + "\n...(truncado)"
+    con un comando vago ("implementa"). Incluye el path correcto y una
+    instrucción edit_file operativa para forzar tool call."""
     files_line = ""
     if target_files:
         files_line = (
@@ -226,22 +223,36 @@ def _build_chained_execute_suffix(task: str, target_files: list[str] | None = No
             + "\n"
         )
     edit_op = _extract_edit_instruction(task, target_files or [])
-    return (
-        "\n\n⛔ INSTRUCCIÓN (RETOMANDO ANÁLISIS PREVIO): "
-        "El usuario te pidió implementar/arreglar algo analizado ANTES en esta "
-        "conversación. TU TAREA es la siguiente (del análisis previo):\n"
-        "---\n"
-        f"{snippet}\n"
-        "---\n"
-        + files_line
-        + (edit_op or "")
-        + "\nIMPORTANTE:\n"
-        "- Verificá SIEMPRE el path REAL del archivo antes de leerlo: en repos "
-        "monorepo los archivos viven bajo frontend/src/ etc. Si un read_file "
-        "falla, buscá con list_files UNA VEZ en la raíz para hallar el path.\n"
-        "- Aplicá el fix del hallazgo. Verificá con run_lint/run_tests/run_build "
-        "si es viable, y commiteá con conventional commit.\n"
-    )
+    if edit_op:
+        # El sufijo es solo la instrucción operativa — el análisis está en historial
+        return (
+            "\n\n⛔ INSTRUCCIÓN (RETOMANDO ANÁLISIS PREVIO): "
+            "El usuario te pidió implementar/arreglar algo analizado ANTES en esta "
+            "conversación. EJECUTÁ ESTE edit_file EXACTAMENTE (NO respondas con texto):\n"
+            "---\n"
+            f"{edit_op}\n"
+            "---\n"
+            + files_line +
+            "\nIMPORTANTE:\n"
+            "- El archivo está en el historial con su código real. Leé con read_file si old_str no coincide.\n"
+            "- NO uses list_files, search_code ni otros tools. Solo edit_file.\n"
+        )
+    else:
+        # Sin edit_file operativo, fallback a análisis narrativo (menos efectivo con 35B)
+        snippet = task if len(task) <= 2000 else task[:2000] + "\n...(truncado)"
+        return (
+            "\n\n⛔ INSTRUCCIÓN (RETOMANDO ANÁLISIS PREVIO): "
+            "El usuario te pidió implementar/arreglar algo analizado ANTES en esta "
+            "conversación. TU TAREA es la siguiente (del análisis previo):\n"
+            "---\n"
+            f"{snippet}\n"
+            "---\n"
+            + files_line
+            + "\nIMPORTANTE:\n"
+            "- Verificá SIEMPRE el path REAL del archivo antes de leerlo: en repos "
+            "monorepo los archivos viven bajo frontend/src/ etc.\n"
+            "- Aplicá el fix del hallazgo con edit_file o write_file.\n"
+        )
 
 
 
