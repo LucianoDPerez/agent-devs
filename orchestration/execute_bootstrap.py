@@ -206,7 +206,8 @@ def build_paste_correction_suffix(user_input: str) -> str:
         "\n\nINSTRUCCIÓN: "
         + block
         + "Los hallazgos YA ESTÁN en el mensaje. NO re-leas los mismos archivos en loop. "
-        "Aplicá las correcciones YA con edit_file, write_file o delete_file según esos hallazgos. "
+        "Aplicá las correcciones YA con edit_file (archivos existentes), "
+        "write_file (solo archivos NUEVOS) o delete_file. "
         "Si un hallazgo pide eliminar un archivo, usá delete_file(path=...). "
         "Máximo 1 read_file por archivo tocado. "
         "Cumplí cada CRITICAL/WARNING antes de terminar; "

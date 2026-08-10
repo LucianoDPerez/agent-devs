@@ -158,8 +158,9 @@ def write_file(path: str, content: str) -> str:
             f"write_file(path='{path}/index.ts', content='...')"
         )
     if p.exists() and p.is_file():
-        # Guard anti-destrucción: reescribir un archivo grande desde memoria
-        # pierde imports/hooks/lógica (el 4B dejó PacientesPage.tsx vacío).
+        # Guard anti-destrucción: write_file NO puede sobrescribir archivos
+        # existentes (salvo configs triviales de ≤5 líneas). Reescribir desde
+        # memoria pierde imports/hooks/lógica — el 4B mutiló PacientesPage.tsx.
         # Forzamos el path quirúrgico: read_file + edit_file.
         try:
             existing_lines = len(p.read_text(encoding="utf-8", errors="replace").splitlines())
@@ -167,14 +168,14 @@ def write_file(path: str, content: str) -> str:
             existing_lines = 0
         if existing_lines > WRITE_FILE_OVERWRITE_MAX_LINES:
             return (
-                f"⛔ '{path}' YA EXISTE con {existing_lines} líneas y write_file está "
-                f"BLOQUEADO para sobrescribirlo (riesgo de destruir código existente).\n"
+                f"⛔ '{path}' YA EXISTE ({existing_lines} líneas) y write_file está "
+                f"BLOQUEADO para sobrescribirlo (riesgo de destruir código).\n"
                 f"Hacé el cambio de forma quirúrgica:\n"
                 f"  1) read_file(path='{path}') para ver el contenido EXACTO.\n"
                 f"  2) edit_file(path='{path}', old_str='...', new_str='...') con "
                 f"cadenas exactas del archivo real.\n"
                 f"write_file solo está permitido para archivos NUEVOS o de ≤ "
-                f"{WRITE_FILE_OVERWRITE_MAX_LINES} líneas."
+                f"{WRITE_FILE_OVERWRITE_MAX_LINES} líneas (configs triviales)."
             )
 
     try:

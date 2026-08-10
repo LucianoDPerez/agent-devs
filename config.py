@@ -106,12 +106,12 @@ PLAN_MAX_READS_AFTER_EXPLORE = 8
 POST_WRITE_GATE_ENABLED = True
 POST_WRITE_GATE_MAX_RETRIES = 1
 
-# write_file: prohibido SOBRESCRIBIR archivos existentes con más de N líneas.
-# El 4B que reescribe un archivo entero de memoria pierde imports/hooks/lógica
-# (PacientesPage.tsx quedó vacío). Para archivos existentes grandes solo
-# edit_file quirúrgico (previo read_file) — write_file queda para archivos
-# nuevos o pequeños.
-WRITE_FILE_OVERWRITE_MAX_LINES = 30
+# write_file: prohibido SOBRESCRIBIR archivos existentes (solo permite ≤ 5
+# líneas para configs triviales como .env.example). El 4B que reescribe un
+# archivo entero de memoria pierde imports/hooks/lógica (PacientesPage.tsx
+# quedó mutilado). Para archivos existentes solo edit_file quirúrgico (previo
+# read_file) — write_file queda para archivos nuevos.
+WRITE_FILE_OVERWRITE_MAX_LINES = 5
 
 MAX_FILE_READ_BYTES = 50_000
 MAX_LIST_RESULTS = 100

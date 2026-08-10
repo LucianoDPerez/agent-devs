@@ -70,10 +70,10 @@ _EXECUTE_FORCE_WRITE_MSG = (
     "ESCRIBÍ el código AHORA:\n"
     "- NUNCA escribas/edites/borres tasks.md ni archivos de planificación (están "
     "protegidos — si lo intentás, la tool te lo va a rechazar).\n"
-    "- Archivo NUEVO o chico (≤30 líneas): crealo/reescribilo con write_file.\n"
-    "- Archivo existente GRANDE: write_file está BLOQUEADO (la tool lo rechaza "
-    "para no destruir código). Usá edit_file con old_str/new_str EXACTOS "
-    "copiados del CONTENIDO REAL inyectado abajo.\n"
+    "- Archivo NUEVO: crealo con write_file.\n"
+    "- Archivo existente: write_file está BLOQUEADO (la tool lo rechaza para "
+    "no destruir código). Usá edit_file con old_str/new_str EXACTOS del "
+    "CONTENIDO REAL inyectado abajo.\n"
     "No intentes leer ni explorar. No razones en voz alta: ejecutá una tool call directa."
 )
 
@@ -746,6 +746,15 @@ class Session:
         except Exception:
             return True, ""
 
+    def _verify_tools_called(self) -> bool:
+        """True si run_lint, run_tests o run_build fue llamado en el turno actual.
+        Escanea los tool_calls en los últimos mensajes del historial."""
+        recent = str(self._messages[-14:]) if len(self._messages) >= 14 else str(self._messages)
+        return any(
+            name in recent
+            for name in ("run_lint", "run_tests", "run_build")
+        )
+
     def run_turn(self, user_input: str, status: str | None = None) -> None:
         """Clasifica, cambia rol, ejecuta con historial, persiste en SQLite."""
         self._no_explore_retry = False
@@ -926,16 +935,39 @@ class Session:
                     gate_ok, gate_err = self._post_write_gate()
                     if not gate_ok:
                         gate_retries += 1
+                        # Foto del contenido original ANTES de que el modelo
+                        # dañara los archivos: la inyectamos en el mensaje
+                        # para que el retry pueda restaurar funcionalidad
+                        # perdida (botones, estado, handlers).
+                        _orig_snapshot = ""
+                        for cp, cc in self._read_cache.items():
+                            if not cp.startswith("[") and len(cc.strip()) > 30:
+                                _orig_snapshot += (
+                                    f"\n--- {cp} (CONTENIDO ORIGINAL antes de tu escritura) ---\n"
+                                    f"{cc}\n"
+                                )
+                        _orig_block = ""
+                        if _orig_snapshot:
+                            _orig_block = (
+                                "\n\n⚠️ CONTENIDO ORIGINAL de los archivos "
+                                "(leído ANTES de que escribieras — PRESERVÁ "
+                                "TODA esta funcionalidad: botones, estado, "
+                                "handlers, SVG, imports):\n"
+                                f"{_orig_snapshot}\n"
+                            )
                         self._messages.append(HumanMessage(
                             "⛔ El código que acabás de escribir NO compila.\n"
-                            f"Error del build:\n{gate_err}\n\n"
-                            "Corregí SOLO ese error, con cambios mínimos y quirúrgicos:\n"
+                            f"Error del build:\n{gate_err}\n"
+                            f"{_orig_block}\n"
+                            "Corregí SOLO el error de build, PRESERVANDO toda "
+                            "la funcionalidad del contenido original:\n"
                             "1) Leé el archivo indicado con read_file para ver su estado EXACTO.\n"
                             "2) Aplicá el fix con edit_file (old_str/new_str copiados del "
                             "contenido REAL del archivo).\n"
-                            "write_file está BLOQUEADO para archivos existentes grandes "
-                            "(la tool lo rechaza para no destruir código): NO reescribas "
-                            "archivos enteros.\n"
+                            "3) NO borres componentes que estaban en el original (botones, "
+                            "estado, handlers, SVG, imports) — solo arreglá el build.\n"
+                            "write_file está BLOQUEADO para archivos existentes "
+                            "(la tool lo rechaza): NO reescribas archivos enteros.\n"
                             "NO respondas con texto ni repitas el análisis: ejecutá "
                             "read_file → edit_file ahora."
                         ))
@@ -954,6 +986,40 @@ class Session:
                             "Reintentando el fix con read_file + edit_file…[/yellow]\n"
                         )
                         continue
+                # Compuerta de verificación (EXECUTE): si el modelo NO corrió
+                # run_lint / run_tests / run_build, inyectamos un gate que lo
+                # obliga a verificar. El 4B/9B tiende a saltarse la verificación
+                # y responder LISTO sin validar que el código compila.
+                if (
+                    new_role == Role.EXECUTE
+                    and gate_retries < POST_WRITE_GATE_MAX_RETRIES
+                    and not self._verify_tools_called()
+                ):
+                    gate_retries += 1
+                    self._messages.append(HumanMessage(
+                        "⚠️ No ejecutaste run_lint, run_tests ni run_build.\n"
+                        "Es OBLIGATORIO verificar que el código compila y pasa "
+                        "tests ANTES de dar la tarea por terminada.\n\n"
+                        "Ejecutá AHORA (no respondas con texto — ejecutá las "
+                        "tools directamente):\n"
+                        f"  run_lint(path=\"{self.repo_path}\")\n"
+                        f"  run_tests(path=\"{self.repo_path}\")\n"
+                        f"  run_build(path=\"{self.repo_path}\")\n"
+                        "\nSi alguna falla, CORREGÍ el error y volvé a ejecutar "
+                        "la verificación hasta que las tres pasen."
+                    ))
+                    messages_for_agent = list(self._messages)
+                    self._explore_budget.max_calls = 10
+                    self._explore_budget.max_reads_after_explore = 8
+                    self._explore_budget.max_tools_before_write = 30
+                    self._explore_budget.reset()
+                    self._dedupe.max_repeats = 2
+                    self._rebuild_agent_gate_retry()
+                    console.print(
+                        "\n[yellow]🔍 Verificación: el modelo no corrió verify "
+                        "tools. Inyectando gate de verificación…[/yellow]\n"
+                    )
+                    continue
                 break
             except KeyboardInterrupt:
                 interrupted = True

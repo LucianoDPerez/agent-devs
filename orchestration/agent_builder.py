@@ -136,10 +136,10 @@ async def build_agent(
             "\n⛔ RETRY TRAS LOOP DE LECTURA: NO tenés tools de lectura "
             "(read_file/list_files/search_code). El contexto de la tarea y el "
             "layout del repo YA están en el mensaje. ESCRIBÍ el código AHORA:\n"
-            "- Archivo NUEVO o chico: crealo/reescribilo con write_file.\n"
-            "- Archivo existente GRANDE: write_file está BLOQUEADO (la tool lo "
-            "rechaza para no destruir código). Usá edit_file con old_str/new_str "
-            "EXACTOS copiados del CONTENIDO REAL inyectado abajo.\n"
+            "- Archivo NUEVO: crealo con write_file.\n"
+            "- Archivo existente: write_file está BLOQUEADO (la tool lo rechaza). "
+            "Usá edit_file con old_str/new_str EXACTOS del CONTENIDO REAL "
+            "inyectado abajo.\n"
             "No intentes leer.\n"
         )
     if no_explore:
