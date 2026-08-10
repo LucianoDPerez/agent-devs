@@ -746,10 +746,13 @@ class Session:
         except Exception:
             return True, ""
 
-    def _verify_tools_called(self) -> bool:
+    def _verify_tools_called(self, messages: list | None = None) -> bool:
         """True si run_lint, run_tests o run_build fue llamado en el turno actual.
-        Escanea los tool_calls en los últimos mensajes del historial."""
-        recent = str(self._messages[-14:]) if len(self._messages) >= 14 else str(self._messages)
+        Escanea los tool_calls en los mensajes provistos (por defecto self._messages,
+        pero en el loop de execute debe recibir messages_for_agent — la copia
+        local que el agente modificó con tool calls durante la ejecución)."""
+        msgs = messages if messages is not None else self._messages
+        recent = str(msgs[-16:]) if len(msgs) >= 16 else str(msgs)
         return any(
             name in recent
             for name in ("run_lint", "run_tests", "run_build")
@@ -993,7 +996,7 @@ class Session:
                 if (
                     new_role == Role.EXECUTE
                     and gate_retries < POST_WRITE_GATE_MAX_RETRIES
-                    and not self._verify_tools_called()
+                    and not self._verify_tools_called(messages_for_agent)
                 ):
                     gate_retries += 1
                     self._messages.append(HumanMessage(
