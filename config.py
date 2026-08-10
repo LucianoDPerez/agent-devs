@@ -76,14 +76,16 @@ EXECUTE_RECURSION_LIMIT = 30
 # Pre-cargar en el mensaje de EXECUTE archivos .md/.txt citados por path absoluto
 EXECUTE_PRELOAD_MAX_CHARS = 20_000
 EXECUTE_PRELOAD_MAX_FILES = 2
-# Máx list_files/search_code/inspect_routes por turno EXECUTE (enforceado en código)
+# Máx list_files/search_code/inspect_routes por turno EXECUTE. EXPLORE es lo que
+# causa loops (el modelo re-busca lo mismo con queries distintas). Mantener BAJO.
 EXECUTE_EXPLORE_BUDGET = 2
-# Tras agotar explore: máx read_file antes de forzar write
-EXECUTE_MAX_READS_AFTER_EXPLORE = 3
-# Si no escribió nada tras N tool calls → forzar write_file. read_file NO cuenta
-# como productivo en EXECUTE (solo verify tools: run_lint/run_tests/run_build).
-# El 4B/9B se escondía en lecturas infinitas sin escribir nada.
-EXECUTE_MAX_TOOLS_BEFORE_WRITE = 5
+# Tras agotar explore: máx read_file antes de forzar write. Dar margen razonable
+# para diagnóstico de bugs (hook + página + API + backend + domain type).
+EXECUTE_MAX_READS_AFTER_EXPLORE = 5
+# Si no escribió nada tras N tool calls totales → forzar write. read_file NO
+# cuenta como productivo en EXECUTE (solo verify tools). Dar margen para 2
+# explore + 4-5 reads = diagnóstico completo sin loop infinito.
+EXECUTE_MAX_TOOLS_BEFORE_WRITE = 6
 # Límite duro total de tool calls por turno (EXECUTE). Ya no previene read-loops
 # (eso lo hace max_calls=0 + retry write-only); 20 da margen al flujo completo:
 # 5-6 writes + stage + commits + verify. Solo corta si el 4B entra en runaway.
