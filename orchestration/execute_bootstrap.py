@@ -773,7 +773,23 @@ def preload_for_review(user_input: str, repo_path: str | None = None) -> str:
         out = _build_preload_parts(user_input, cited, task_nums, mode="review", repo_path=repo_path)
         if git_ctx:
             out = out + "\n\n" + git_ctx
-    return out
+        return out
+
+    # Sin archivos citados: inyectar git context para review de cambios recientes
+    if git_ctx:
+        return (
+            user_input
+            + "\n\n" + git_ctx
+            + "\n\nINSTRUCCIÓN OBLIGATORIA (REVIEW AC-AWARE): "
+            "El git status YA ESTÁ ARRIBA. "
+            "LEÉ CADA archivo listado en `git diff main...BRANCH --name-only` con read_file. "
+            "Si ese bloque no existe, leé los archivos del git status. "
+            "Clasificá CRITICAL / WARNING / SUGGESTION. "
+            "Cita archivo:línea para cada hallazgo. "
+            "Emítí el informe UNA vez y terminá."
+        )
+
+    return user_input
 
 
 def _resolve_keyword_paths(user_input: str, repo_path: str) -> str:
