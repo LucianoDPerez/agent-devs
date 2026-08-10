@@ -94,16 +94,25 @@ class ExploreBudget:
         max_tools_before_write: int = 5,
         *,
         write_pressure: bool = True,
+        productive_names: frozenset | None = None,
     ):
         """``write_pressure=False`` → modo ANALYZE/PLAN: capa la exploración
         pero NUNCA presiona a escribir. Al agotar el presupuesto lanza
         ``ToolBudgetExceeded`` de inmediato (el 4B ignora strings), lo que en
         session.py dispara un retry SIN tools de búsqueda (no write-only).
+
+        ``productive_names``: override de PRODUCTIVE_TOOL_NAMES. EXECUTE
+        solo considera VERIFY tools como productivas (read_file NO cuenta —
+        el modelo se escondía en lecturas infinitas sin escribir).
         """
         self.max_calls = max_calls
         self.max_reads_after_explore = max_reads_after_explore
         self.max_tools_before_write = max_tools_before_write
         self.write_pressure = write_pressure
+        self._productive_names = (
+            productive_names if productive_names is not None
+            else PRODUCTIVE_TOOL_NAMES
+        )
         self._count = 0
         self._reads_after = 0
         self._total = 0
@@ -146,6 +155,21 @@ class ExploreBudget:
                 "⛔ list_files(recursive=true) prohibido en EXECUTE. "
                 "Usá recursive=false o ESCRIBÍ YA con write_file/edit_file."
             )
+
+        # Write pressure: si pasamos N tools sin escribir ni verify, forzar write.
+        # Debe ir ANTES del explore block — los explore tools hacían early return
+        # y se salteaban este check, permitiendo loops infinitos de list_files.
+        # read_file ya NO es productivo en EXECUTE (solo VERIFY_TOOL_NAMES).
+        if (
+            self.write_pressure
+            and not self._wrote
+            and self._total > self.max_tools_before_write
+        ):
+            if name not in self._productive_names:
+                raise ToolBudgetExceeded(
+                    f"{self._total} tool calls sin escribir código ni verificar. "
+                    "NO explores ni leas más. TU ÚNICA ACCIÓN: write_file o edit_file AHORA."
+                )
 
         if name in EXPLORE_TOOL_NAMES:
             self._count += 1
@@ -191,20 +215,6 @@ class ExploreBudget:
                         "⛔ Demasiados read_file. NO leas más archivos. "
                         "TU ÚNICA ACCIÓN: write_file, edit_file o delete_file AHORA."
                     )
-
-        # Sin ninguna escritura tras N tools → forzar write (EXCEPTION — halts turn)
-        # Pero PRODUCTIVE tools (read/git/verify) sí cuentan como acción productiva.
-        # ANALYZE/PLAN (write_pressure=False) nunca se presionan a escribir.
-        if (
-            self.write_pressure
-            and not self._wrote
-            and self._total > self.max_tools_before_write
-        ):
-            if name not in WRITE_TOOL_NAMES and name not in PRODUCTIVE_TOOL_NAMES:
-                raise ToolBudgetExceeded(
-                    f"{self._total} tool calls sin escribir código. "
-                    "NO explores más. TU ÚNICA ACCIÓN: write_file o edit_file AHORA."
-                )
 
         return None
 

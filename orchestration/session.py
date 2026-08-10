@@ -50,7 +50,7 @@ from orchestration.execute_bootstrap import (
 )
 from orchestration.framework_rules import inject_framework_rules
 from orchestration.router import _extract_command_prefix, classify_intent
-from orchestration.tool_dedupe import ExploreBudget, ToolBudgetExceeded, ToolCallDedupe
+from orchestration.tool_dedupe import ExploreBudget, ToolBudgetExceeded, ToolCallDedupe, VERIFY_TOOL_NAMES
 
 _ROLE_LABELS = {
     Role.ANALYZE: "🔍 Análisis", Role.PLAN: "📋 Planificación",
@@ -362,11 +362,12 @@ class Session:
         self._mcp_available: int = 0  # total MCP cargados
         self._mcp_count: int = 0      # MCP activos en el rol actual
         self._local_count: int = 0
-        self._dedupe = ToolCallDedupe(max_repeats=2)
+        self._dedupe = ToolCallDedupe(max_repeats=1)
         self._explore_budget = ExploreBudget(
             max_calls=EXECUTE_EXPLORE_BUDGET,
             max_reads_after_explore=EXECUTE_MAX_READS_AFTER_EXPLORE,
             max_tools_before_write=EXECUTE_MAX_TOOLS_BEFORE_WRITE,
+            productive_names=VERIFY_TOOL_NAMES,
         )
         # ANALYZE/PLAN: capa la búsqueda MCP pero NUNCA presiona a escribir.
         # Al agotarse lanza ToolBudgetExceeded → retry no_explore (no write-only).

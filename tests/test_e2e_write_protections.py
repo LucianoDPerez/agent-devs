@@ -211,3 +211,76 @@ def test_e2e_paste_correction_suffix_no_longer_suggests_write_for_existing():
     assert "edit_file" in suffix
     # write_file debe ser calificado como "solo archivos NUEVOS"
     assert "NUEVOS" in suffix or "nuevos" in suffix.lower()
+
+
+# ── Keyword path resolution ────────────────────────────────────────────────
+
+
+def test_e2e_keyword_resolution_finds_matching_files(tmp_path):
+    """_resolve_keyword_paths debe encontrar archivos de código que contengan
+    la keyword del usuario."""
+    from orchestration.execute_bootstrap import _resolve_keyword_paths
+
+    repo = tmp_path
+    (repo / "frontend" / "src" / "pages").mkdir(parents=True)
+    (repo / "frontend" / "src" / "pages" / "PacientesPage.tsx").write_text("x")
+    (repo / "frontend" / "src" / "pages" / "TurnosPage.tsx").write_text("x")
+    (repo / "README.md").write_text("# doc")
+
+    # Keyword match
+    result = _resolve_keyword_paths("corregir bug en /pacientes", str(repo))
+    assert "pacientes" in result.lower()
+    assert "PacientesPage.tsx" in result
+    assert "TurnosPage" not in result  # partial match should not include unrelated files
+    # .md files should be excluded
+    assert "README" not in result
+
+
+def test_e2e_keyword_resolution_returns_empty_for_no_match(tmp_path):
+    """Si no hay archivos que contengan la keyword, devuelve string vacío."""
+    from orchestration.execute_bootstrap import _resolve_keyword_paths
+
+    result = _resolve_keyword_paths("implementar feature X", str(tmp_path))
+    assert result == ""
+
+
+def test_e2e_keyword_resolution_excludes_noise_keywords(tmp_path):
+    """Palabras comunes como 'error', 'que' no deben generar búsqueda."""
+    from orchestration.execute_bootstrap import _resolve_keyword_paths
+
+    result = _resolve_keyword_paths("corregir el error que hay en /pacientes", str(tmp_path))
+    assert "error" not in result.lower() or "ARCHIVOS DETECTADOS" not in result
+
+
+# ── Productive names (read_file no es productivo en EXECUTE) ────────────────
+
+
+def test_e2e_read_file_not_productive_in_execute():
+    """El ExploreBudget de EXECUTE debe usar VERIFY_TOOL_NAMES como productivas,
+    no PRODUCTIVE_TOOL_NAMES (que incluye read_file). read_file NO debe
+    considerarse productivo — el modelo se escondía en lecturas infinitas."""
+    from orchestration.tool_dedupe import (
+        ExploreBudget, VERIFY_TOOL_NAMES, PRODUCTIVE_TOOL_NAMES, READISH_TOOL_NAMES,
+    )
+    from orchestration.session import Session
+    import inspect
+
+    # Check that ExploreBudget.__init__ accepts productive_names
+    src = inspect.getsource(ExploreBudget.__init__)
+    assert "productive_names" in src, "ExploreBudget must accept productive_names"
+
+    # Default: PRODUCTIVE_TOOL_NAMES includes READISH_TOOL_NAMES (read_file, etc.)
+    assert "read_file" in READISH_TOOL_NAMES
+    assert READISH_TOOL_NAMES.issubset(PRODUCTIVE_TOOL_NAMES)
+
+    # EXECUTE: VERIFY_TOOL_NAMES does NOT include read_file
+    assert "read_file" not in VERIFY_TOOL_NAMES
+    assert "run_lint" in VERIFY_TOOL_NAMES
+    assert "run_tests" in VERIFY_TOOL_NAMES
+    assert "run_build" in VERIFY_TOOL_NAMES
+
+    # Verify Session uses VERIFY_TOOL_NAMES for the EXECUTE budget
+    src = inspect.getsource(Session.__init__)
+    assert "productive_names=VERIFY_TOOL_NAMES" in src, (
+        "EXECUTE ExploreBudget must use productive_names=VERIFY_TOOL_NAMES"
+    )

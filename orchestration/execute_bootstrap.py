@@ -7,6 +7,11 @@ from pathlib import Path
 
 from config import EXECUTE_PRELOAD_MAX_CHARS, EXECUTE_PRELOAD_MAX_FILES
 
+_CODE_EXTENSIONS: set[str] = {
+    ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+    ".py", ".go", ".vue", ".svelte",
+}
+
 # Paths absolutos a archivos de texto/tareas citados en el prompt del usuario
 _ABS_FILE_RE = re.compile(
     r"(/(?:[\w.-]+/)+[\w.-]+\.(?:md|txt|json|yml|yaml))",
@@ -716,11 +721,15 @@ def _build_preload_parts(
 def preload_cited_files(user_input: str, repo_path: str | None = None) -> str:
     """Si el usuario cita paths a archivos existentes, inyecta contenido + checklist.
 
-    Si pide Tarea 1 / Tarea 2, solo inyecta esas secciones del markdown
-    (evita que el 4B implemente las 9 tareas del archivo).
+    También resuelve keywords tipo '/pacientes' a paths reales en el repo,
+    para que el modelo no pierda tool calls explorando paths incorrectos.
     """
     cited = _collect_cited_paths(user_input, repo_path)
+    path_hint = _resolve_keyword_paths(user_input, repo_path) if repo_path else ""
+
     if not cited:
+        if path_hint:
+            return user_input + path_hint
         return user_input
 
     task_nums = extract_requested_task_numbers(user_input)
@@ -764,7 +773,61 @@ def preload_for_review(user_input: str, repo_path: str | None = None) -> str:
         out = _build_preload_parts(user_input, cited, task_nums, mode="review", repo_path=repo_path)
         if git_ctx:
             out = out + "\n\n" + git_ctx
-        return out
+    return out
+
+
+def _resolve_keyword_paths(user_input: str, repo_path: str) -> str:
+    """Resuelve keywords tipo '/pacientes' o 'el bug en /turnos' a paths reales.
+
+    El 4B/9B pierde 5-8 tool calls buscando el archivo correcto porque no
+    conoce la estructura de directorios del repo. Con esto le damos el path
+    exacto para que arranque directo con read_file.
+    """
+    import re
+
+    keywords: set[str] = set()
+    # "/pacientes", "en /pacientes", "/turnos", "/dashboard"
+    for m in re.finditer(
+        r'(?:^|\s|"|\'|`)//?(\w[\w-]{2,})(?:\s|$|"|\'|`|\.|,)',
+        user_input.lower(),
+    ):
+        w = m.group(1)
+        if len(w) >= 3 and w not in {"error", "este", "que", "como", "para", "con", "los", "las", "una", "por", "del", "hay", "actualmente"}:
+            keywords.add(w)
+
+    if not keywords:
+        return ""
+
+    root = Path(repo_path)
+    hints: list[str] = []
+    for kw in sorted(keywords):
+        matches: list[Path] = []
+        # rglob es case-sensitive incluso en macOS (APFS default = case-insensitive
+        # pero Python Path.rglob hace exact match). Probamos kw, kw.lower() y kw.title().
+        for variant in {kw, kw.lower(), kw.title()}:
+            matches += list(root.rglob(f"*{variant}*"))
+        matches = list(dict.fromkeys(matches))  # dedupe preserving order
+        code_files = sorted(
+            str(m.relative_to(root))
+            for m in matches
+            if m.is_file()
+            and m.suffix.lower() in _CODE_EXTENSIONS
+            and not any(
+                part.startswith(".") or part in {"node_modules", "__pycache__", ".git", "dist", "build"}
+                for part in m.parts
+            )
+        )
+        if code_files:
+            listed = ", ".join(code_files[:4])
+            hints.append(f"{kw} → {listed}")
+
+    if hints:
+        return (
+            "\n\n📁 ARCHIVOS DETECTADOS (paths reales, no necesitás explorar):\n"
+            + "\n".join(f"  • {h}" for h in hints)
+            + "\n"
+        )
+    return ""
 
     # Sin archivos citados: inyectar git context para review de cambios recientes
     if git_ctx:

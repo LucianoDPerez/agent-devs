@@ -77,11 +77,13 @@ EXECUTE_RECURSION_LIMIT = 30
 EXECUTE_PRELOAD_MAX_CHARS = 20_000
 EXECUTE_PRELOAD_MAX_FILES = 2
 # Máx list_files/search_code/inspect_routes por turno EXECUTE (enforceado en código)
-EXECUTE_EXPLORE_BUDGET = 3
+EXECUTE_EXPLORE_BUDGET = 2
 # Tras agotar explore: máx read_file antes de forzar write
-EXECUTE_MAX_READS_AFTER_EXPLORE = 5
-# Si no escribió nada tras N tool calls → forzar write_file
-EXECUTE_MAX_TOOLS_BEFORE_WRITE = 8
+EXECUTE_MAX_READS_AFTER_EXPLORE = 3
+# Si no escribió nada tras N tool calls → forzar write_file. read_file NO cuenta
+# como productivo en EXECUTE (solo verify tools: run_lint/run_tests/run_build).
+# El 4B/9B se escondía en lecturas infinitas sin escribir nada.
+EXECUTE_MAX_TOOLS_BEFORE_WRITE = 5
 # Límite duro total de tool calls por turno (EXECUTE). Ya no previene read-loops
 # (eso lo hace max_calls=0 + retry write-only); 20 da margen al flujo completo:
 # 5-6 writes + stage + commits + verify. Solo corta si el 4B entra en runaway.
