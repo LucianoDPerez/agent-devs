@@ -63,18 +63,18 @@ _CONTEXT_LIMIT = 28800
 _SUMMARY_THRESHOLD = 0.90
 _WARNING_THRESHOLD = 0.85
 
-# Mensaje para el retry write-only: el 4B NO debe leer, debe escribir directo.
+# Mensaje para el retry write-only: el modelo TIENE read_file pero SIN
+# herramientas de exploración (list_files/search_code). Debe leer → editar
+# con old_str EXACTO del archivo real.
 _EXECUTE_FORCE_WRITE_MSG = (
-    "\n\n⛔ RETRY TRAS LOOP: NO tenés tools de lectura. El contexto de la tarea "
-    "y el layout YA están arriba.\n"
-    "ESCRIBÍ el código AHORA:\n"
-    "- NUNCA escribas/edites/borres tasks.md ni archivos de planificación (están "
-    "protegidos — si lo intentás, la tool te lo va a rechazar).\n"
-    "- Archivo NUEVO: crealo con write_file.\n"
-    "- Archivo existente: write_file está BLOQUEADO (la tool lo rechaza para "
-    "no destruir código). Usá edit_file con old_str/new_str EXACTOS del "
-    "CONTENIDO REAL inyectado abajo.\n"
-    "No intentes leer ni explorar. No razones en voz alta: ejecutá una tool call directa."
+    "\n\n⛔ RETRY: tenés read_file pero NO tools de exploración (list_files/"
+    "search_code prohibidos).\n"
+    "PROCEDÉ ASÍ:\n"
+    "1) Leé el archivo a modificar con read_file para ver su contenido EXACTO.\n"
+    "2) Aplicá el fix con edit_file (old_str=new_str COPIADOS del archivo real).\n"
+    "3) write_file SOLO para archivos NUEVOS (está bloqueado para existentes).\n"
+    "4) Verificá con run_lint, run_tests, run_build.\n"
+    "NO explores. NO hagas list_files. NO respondas con texto: ejecutá tools."
 )
 
 def _load_judge_prompt() -> str:
@@ -464,11 +464,15 @@ class Session:
         return True
 
     def _rebuild_agent_write_only(self):
-        """Reconstruye el agente EXECUTE con SOLO tools de escritura.
+        """Reconstruye el agente EXECUTE con tools de lectura + escritura + verify.
 
-        Se llama en el retry tras un loop de lectura. El 4B con read_file/
-        list_files disponibles entra en loops infinitos de lectura y nunca
-        escribe. Sin esas tools, escribe directo (verificado en pruebas).
+        Antes usaba WRITE_ONLY_TOOLS (sin read_file), lo que forzaba al modelo
+        a editar a ciegas: sin poder leer el estado real del archivo, el old_str
+        de edit_file siempre fallaba → loop de reintentos → timeout.
+
+        Ahora usa GATE_RETRY_TOOLS: read_file + edit_file + verify. El write
+        pressure (max_tools_before_write=5, max_reads_after_explore=3) previene
+        loops infinitos de lectura que antes justificaban quitar read_file.
         """
         self.current_role = Role.EXECUTE
         loop = asyncio.new_event_loop()
@@ -479,7 +483,8 @@ class Session:
                     self.llm, Role.EXECUTE, self.repo_path,
                     self.cached_analysis, self._tools, self._dedupe,
                     self._explore_budget, self._analyze_budget,
-                    force_write=True,
+                    tools_override=GATE_RETRY_TOOLS,
+                    force_tool_calls=True,
                     read_cache=self._read_cache,
                 )
             )
@@ -545,20 +550,19 @@ class Session:
         console.print("[green]✅ Resumen generado. Historial comprimido.[/green]\n")
 
     def _retry_with_read_anchor(self) -> str:
-        """Construye el mensaje de retry write-only incluyendo el contenido
-        de los archivos que read_file cacheó en el PASS1. El 4B sin tools de
-        lectura NECESITA este anclaje para reescribir código real (si no,
-        razona en círculos)."""
+        """Construye el mensaje de retry incluyendo el contenido cacheado de
+        archivos ya leídos. El modelo PUEDE re-leer con read_file (lo tiene
+        disponible), pero el contenido cacheado le ahorra tool calls."""
         anchor = ""
         already_committed = self._repo_has_recent_commit()
         if self._read_cache:
             blocks = []
             for path, content in list(self._read_cache.items())[:6]:
-                blocks.append(f"--- CONTENIDO REAL DE {path} ---\n{content[:4000]}\n--- FIN {path} ---")
+                blocks.append(f"--- CONTENIDO DE {path} (ya leído, usalo como referencia) ---\n{content[:4000]}\n--- FIN {path} ---")
             if blocks:
                 anchor = (
-                    "\n\nCONTENIDO DE ARCHIVOS YA LEÍDOS (úsalo como base para "
-                    "reescribir, NO los vuelvas a pedir):\n" + "\n".join(blocks)
+                    "\n\nCONTENIDO DE ARCHIVOS YA LEÍDOS (podés re-leerlos con "
+                    "read_file si necesitás verificar):\n" + "\n".join(blocks)
                 )
         if already_committed:
             return (
@@ -1059,10 +1063,15 @@ class Session:
                 self._messages = self._messages[-3:] if len(self._messages) > 3 else self._messages
                 self._messages.append(HumanMessage(self._retry_with_read_anchor()))
                 messages_for_agent = list(self._messages)
+                # Reset dedupe + budget para el retry: el modelo necesita margen
+                # para read_file -> edit_file con el old_str correcto.
+                self._dedupe.reset()
+                self._dedupe.max_repeats = 2
+                self._explore_budget.reset()
                 self._rebuild_agent_write_only()
                 console.print(
                     f"\n[yellow]⚠️  Tool budget agotado: {e}. "
-                    "Reintentando con SOLO tools de escritura (sin read_file)...[/yellow]"
+                    "Reintentando con read_file + edit_file (sin exploración)...[/yellow]"
                 )
                 continue
             except ReasoningOnlyResponse as e:

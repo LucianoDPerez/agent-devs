@@ -133,14 +133,12 @@ async def build_agent(
     fw_rules = inject_framework_rules(repo_path)
     if force_write:
         extra_context += (
-            "\n⛔ RETRY TRAS LOOP DE LECTURA: NO tenés tools de lectura "
-            "(read_file/list_files/search_code). El contexto de la tarea y el "
-            "layout del repo YA están en el mensaje. ESCRIBÍ el código AHORA:\n"
-            "- Archivo NUEVO: crealo con write_file.\n"
-            "- Archivo existente: write_file está BLOQUEADO (la tool lo rechaza). "
-            "Usá edit_file con old_str/new_str EXACTOS del CONTENIDO REAL "
-            "inyectado abajo.\n"
-            "No intentes leer.\n"
+            "\n⛔ RETRY: tenés read_file pero NO tools de exploración.\n"
+            "1) Leé el archivo a modificar con read_file.\n"
+            "2) Aplicá el fix con edit_file (old_str=new_str EXACTOS).\n"
+            "3) write_file SOLO para archivos NUEVOS (bloqueado para existentes).\n"
+            "4) Verificá con run_lint, run_tests, run_build.\n"
+            "No explores. No hagas list_files ni search_code.\n"
         )
     if no_explore:
         extra_context += (
