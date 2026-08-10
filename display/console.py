@@ -7,6 +7,7 @@ import time
 
 from langchain_core.messages import AIMessageChunk
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 
 console = Console()
@@ -127,7 +128,7 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                         console.print("\n", end="")
                     console.print("─" * 40, style="dim")
                 if chunk.content:
-                    console.print(chunk.content, end="", highlight=False, soft_wrap=True)
+                    console.print(escape(chunk.content), end="", highlight=False, soft_wrap=True)
                     response_parts.append(str(chunk.content))
                     produced_output = True
 
@@ -141,7 +142,7 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                             tool_call_limit_hit = True
                             break
                     if tc.get("args"):
-                        console.print(f"[blue]{tc['args']}[/blue]", end="", highlight=False)
+                        console.print(f"[blue]{escape(tc['args'])}[/blue]", end="", highlight=False)
                     saw_tool_call = True
                     produced_output = True
                 if tool_call_limit_hit:

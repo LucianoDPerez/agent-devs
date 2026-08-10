@@ -9,6 +9,7 @@ from config import (
     MAX_LIST_RESULTS,
     PROTECTED_TASK_DIRS,
     PROTECTED_TASK_FILENAMES,
+    WRITE_FILE_OVERWRITE_MAX_LINES,
 )
 
 from ._helpers import _is_excluded
@@ -39,7 +40,7 @@ def list_files(path: str, recursive: bool = False) -> str:
     List files in a directory. If recursive=True, traverse the entire tree.
     Filters out common noise directories (.git, node_modules, __pycache__, etc).
     If the path does not exist, returns a message — do not retry the same path.
-    Usage: list_files(path="/Users/luchop/PROYECTOS IA/Medicos")
+    Usage: list_files(path="/path/to/repo")
     """
     root = Path(path)
     if not root.exists():
@@ -93,7 +94,7 @@ def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> st
     Files exceeding MAX_FILE_READ_BYTES are truncated and a notice is shown.
     If the file does not exist (or the path is a directory), returns a message —
     accept it and continue; do not retry the same path or hunt for name variants.
-    Usage: read_file(path="/Users/luchop/PROYECTOS IA/Medicos/README.md")
+    Usage: read_file(path="/path/to/repo/README.md")
     """
     p = Path(path)
     if not p.exists():
@@ -156,6 +157,25 @@ def write_file(path: str, content: str) -> str:
             f"Call write_file with a FILE name inside it, for example: "
             f"write_file(path='{path}/index.ts', content='...')"
         )
+    if p.exists() and p.is_file():
+        # Guard anti-destrucción: reescribir un archivo grande desde memoria
+        # pierde imports/hooks/lógica (el 4B dejó PacientesPage.tsx vacío).
+        # Forzamos el path quirúrgico: read_file + edit_file.
+        try:
+            existing_lines = len(p.read_text(encoding="utf-8", errors="replace").splitlines())
+        except OSError:
+            existing_lines = 0
+        if existing_lines > WRITE_FILE_OVERWRITE_MAX_LINES:
+            return (
+                f"⛔ '{path}' YA EXISTE con {existing_lines} líneas y write_file está "
+                f"BLOQUEADO para sobrescribirlo (riesgo de destruir código existente).\n"
+                f"Hacé el cambio de forma quirúrgica:\n"
+                f"  1) read_file(path='{path}') para ver el contenido EXACTO.\n"
+                f"  2) edit_file(path='{path}', old_str='...', new_str='...') con "
+                f"cadenas exactas del archivo real.\n"
+                f"write_file solo está permitido para archivos NUEVOS o de ≤ "
+                f"{WRITE_FILE_OVERWRITE_MAX_LINES} líneas."
+            )
 
     try:
         p.parent.mkdir(parents=True, exist_ok=True)

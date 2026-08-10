@@ -13,11 +13,12 @@ Uso:
 """
 
 import argparse
+import os
 import sys
 import warnings
 
 from cache import list_repos, load_analysis, snapshot_hash, save_analysis
-from config import DEFAULT_REPO_PATH, LLM_BASE_URL, LLM_MAX_TOKENS, LLM_MODEL_NAME, LLM_TEMPERATURE
+from config import LLM_BASE_URL, LLM_MAX_TOKENS, LLM_MODEL_NAME, LLM_TEMPERATURE
 from llm_wrapper import LocalLLM, get_usage, reset_turn_usage
 from orchestration.session import Session
 from analyzer import run_analysis
@@ -102,7 +103,7 @@ def do_list():
 
 def main():
     parser = argparse.ArgumentParser(description="AgentDevs — agente de desarrollo con LLM local")
-    parser.add_argument("repo", nargs="?", help="Ruta del repositorio")
+    parser.add_argument("repo", nargs="?", help="Ruta del repositorio (default: directorio actual)")
     parser.add_argument("--analyze", metavar="REPO", help="Genera y guarda el análisis del repo")
     parser.add_argument("--list", action="store_true", help="Lista los análisis guardados")
     args = parser.parse_args()
@@ -114,7 +115,7 @@ def main():
         do_analyze(_make_llm(max_tokens=1024, temperature=0.4), args.analyze)
         return
 
-    repo_path = (args.repo or DEFAULT_REPO_PATH).strip()
+    repo_path = (args.repo or os.getcwd()).strip()
 
     reset_turn_usage()
     cached = _ensure_analysis(

@@ -10,6 +10,7 @@ from orchestration.session import (
     _derive_task_from_history,
     _extract_target_files,
     _is_ambiguous_execute,
+    _is_selfcontained_analysis,
 )
 
 
@@ -95,3 +96,36 @@ def test_build_chained_execute_suffix_truncates_long_task():
     long_task = "x" * 5000
     suffix = _build_chained_execute_suffix(long_task)
     assert "truncado" in suffix
+
+
+# ── _is_selfcontained_analysis ──────────────────────────────────────────────
+
+
+def test_selfcontained_true_for_error_with_inline_code():
+    msg = (
+        'analizá este error "PacientesPage.tsx: Unexpected token, expected \",\" (47:78)  '
+        '50 | <line x1="5" y1="12" x2="19" y2="12" />"'
+    )
+    assert _is_selfcontained_analysis(msg) is True
+
+
+def test_selfcontained_true_for_syntax_error_with_jsx():
+    msg = (
+        "analizá por qué falla: 'SyntaxError: Unexpected token' en App.tsx(12). "
+        "código: const x = <div onClick={() => fn()}>ok</div>;"
+    )
+    assert _is_selfcontained_analysis(msg) is True
+
+
+def test_selfcontained_false_for_generic_analysis():
+    assert _is_selfcontained_analysis("analizá la arquitectura del backend") is False
+
+
+def test_selfcontained_false_for_error_without_code():
+    assert _is_selfcontained_analysis(
+        "analizá este error de TypeScript en App.tsx"
+    ) is False
+
+
+def test_selfcontained_false_for_short_message():
+    assert _is_selfcontained_analysis("analizá esto") is False

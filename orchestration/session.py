@@ -28,6 +28,8 @@ from config import (
     JUDGE_MAX_TOKENS,
     JUDGE_MODEL_NAME,
     JUDGE_TEMPERATURE,
+    POST_WRITE_GATE_ENABLED,
+    POST_WRITE_GATE_MAX_RETRIES,
     TURN_IDLE_TIMEOUT,
     REASONING_RETRY_ENABLED,
     MAX_REASONING_SECONDS,
@@ -35,6 +37,7 @@ from config import (
 )
 from core.roles import Role, role_for_intent
 from display.console import console, print_role_switch, print_turn_summary, stream_agent_turn, ReasoningOnlyResponse, ToolCallLimitExceeded
+from tools import GATE_RETRY_TOOLS
 from display.esc_watcher import EscWatcher
 from llm_wrapper import LocalLLM, get_usage, reset_turn_usage
 from orchestration.agent_builder import build_agent, init_mcp
@@ -67,10 +70,10 @@ _EXECUTE_FORCE_WRITE_MSG = (
     "ESCRIBÍ el código AHORA:\n"
     "- NUNCA escribas/edites/borres tasks.md ni archivos de planificación (están "
     "protegidos — si lo intentás, la tool te lo va a rechazar).\n"
-    "- Si un archivo ya existe y necesitás modificarlo: usá write_file para "
-    "REESCRIBIR el archivo completo (no uses edit_file, no conocés el texto exacto).\n"
-    "- Si es un archivo nuevo: crealo con write_file.\n"
-    "Tratá cada archivo como si lo reescribieras entero con los cambios requeridos. "
+    "- Archivo NUEVO o chico (≤30 líneas): crealo/reescribilo con write_file.\n"
+    "- Archivo existente GRANDE: write_file está BLOQUEADO (la tool lo rechaza "
+    "para no destruir código). Usá edit_file con old_str/new_str EXACTOS "
+    "copiados del CONTENIDO REAL inyectado abajo.\n"
     "No intentes leer ni explorar. No razones en voz alta: ejecutá una tool call directa."
 )
 
@@ -161,9 +164,35 @@ def _is_ambiguous_execute(user_input: str, repo_path: str | None = None) -> bool
     return not _collect_cited_paths(text, repo_path)
 
 
+# Patrones de pregunta autocontenida: el usuario pegó el error + código inline,
+# no hay nada que explorar. El modelo (Qwen3.5 razonador) responde BIEN y rápido
+# en single-shot con 0 tools; con tools entra en loop de exploración+reasoning y
+# cuelga minutos. Ej: 'analizá este error "...PacientesPage.tsx: Unexpected
+# token" 50 | <line ... />"'.
+_SELFCONTAINED_ERROR_RE = re.compile(
+    r"(unexpected token|syntax error|parse error|expected .*token|"
+    r"eslint|\.tsx?\(\d+|\.jsx?\(\d+|:\d+:\d+|error TS\d|"
+    r"cannot read|is not defined|is not a function|is not defined)",
+    re.IGNORECASE,
+)
+_SELFCONTAINED_CODE_RE = re.compile(r"(```|<\w+[\s>]|=>|\{[^}]*\}|=\s*['\"]|;)")
+
+
+def _is_selfcontained_analysis(user_input: str) -> bool:
+    """True si la pregunta trae el error y código suficiente inline para
+    responder sin explorar el repo."""
+    text = user_input.strip()
+    if len(text) < 40:
+        return False
+    if not _SELFCONTAINED_ERROR_RE.search(text):
+        return False
+    return bool(_SELFCONTAINED_CODE_RE.search(text))
+
+
 def _derive_task_from_history(messages: list) -> str | None:
     """Devuelve el contenido del ÚLTIMO mensaje del asistente (análisis/plan/
-    review) como tarea derivada. Retorna None si no hay historial útil."""
+    review) como tarea derivada. Retorna None si el último turno del asistente
+    fue vacío o no hay historial útil."""
     for m in reversed(messages):
         if isinstance(m, AIMessage):
             content = str(m.content or "").strip()
@@ -253,23 +282,6 @@ def _build_chained_execute_suffix(task: str, target_files: list[str] | None = No
             "monorepo los archivos viven bajo frontend/src/ etc.\n"
             "- Aplicá el fix del hallazgo con edit_file o write_file.\n"
         )
-
-
-
-def _derive_task_from_history(messages: list) -> str | None:
-    """Devuelve el contenido del ÚLTIMO mensaje del asistente (análisis/plan/
-    review) como tarea derivada. Retorna None si el último turno del asistente
-    fue vacío o no hay historial útil."""
-    for m in reversed(messages):
-        if isinstance(m, AIMessage):
-            content = str(m.content or "").strip()
-            if len(content) >= 60:
-                return content
-            return None
-        if isinstance(m, HumanMessage):
-            # llegamos al turno previo del usuario sin respuesta asistente útil
-            return None
-    return None
 
 
 def _git_branch(repo_path: str) -> str:
@@ -468,6 +480,36 @@ class Session:
                     self._explore_budget, self._analyze_budget,
                     force_write=True,
                     read_cache=self._read_cache,
+                )
+            )
+        finally:
+            loop.close()
+
+    def _rebuild_agent_gate_retry(self):
+        """Reconstruye EXECUTE para el retry de la compuerta post-escritura.
+
+        DIFERENTE del retry write-only: corregir un error de compilación EXIGE
+        ver el estado real del archivo. Sin read_file el 4B alucina old_str,
+        edit_file falla, y termina reescribiendo el archivo entero de memoria
+        (destructivo: perdió imports/hooks en PacientesPage.tsx).
+
+        Usa GATE_RETRY_TOOLS: read_file + edit_file + verify, SIN búsqueda
+        (list_files/search_code — el error ya viene inyectado) y SIN git-write
+        (el fix no debe volver a commiteear). force_tool_calls=True para que
+        actúe (read_file → edit_file) y no monologue.
+        """
+        self.current_role = Role.EXECUTE
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            self.agent, self._local_count, self._mcp_count = loop.run_until_complete(
+                build_agent(
+                    self.llm, Role.EXECUTE, self.repo_path,
+                    self.cached_analysis, self._tools, self._dedupe,
+                    self._explore_budget, self._analyze_budget,
+                    read_cache=self._read_cache,
+                    tools_override=GATE_RETRY_TOOLS,
+                    force_tool_calls=True,
                 )
             )
         finally:
@@ -695,13 +737,29 @@ class Session:
         except Exception:
             return False
 
+    def _post_write_gate(self) -> tuple[bool, str]:
+        """Verifica que el código recién escrito compile. Fail-open: cualquier
+        excepción o escenario no soportado devuelve (True, '') para no bloquear."""
+        try:
+            from verify_gate import syntax_gate
+            return syntax_gate(self.repo_path)
+        except Exception:
+            return True, ""
+
     def run_turn(self, user_input: str, status: str | None = None) -> None:
         """Clasifica, cambia rol, ejecuta con historial, persiste en SQLite."""
         self._no_explore_retry = False
         intent = classify_intent(self.llm, user_input)
         new_role = role_for_intent(intent)
 
-        role_changed = self._rebuild_agent(new_role)
+        # Pregunta autocontenida (error + código inline): ANALYZE no necesita
+        # explorar. El Qwen3.5 razonador responde BIEN y rápido single-shot con
+        # 0 tools; con tools entra en loop exploración+reasoning y cuelga minutos.
+        # Reconstruimos con no_explore desde el inicio → path directo.
+        selfcontained = (
+            new_role == Role.ANALYZE and _is_selfcontained_analysis(user_input)
+        )
+        role_changed = self._rebuild_agent(new_role, no_explore=selfcontained)
         role_label = _ROLE_LABELS.get(new_role, "")
 
         if role_changed and new_role != Role.CHAT:
@@ -709,6 +767,9 @@ class Session:
 
         if status:
             print(status, flush=True)
+
+        if selfcontained:
+            console.print("[dim]📐 Pregunta autocontenida — respondiendo directo (explore=0).[/dim]\n")
 
         # Reset dedupe + explore budget cada turno (siempre restaurar defaults)
         self._dedupe.reset()
@@ -810,6 +871,7 @@ class Session:
         # escribe, el 2do con instrucción aún más estricta)
         max_attempts = 1 + (2 if REASONING_RETRY_ENABLED else 0)
         attempt = 0
+        gate_retries = 0
         interrupted = False
         interrupted_by_esc = False
 
@@ -852,6 +914,46 @@ class Session:
             try:
                 loop.run_until_complete(task)
                 self._last_response = task.result() if not task.cancelled() else ""
+                # Compuerta post-escritura (EXECUTE): si el código escrito no
+                # compila y el error apunta a un archivo que tocamos, reintentar
+                # UNA vez inyectando el error exacto. Red de seguridad para LLM
+                # chicos que escriben código roto sin verificarlo.
+                if (
+                    new_role == Role.EXECUTE
+                    and POST_WRITE_GATE_ENABLED
+                    and gate_retries < POST_WRITE_GATE_MAX_RETRIES
+                ):
+                    gate_ok, gate_err = self._post_write_gate()
+                    if not gate_ok:
+                        gate_retries += 1
+                        self._messages.append(HumanMessage(
+                            "⛔ El código que acabás de escribir NO compila.\n"
+                            f"Error del build:\n{gate_err}\n\n"
+                            "Corregí SOLO ese error, con cambios mínimos y quirúrgicos:\n"
+                            "1) Leé el archivo indicado con read_file para ver su estado EXACTO.\n"
+                            "2) Aplicá el fix con edit_file (old_str/new_str copiados del "
+                            "contenido REAL del archivo).\n"
+                            "write_file está BLOQUEADO para archivos existentes grandes "
+                            "(la tool lo rechaza para no destruir código): NO reescribas "
+                            "archivos enteros.\n"
+                            "NO respondas con texto ni repitas el análisis: ejecutá "
+                            "read_file → edit_file ahora."
+                        ))
+                        messages_for_agent = list(self._messages)
+                        # Budget: sin tools de búsqueda en GATE_RETRY_TOOLS, pero
+                        # read_file sí está limitado post-explore; reset para darle
+                        # margen de lecturas al fix.
+                        self._explore_budget.max_calls = 10
+                        self._explore_budget.max_reads_after_explore = 8
+                        self._explore_budget.max_tools_before_write = 30
+                        self._explore_budget.reset()
+                        self._dedupe.max_repeats = 2
+                        self._rebuild_agent_gate_retry()
+                        console.print(
+                            "\n[yellow]🔧 Compuerta: el build falló tras la escritura. "
+                            "Reintentando el fix con read_file + edit_file…[/yellow]\n"
+                        )
+                        continue
                 break
             except KeyboardInterrupt:
                 interrupted = True

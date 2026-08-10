@@ -21,7 +21,7 @@ from orchestration.tool_dedupe import (
 )
 from tools.mcp_client import load_mcp_tools, mcp_tool_count
 from tools.graph_trace import build_trace_component
-from tools import WRITE_ONLY_TOOLS
+from tools import GATE_RETRY_TOOLS, WRITE_ONLY_TOOLS
 
 # Solo ANALYZE/PLAN usan MCP. EXECUTE y REVIEW van locales-only:
 # (el 4B con 27+ schemas entra en loops y tool calls basura)
@@ -60,6 +60,8 @@ async def build_agent(
     force_write: bool = False,
     read_cache: dict | None = None,
     no_explore: bool = False,
+    tools_override: list | None = None,
+    force_tool_calls: bool = False,
 ) -> tuple:
     """Construye un agente LangChain con tools y prompt del rol indicado.
 
@@ -70,6 +72,15 @@ async def build_agent(
     search_code: el 4B entra en loops de lectura infinitos si las tiene
     disponibles, en vez de escribir. El contexto de tareas YA está en el
     prompt, así que no necesita leer más.
+
+    ``tools_override``: lista de tools locales explícita (p. ej.
+    GATE_RETRY_TOOLS para el retry de la compuerta post-escritura, que
+    necesita read_file + edit_file pero NO búsqueda ni git-write). Tiene
+    prioridad sobre force_write y tools_for_role(role).
+
+    ``force_tool_calls=True``: obliga al modelo a emitir tool calls siempre
+    (no puede responder con texto plano). Usado por el retry de la compuerta
+    (debe actuar, no monologar); force_write también lo activa.
 
     ``analyze_budget``: presupuesto de exploración para ANALYZE/PLAN
     (write_pressure=False): capa las búsquedas MCP sin presionar a escribir.
@@ -83,7 +94,10 @@ async def build_agent(
     contenido ahí. El retry write-only lo inyecta como anclaje para que el
     modelo reescriba archivos sin leer.
     """
-    local_tools = WRITE_ONLY_TOOLS if force_write else tools_for_role(role)
+    if tools_override is not None:
+        local_tools = list(tools_override)
+    else:
+        local_tools = WRITE_ONLY_TOOLS if force_write else tools_for_role(role)
     role_mcp = _mcp_for_role(role, mcp_tools)
     if no_explore:
         # Retry ANALYZE/PLAN: CERO tools. El 4B usa read_file/cm__get_code_snippet/
@@ -121,9 +135,12 @@ async def build_agent(
         extra_context += (
             "\n⛔ RETRY TRAS LOOP DE LECTURA: NO tenés tools de lectura "
             "(read_file/list_files/search_code). El contexto de la tarea y el "
-            "layout del repo YA están en el mensaje. ESCRIBÍ el código AHORA: "
-            "si un archivo existe, REEISCRIBILO completo con write_file "
-            "(no uses edit_file, no conocés el texto exacto). No intentes leer.\n"
+            "layout del repo YA están en el mensaje. ESCRIBÍ el código AHORA:\n"
+            "- Archivo NUEVO o chico: crealo/reescribilo con write_file.\n"
+            "- Archivo existente GRANDE: write_file está BLOQUEADO (la tool lo "
+            "rechaza para no destruir código). Usá edit_file con old_str/new_str "
+            "EXACTOS copiados del CONTENIDO REAL inyectado abajo.\n"
+            "No intentes leer.\n"
         )
     if no_explore:
         extra_context += (
@@ -157,9 +174,9 @@ async def build_agent(
         update_kwargs["max_reasoning_tokens"] = PLAN_MAX_REASONING_TOKENS
     if update_kwargs:
         role_llm = llm.model_copy(update=update_kwargs, deep=False)
-    if force_write:
-        # Retry write-only: obliga al modelo a emitir tool calls siempre
-        # (no puede responder con texto plano / monólogo circular).
+    if force_write or force_tool_calls:
+        # Retry write-only / compuerta: obliga al modelo a emitir tool calls
+        # siempre (no puede responder con texto plano / monólogo circular).
         role_llm = role_llm.model_copy(update={"force_tool_calls": True}, deep=False)
 
     agent = create_agent(role_llm, all_tools, system_prompt=system_prompt)

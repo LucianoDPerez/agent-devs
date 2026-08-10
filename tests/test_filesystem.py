@@ -49,6 +49,27 @@ class TestWriteFile:
         assert "Written" in result or "✅" in result
         assert (Path(repo) / "new.txt").read_text() == "hello world"
 
+    def test_write_small_existing_file_allowed(self):
+        """Sobrescribir un archivo existente CHICO (≤30 líneas) sigue permitido."""
+        repo = tempfile.mkdtemp()
+        p = Path(repo) / "small.txt"
+        p.write_text("a\nb\n", encoding="utf-8")
+        result = write_file.invoke({"path": str(p), "content": "new content"})
+        assert "Written" in result or "✅" in result
+        assert p.read_text(encoding="utf-8") == "new content"
+
+    def test_write_blocks_overwrite_of_large_existing_file(self):
+        """Guard anti-destrucción: write_file NO puede sobrescribir un archivo
+        existente grande (el 4B reescribiéndolo de memoria pierde código)."""
+        repo = tempfile.mkdtemp()
+        p = Path(repo) / "big.txt"
+        original = "\n".join(f"line {i}" for i in range(50)) + "\n"
+        p.write_text(original, encoding="utf-8")
+        result = write_file.invoke({"path": str(p), "content": "DESTRUYE TODO"})
+        assert "BLOQUEADO" in result
+        assert "edit_file" in result
+        assert p.read_text(encoding="utf-8") == original
+
 
 class TestEditFile:
     def test_edit_replaces_text(self):

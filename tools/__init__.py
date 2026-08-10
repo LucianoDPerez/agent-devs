@@ -50,6 +50,17 @@ WRITE_ONLY_TOOLS = [
     *_GIT_WRITE, *_VERIFY,
 ]
 
+# Retry de la compuerta post-escritura (error de compilación): corregir un
+# error EXIGE ver el archivo real — sin read_file el 4B alucina old_str y
+# termina reescribiendo el archivo entero de memoria (destructivo, ver
+# PacientesPage.tsx). SIN herramientas de búsqueda (list_files/search_code:
+# el error ya viene inyectado, no hay que explorar) y SIN git-write (el fix
+# no debe volver a commiteear).
+GATE_RETRY_TOOLS = [
+    read_file, edit_file, write_file, delete_file,
+    *_READONLY_GIT, *_VERIFY,
+]
+
 AGENTS: dict[str, list] = {
     "analyzer": ANALYZER_TOOLS,
     "planner": PLANNER_TOOLS,
