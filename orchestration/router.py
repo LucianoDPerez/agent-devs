@@ -18,6 +18,11 @@ _EXECUTE_VERBS = [
     "agregá un endpoint", "agrega un endpoint",
     "aplicá", "aplica", "aplicar",
     "corregí", "corrige", "corregir",
+    "solucioná", "soluciona", "solucionar",
+    "resolvé", "resuelve", "resolver",
+    "arreglá", "arregla", "arreglar",
+    "fix", "fixeá", "fixear",
+    "repará", "repara", "reparar",
 ]
 
 # Leading command patterns — detected from the first ~100 chars

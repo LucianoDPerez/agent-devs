@@ -125,19 +125,17 @@ def test_e2e_execute_prompt_steers_to_edit_file():
 
 
 def test_e2e_execute_prompt_has_bug_diagnostic_step():
-    """El prompt EXECUTE debe tener un paso de diagnóstico para bugs
-    que guíe al modelo a leer el componente, hook, API call."""
+    """El prompt EXECUTE debe tener un paso de diagn\u00f3stico para bugs
+    que gu\u00ede al modelo a usar trace_component, leer hook, API call."""
     from orchestration.agent_builder import load_prompt
     from core.roles import Role
 
     prompt = load_prompt(Role.EXECUTE)
-    assert "Diagnóstico previo" in prompt, "Missing bug diagnostic section"
-    assert "CAUSA RAÍZ" in prompt, "Must mention root cause analysis"
+    assert "ANALIZAR" in prompt, "Missing bug diagnostic section"
+    assert "CAUSA RA\u00cdZ" in prompt, "Must mention root cause analysis"
     assert "hook" in prompt.lower(), "Must mention reading data hooks"
-    assert "fetch" in prompt.lower() or "API" in prompt, "Must mention API/trace"
-    assert "lecturas de diagnóstico NO cuentan" in prompt, (
-        "Diagnostic reads must not count against the 2-read limit"
-    )
+    assert "API" in prompt or "backend" in prompt.lower(), "Must mention API/backend"
+    assert "trace_component" in prompt, "Must guide toward trace_component for diagnosis"
 
 
 def test_e2e_execute_prompt_has_mandatory_verification():
@@ -147,12 +145,12 @@ def test_e2e_execute_prompt_has_mandatory_verification():
     from core.roles import Role
 
     prompt = load_prompt(Role.EXECUTE)
-    assert "Verificación OBLIGATORIA" in prompt, "Missing mandatory verification section"
+    assert "VERIFICAR" in prompt, "Missing mandatory verification section"
     assert "run_lint" in prompt
     assert "run_tests" in prompt
     assert "run_build" in prompt
-    assert "sin excepción" in prompt, "Verification must be unconditional"
-    assert "No des la tarea por terminada" in prompt, (
+    assert "sin excepci\u00f3n" in prompt, "Verification must be unconditional"
+    assert "Reci\u00e9n entonces respond\u00e9 LISTO" in prompt or "respond\u00e9 LISTO" in prompt, (
         "Must block completion until verify is done"
     )
 
@@ -194,7 +192,8 @@ def test_e2e_verify_gate_exists_in_session():
     assert "Compuerta de verificación" in src, (
         "Verify gate comment must be present"
     )
-    assert "No ejecutaste run_lint" in src, (
+    gate_src = inspect.getsource(Session._inject_verify_gate)
+    assert "No ejecutaste run_lint" in gate_src, (
         "Verify gate message must mention run_lint/run_tests/run_build"
     )
 

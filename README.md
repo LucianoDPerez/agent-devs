@@ -114,7 +114,7 @@ main.py (thin)
 |-----|-------|-----------|
 | **🔍 Análisis** (analyzer) | 10 | Read-only: explorar, preguntar, entender. No codea. |
 | **📋 Planificación** (planner) | 11 | Read-only + write_file: diseña solución en .md. No codea. |
-| **🛠️ Ejecución** (executor) | 19 | All tools + lint/tests/build: codea, verifica, commitea, pushea, crea PRs. |
+| **🛠️ Ejecución** (executor) | 12 | Rol autónomo: analiza (trace_component), implementa (edit/write), verifica (lint/tests/build) e itera hasta que compile. |
 | **🔎 Revisión** (reviewer) | 14 | Read-only + lint/tests/build: revisa PRs, busca bugs, audita. Budget anti-loop. |
 | **💬 Charla** (chat) | 0 | Sin tools: conversación general. |
 

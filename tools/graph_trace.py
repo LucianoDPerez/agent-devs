@@ -23,10 +23,59 @@ from langchain_core.tools import StructuredTool, tool
 from tools._helpers import _read_text
 from tools.search import search_code
 
-_SNIPPET_MAX_CHARS = 6000
-_PAGE_MAX_CHARS = 6000
-_USAGES_MAX = 40
+# Output limits: el 4B no puede razonar sobre 16K chars de source. Reducido
+# para que el modelo procese el diagnóstico y pase a escribir.
+_SNIPPET_MAX_CHARS = 3000
+_PAGE_MAX_CHARS = 3000
+_USAGES_MAX = 20
 _PAGES_MAX = 2
+
+
+async def _resolve_project_key(
+    mcp_by_name: dict[str, Any], repo_path: str, requested: str = ""
+) -> str:
+    """Resuelve la key del proyecto indexado del repo (o valida `requested`).
+
+    El modelo 4B NO conoce la key exacta (ej. 'Users-luchop-PROYECTOS-IA-Medicos')
+    y la inventa → trace_component falla y el modelo repite la llamada hasta que
+    el dedupe lo corta. El SISTEMA resuelve: match por root_path → basename.
+    """
+    lp = mcp_by_name.get("cm__list_projects")
+    if lp is None:
+        return requested or ""
+    raw = await lp.ainvoke({})
+    text = ""
+    if isinstance(raw, list):
+        text = "".join(
+            b.get("text", "") for b in raw
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+    elif isinstance(raw, str):
+        text = raw
+    if not text:
+        return requested or ""
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return requested or ""
+    projects = data.get("projects", []) or []
+    names = [p.get("name", "") for p in projects]
+
+    if requested and requested in names:
+        return requested
+
+    repo_norm = repo_path.rstrip("/")
+    for p in projects:
+        rp = (p.get("root_path") or "").rstrip("/")
+        if rp == repo_norm:
+            return p.get("name", "")
+
+    import os
+    basename = os.path.basename(repo_norm).lower()
+    for p in projects:
+        if basename and basename in (p.get("root_path") or "").lower():
+            return p.get("name", "")
+    return ""
 
 
 def _extract_text(blocks: Any) -> str:
@@ -185,16 +234,36 @@ def build_trace_component(mcp_tools: list[StructuredTool], repo_path: str) -> St
     mcp_by_name = {t.name: t for t in mcp_tools}
 
     @tool
-    async def trace_component(component: str, project: str) -> str:
+    async def trace_component(component: str, project: str = "") -> str:
         """Traza una componente de un proyecto en una sola llamada: resuelve su
         qualified_name, devuelve su source completo, dónde se usa en el repo y
         el source de la PÁGINA que la renderiza. Es la cadena completa para
         diagnosticar un bug de UI. Usala PRIMERO; después solo respondés el
         análisis (no hace falta buscar más).
         component: nombre de la función/componente (ej. 'CreatePacienteModal').
-        project: key del proyecto indexado (ej. 'Users-luchop-PROYECTOS-IA-Medicos',
-        sacala de cm__list_projects).
+        project: key del proyecto indexado (opcional — si lo omitís o es
+        inválido, el sistema la resuelve automáticamente del repo actual).
         """
+        # El sistema resuelve la key correcta (el modelo la inventa a veces)
+        project = await _resolve_project_key(mcp_by_name, repo_path, project)
+        if not project:
+            lp = mcp_by_name.get("cm__list_projects")
+            extra = ""
+            if lp is not None:
+                try:
+                    raw = await lp.ainvoke({})
+                    t = _extract_text(raw)
+                    data = _parse_json(t)
+                    extra = " Proyectos disponibles: " + ", ".join(
+                        p.get("name", "") for p in (data.get("projects", []) or [])
+                    ) or ""
+                except Exception:
+                    pass
+            return (
+                "No se pudo resolver el project key del knowledge graph para "
+                f"'{repo_path}'.{extra} Usá cm__list_projects si está disponible."
+            )
+
         # 1) Resolver la componente en el grafo (exacto por nombre)
         sres = await _ainvoke_named(
             mcp_by_name, "cm__search_graph", query=component, project=project, limit=10

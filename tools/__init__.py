@@ -40,14 +40,37 @@ _VERIFY = [run_install, run_lint, run_tests, run_build]
 # Subsets por rol de agente. Read-only evita que compile modificadores.
 ANALYZER_TOOLS = [list_files, read_file, search_code, inspect_routes, *_READONLY_GIT]
 PLANNER_TOOLS = [list_files, read_file, search_code, inspect_routes, write_file, *_READONLY_GIT]
-EXECUTOR_TOOLS = list(ALL_TOOLS)
+# EXECUTE: SOLO las esenciales. 35 tools (21 locales + 14 MCP) diluía la
+# atención del modelo 4B — "olvidaba" que tenía edit_file y se escondía en
+# read_file infinitos. 12 tools + trace_component (compuesta, agrega agent_builder).
+EXECUTOR_TOOLS = [
+    read_file, write_file, edit_file, delete_file,
+    search_code, inspect_routes,
+    run_lint, run_tests, run_build,
+    stage_files, create_commit, push,
+]
 REVIEWER_TOOLS = [list_files, read_file, search_code, inspect_routes, *_READONLY_GIT, *_VERIFY]
 
 # Retry de EXECUTE tras loop de lectura: SOLO escritura + git-write + verify.
-# El 4B entra en loops de read_file infinitos si las tiene; sin ellas escribe.
+# TRULY write-only: SIN read_file (el modelo se escondía ahí) — el contenido
+# exacto de los archivos va inyectado en el mensaje (read_cache → anchor).
+# Sin list_files/search_code (nada que explorar) y sin run_install/create_pr.
 WRITE_ONLY_TOOLS = [
     write_file, edit_file, delete_file,
-    *_GIT_WRITE, *_VERIFY,
+    stage_files, create_commit, push,
+    run_lint, run_tests, run_build,
+]
+
+# Retry de EXECUTE tras NO escribir (budget/reasoning/no-write): read + edit +
+# write + search_code. SIN verify tools: el modelo las usaba como "acción
+# gratis" para esquivar la write pressure (corría run_lint/tests/build ANTES de
+# escribir, quemaba el presupuesto y nunca escribía — visto en E2E real).
+# search_code SÍ está: el modelo inventa paths de archivos (did-you-mean no
+# siempre alcanza) y sin búsqueda queda en dead end. El explore budget lo capa.
+# Después de escribir, la compuerta de verificación (sistema) inyecta verify.
+WRITE_RETRY_TOOLS = [
+    read_file, edit_file, write_file, delete_file,
+    search_code,
 ]
 
 # Retry de la compuerta post-escritura (error de compilación): corregir un

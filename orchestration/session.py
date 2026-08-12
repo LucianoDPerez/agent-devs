@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import subprocess
+import sys
 import time
 import uuid
 from typing import Any
@@ -14,10 +15,13 @@ from config import (
     AGENT_RECURSION_LIMIT,
     ANALYZE_EXPLORE_BUDGET,
     ANALYZE_MAX_READS_AFTER_EXPLORE,
+    EXECUTE_ASK_COMMIT,
     EXECUTE_EXPLORE_BUDGET,
     EXECUTE_MAX_READS_AFTER_EXPLORE,
     EXECUTE_MAX_TOOLS_BEFORE_WRITE,
     EXECUTE_RECURSION_LIMIT,
+    EXECUTE_MAX_REASONING_SECONDS,
+    EXECUTE_REQUIRE_WRITE,
     JUDGE_BASE_URL,
     PLAN_EXPLORE_BUDGET,
     PLAN_MAX_READS_AFTER_EXPLORE,
@@ -35,9 +39,10 @@ from config import (
     MAX_REASONING_SECONDS,
     MAX_TOOL_CALLS_PER_TURN,
 )
+from core.intents import Intent
 from core.roles import Role, role_for_intent
 from display.console import console, print_role_switch, print_turn_summary, stream_agent_turn, ReasoningOnlyResponse, ToolCallLimitExceeded
-from tools import GATE_RETRY_TOOLS
+from tools import GATE_RETRY_TOOLS, WRITE_RETRY_TOOLS, WRITE_ONLY_TOOLS
 from display.esc_watcher import EscWatcher
 from llm_wrapper import LocalLLM, get_usage, reset_turn_usage
 from orchestration.agent_builder import build_agent, init_mcp
@@ -45,12 +50,21 @@ from orchestration.execute_bootstrap import (
     _collect_cited_paths,
     build_paste_correction_suffix,
     extract_requested_task_numbers,
+    inject_repo_hints,
     preload_cited_files,
     preload_for_review,
 )
 from orchestration.framework_rules import inject_framework_rules
+from orchestration.path_mismatch import apply_mismatch_fixes, detect_path_mismatches
+from orchestration.runtime_diagnostics import runtime_status
 from orchestration.router import _extract_command_prefix, classify_intent
-from orchestration.tool_dedupe import ExploreBudget, ToolBudgetExceeded, ToolCallDedupe, VERIFY_TOOL_NAMES
+from orchestration.tool_dedupe import (
+    ExploreBudget,
+    ToolBudgetExceeded,
+    ToolCallDedupe,
+    VERIFY_TOOL_NAMES,
+    WRITE_TOOL_NAMES,
+)
 
 _ROLE_LABELS = {
     Role.ANALYZE: "🔍 Análisis", Role.PLAN: "📋 Planificación",
@@ -63,18 +77,20 @@ _CONTEXT_LIMIT = 28800
 _SUMMARY_THRESHOLD = 0.90
 _WARNING_THRESHOLD = 0.85
 
-# Mensaje para el retry write-only: el modelo TIENE read_file pero SIN
-# herramientas de exploración (list_files/search_code). Debe leer → editar
-# con old_str EXACTO del archivo real.
+# Mensaje para el retry EXECUTE: read_file DISPONIBLE pero LIMITADO (el modelo
+# 4B se cuelga razonando sin emitir tools si no puede completar su diagnóstico).
+# El write pressure (max_tools_before_write) corta las lecturas que sobren.
 _EXECUTE_FORCE_WRITE_MSG = (
-    "\n\n⛔ RETRY: tenés read_file pero NO tools de exploración (list_files/"
-    "search_code prohibidos).\n"
+    "\n\n⛔ RETRY: ya leíste/analizaste bastante. El turno anterior terminó sin "
+    "escribir nada y eso NO es válido para este rol.\n"
     "PROCEDÉ ASÍ:\n"
-    "1) Leé el archivo a modificar con read_file para ver su contenido EXACTO.\n"
-    "2) Aplicá el fix con edit_file (old_str=new_str COPIADOS del archivo real).\n"
-    "3) write_file SOLO para archivos NUEVOS (está bloqueado para existentes).\n"
+    "1) Si te falta información, leé MÁXIMO 2 archivos más con read_file "
+    "(solo los que vas a modificar).\n"
+    "2) LUEGO aplicá el fix con edit_file (copiá el bloque LITERAL + 2-5 "
+    "líneas de contexto; el matcher es tolerante a espacios).\n"
+    "3) write_file SOLO para archivos NUEVOS.\n"
     "4) Verificá con run_lint, run_tests, run_build.\n"
-    "NO explores. NO hagas list_files. NO respondas con texto: ejecutá tools."
+    "NO leas más de 2 archivos. NO respondas con texto: ejecutá tools AHORA."
 )
 
 def _load_judge_prompt() -> str:
@@ -89,6 +105,40 @@ _REVIEW_CORRECTION_KEYWORDS = (
     "implementar los cambios", "aplicar el review", "fix the",
     "implementar el review", "resolver los hallazgos",
 )
+
+def _build_commit_message(user_input: str) -> str:
+    """Mensaje conventional commit derivado del pedido del usuario."""
+    prefix = _extract_command_prefix(user_input)
+    kind = (
+        "fix" if any(w in prefix for w in (
+            "fix", "solucion", "resuelv", "arregl", "repar", "correg", "bug"
+        )) else "feat"
+    )
+    summary = " ".join(prefix.split())[:70] or "autonomous edits"
+    return f"{kind}: {summary}"
+
+
+# Frases que sugieren un problema de RUNTIME (no de lógica): el sistema corre
+# el diagnóstico de puertos (container Docker con código viejo, dev server
+# caído) antes de que el modelo toque el código.
+_RUNTIME_ERROR_HINTS = (
+    "error interno", "internal server", "500",
+    "no guarda", "no me guarda", "no se guarda", "no guardó", "no guardo",
+    "no carga", "no se carga", "no funciona", "no anda", "no responde",
+)
+
+
+# Palabras que indican que el usuario quiere continuar con lo que estaba
+# haciendo (no son verbos de acción explícitos). Si el rol anterior era
+# EXECUTE, mantenerlo en vez de caer en ANALYZE.
+_CONTINUATION_WORDS = frozenset({
+    "continuar", "continua", "continúa", "continue",
+    "sigue", "seguí", "seguir",
+    "dale", "va", "vamos", "adelante",
+    "ok", "okay", "sí", "si", "yes",
+    "procedé", "procede", "proceder",
+    "hacelo", "hazlo", "do it",
+})
 
 
 def _is_review_correction(user_input: str) -> bool:
@@ -362,6 +412,16 @@ class Session:
         self._mcp_available: int = 0  # total MCP cargados
         self._mcp_count: int = 0      # MCP activos en el rol actual
         self._local_count: int = 0
+        # Tool calls reales del turno (los tool calls viven en el estado del
+        # grafo, NO en self._messages — la compuerta de verificación escaneaba
+        # self._messages y daba falsos positivos: "no corrió verify" cuando sí).
+        self._called_tools: set[str] = set()
+        # Resultado del diagnóstico de runtime del turno actual (True=entorno
+        # sano, False=hallazgos, None=no se ejecutó). Lo usa _closing_message
+        # para concluir "probablemente ya está resuelto" cuando corresponde.
+        self._runtime_healthy: bool | None = None
+        # Reporte completo del runtime (para la evidencia del cierre).
+        self._runtime_report: str | None = None
         self._dedupe = ToolCallDedupe(max_repeats=1)
         self._explore_budget = ExploreBudget(
             max_calls=EXECUTE_EXPLORE_BUDGET,
@@ -393,6 +453,17 @@ class Session:
         asyncio.set_event_loop(loop)
         try:
             self._tools, self._mcp_available = loop.run_until_complete(init_mcp())
+            # Resolver UNA vez la key del knowledge graph del repo actual:
+            # el 4B la inventa (trace_component fallaba y repetía la llamada).
+            self._graph_project = ""
+            try:
+                from tools.graph_trace import _resolve_project_key
+                by_name = {t.name: t for t in self._tools}
+                self._graph_project = loop.run_until_complete(
+                    _resolve_project_key(by_name, self.repo_path)
+                )
+            except Exception:
+                pass
             self.current_role = Role.ANALYZE
             self._load_previous_sessions()
             self.agent, self._local_count, self._mcp_count = loop.run_until_complete(
@@ -400,6 +471,7 @@ class Session:
                     self.llm, Role.ANALYZE, self.repo_path,
                     self.cached_analysis, self._tools, self._dedupe,
                     self._explore_budget, self._analyze_budget,
+                    tool_call_logger=self._called_tools,
                 )
             )
         finally:
@@ -457,22 +529,29 @@ class Session:
                     self._explore_budget, self._analyze_budget,
                     read_cache=self._read_cache,
                     no_explore=no_explore,
+                    tool_call_logger=self._called_tools,
                 )
             )
         finally:
             loop.close()
         return True
 
+    def _has_read_cache_content(self) -> bool:
+        """True si el cache tiene contenido ÚTIL de archivos (no solo errores
+        de trace_component ni entradas [trace:...])."""
+        return any(
+            not k.startswith("[") and len(v.strip()) > 30
+            for k, v in self._read_cache.items()
+        )
+
     def _rebuild_agent_write_only(self):
-        """Reconstruye el agente EXECUTE con tools de lectura + escritura + verify.
+        """Reconstruye el agente EXECUTE para el retry: WRITE_RETRY_TOOLS.
 
-        Antes usaba WRITE_ONLY_TOOLS (sin read_file), lo que forzaba al modelo
-        a editar a ciegas: sin poder leer el estado real del archivo, el old_str
-        de edit_file siempre fallaba → loop de reintentos → timeout.
-
-        Ahora usa GATE_RETRY_TOOLS: read_file + edit_file + verify. El write
-        pressure (max_tools_before_write=5, max_reads_after_explore=3) previene
-        loops infinitos de lectura que antes justificaban quitar read_file.
+        read_file + edit_file + write_file + delete_file SOLO (sin verify):
+        el modelo usaba run_lint/run_tests/run_build como "acción gratis" para
+        esquivar la write pressure (corría verify ANTES de escribir y nunca
+        escribía — E2E real). La compuerta de verificación (sistema) inyecta
+        verify después de escribir.
         """
         self.current_role = Role.EXECUTE
         loop = asyncio.new_event_loop()
@@ -483,13 +562,36 @@ class Session:
                     self.llm, Role.EXECUTE, self.repo_path,
                     self.cached_analysis, self._tools, self._dedupe,
                     self._explore_budget, self._analyze_budget,
-                    tools_override=GATE_RETRY_TOOLS,
+                    tools_override=WRITE_RETRY_TOOLS,
                     force_tool_calls=True,
                     read_cache=self._read_cache,
+                    tool_call_logger=self._called_tools,
                 )
             )
         finally:
             loop.close()
+
+    def _inject_verify_gate(self) -> None:
+        """Inyecta la compuerta de verificación (obliga a correr
+        run_lint/run_tests/run_build) y reconstruye el agente gate-retry."""
+        self._messages.append(HumanMessage(
+            "⚠️ No ejecutaste run_lint, run_tests ni run_build.\n"
+            "Es OBLIGATORIO verificar que el código compila y pasa "
+            "tests ANTES de dar la tarea por terminada.\n\n"
+            "Ejecutá AHORA (no respondas con texto — ejecutá las "
+            "tools directamente):\n"
+            f"  run_lint(path=\"{self.repo_path}\")\n"
+            f"  run_tests(path=\"{self.repo_path}\")\n"
+            f"  run_build(path=\"{self.repo_path}\")\n"
+            "\nSi alguna falla, CORREGÍ el error y volvé a ejecutar "
+            "la verificación hasta que las tres pasen."
+        ))
+        self._explore_budget.max_calls = 3
+        self._explore_budget.max_reads_after_explore = 4
+        self._explore_budget.max_tools_before_write = 6
+        self._explore_budget.reset()
+        self._dedupe.max_repeats = 2
+        self._rebuild_agent_gate_retry()
 
     def _rebuild_agent_gate_retry(self):
         """Reconstruye EXECUTE para el retry de la compuerta post-escritura.
@@ -516,6 +618,7 @@ class Session:
                     read_cache=self._read_cache,
                     tools_override=GATE_RETRY_TOOLS,
                     force_tool_calls=True,
+                    tool_call_logger=self._called_tools,
                 )
             )
         finally:
@@ -550,19 +653,34 @@ class Session:
         console.print("[green]✅ Resumen generado. Historial comprimido.[/green]\n")
 
     def _retry_with_read_anchor(self) -> str:
-        """Construye el mensaje de retry incluyendo el contenido cacheado de
-        archivos ya leídos. El modelo PUEDE re-leer con read_file (lo tiene
-        disponible), pero el contenido cacheado le ahorra tool calls."""
+        """Construye el mensaje de retry: contenido de archivos ya leídos
+        (ancla) + instrucción de leer MÁXIMO 2 archivos más y escribir YA.
+
+        El retry usa GATE_RETRY_TOOLS (read_file + edit_file): el modelo 4B se
+        cuelga razonando sin emitir tools si no tiene read_file (no converge en
+        qué escribir). El ancla minimiza las lecturas; el write pressure corta
+        las que sobren."""
         anchor = ""
         already_committed = self._repo_has_recent_commit()
         if self._read_cache:
             blocks = []
-            for path, content in list(self._read_cache.items())[:6]:
-                blocks.append(f"--- CONTENIDO DE {path} (ya leído, usalo como referencia) ---\n{content[:4000]}\n--- FIN {path} ---")
+            total = 0
+            for path, content in list(self._read_cache.items()):
+                if total >= 12000:
+                    break
+                take = min(len(content), 6000)
+                if take <= 30:
+                    continue
+                blocks.append(
+                    f"--- CONTENIDO DE {path} (ya leído — copiá el old_str "
+                    f"LITERAL de acá) ---\n{content[:take]}\n--- FIN {path} ---"
+                )
+                total += take
             if blocks:
                 anchor = (
-                    "\n\nCONTENIDO DE ARCHIVOS YA LEÍDOS (podés re-leerlos con "
-                    "read_file si necesitás verificar):\n" + "\n".join(blocks)
+                    "\n\nCONTENIDO DE ARCHIVOS YA LEÍDOS (usalo de referencia; "
+                    "el old_str de edit_file debe ser literal):\n"
+                    + "\n".join(blocks)
                 )
         if already_committed:
             return (
@@ -753,21 +871,115 @@ class Session:
 
     def _verify_tools_called(self, messages: list | None = None) -> bool:
         """True si run_lint, run_tests o run_build fue llamado en el turno actual.
-        Escanea los tool_calls en los mensajes provistos (por defecto self._messages,
-        pero en el loop de execute debe recibir messages_for_agent — la copia
-        local que el agente modificó con tool calls durante la ejecución)."""
-        msgs = messages if messages is not None else self._messages
-        recent = str(msgs[-16:]) if len(msgs) >= 16 else str(msgs)
-        return any(
-            name in recent
-            for name in ("run_lint", "run_tests", "run_build")
+
+        Usa ``self._called_tools`` (set que alimenta el wrapper de tools en
+        cada invocación real). Antes escaneaba ``self._messages`` — pero los
+        tool calls viven en el estado del grafo, NO en el historial de la
+        sesión, así que la compuerta daba falsos positivos y disparaba un
+        turno extra de verificación aunque el modelo YA había verificado."""
+        return bool(self._called_tools & VERIFY_TOOL_NAMES)
+
+    def _closing_message(self, base: str) -> str:
+        """Mensaje de cierre contexto-dependiente: si el entorno fue chequeado
+        y está SANO, y el turno no logró escribir, la conclusión honesta es
+        que el problema probablemente ya está resuelto — no "no logré escribir
+        el fix" a secas (feedback real del usuario: el bug estaba arreglado y
+        el agente nunca se lo dijo). Incluye EVIDENCIA de lo revisado:
+        archivos leídos, herramientas usadas y el reporte de runtime."""
+        if not self._runtime_healthy:
+            return base
+        msg = (
+            "\n\n✓ No se aplicaron cambios de código. El entorno está SANO "
+            "(backend responde, sin containers Docker pisando puertos) y "
+            "no se encontró un bug evidente — es probable que el problema "
+            "ya esté resuelto.\n"
+            "Probá la acción de nuevo en tu app. Si el error persiste, "
+            "decime exactamente qué respuesta ves (mensaje, pantalla, "
+            "endpoint) y lo investigo más fino."
         )
+        evidence: list[str] = []
+        if self._runtime_report:
+            evidence.append(
+                "Runtime:\n"
+                + "\n".join(f"    {ln}" for ln in self._runtime_report.splitlines())
+            )
+        files = sorted(
+            k for k in self._read_cache
+            if k and not k.startswith("[") and not k.startswith("(")
+        )
+        if files:
+            evidence.append(
+                "Archivos inspeccionados:\n"
+                + "\n".join(f"    - {f}" for f in files[:12])
+                + ("\n    …" if len(files) > 12 else "")
+            )
+        tools = sorted(self._called_tools)
+        if tools:
+            evidence.append("Herramientas usadas: " + ", ".join(tools))
+        if evidence:
+            msg += "\n\n📋 Evidencia de lo revisado:\n" + "\n".join(evidence)
+        return msg
+
+    def _maybe_ask_commit(self, user_input: str) -> None:
+        """Tras un turno EXECUTE con cambios sin commitear, preguntar al usuario.
+
+        Nunca commit automático (estilo aider con /undo no aplica acá: el
+        usuario quiere control). Si stdin no es tty (tests/scripts) o el repo
+        no es git, se omite silenciosamente. Fail-open: nunca rompe el flujo.
+        """
+        if not EXECUTE_ASK_COMMIT or not sys.stdin.isatty():
+            return
+        try:
+            import subprocess
+            proc = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=self.repo_path, capture_output=True, text=True, timeout=5,
+            )
+            if proc.returncode != 0 or not proc.stdout.strip():
+                return
+        except Exception:
+            return
+
+        try:
+            answer = input("📦 Hay cambios sin commitear. ¿Los commiteo? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print()
+            return
+        if answer not in ("y", "yes", "s", "si", "sí"):
+            console.print("[dim]OK, no se commitea.[/dim]")
+            return
+
+        try:
+            subprocess.run(
+                ["git", "add", "-A"],
+                cwd=self.repo_path, capture_output=True, text=True, timeout=10,
+            )
+            message = _build_commit_message(user_input)
+            result = subprocess.run(
+                ["git", "commit", "-m", message],
+                cwd=self.repo_path, capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                console.print(f"[green]✅ Commit creado: {message}[/green]")
+            else:
+                console.print(f"[dim]Commit falló: {(result.stderr or '').strip()[:200]}[/dim]")
+        except Exception as e:
+            console.print(f"[dim]Commit falló: {e}[/dim]")
 
     def run_turn(self, user_input: str, status: str | None = None) -> None:
         """Clasifica, cambia rol, ejecuta con historial, persiste en SQLite."""
         self._no_explore_retry = False
         intent = classify_intent(self.llm, user_input)
         new_role = role_for_intent(intent)
+
+        # Continuación: palabras como "continuar", "sigue", "dale" no son
+        # verbos EXECUTE pero el usuario claramente quiere seguir con lo
+        # que estaba haciendo. Mantener el rol del turno anterior si era
+        # EXECUTE o REVIEW (nunca forzar ANALYZE/PLAN).
+        if intent == Intent.ANALYZE and self.current_role in (Role.EXECUTE, Role.REVIEW):
+            prefix = _extract_command_prefix(user_input).lower().strip()
+            if prefix in _CONTINUATION_WORDS:
+                new_role = self.current_role
 
         # Pregunta autocontenida (error + código inline): ANALYZE no necesita
         # explorar. El Qwen3.5 razonador responde BIEN y rápido single-shot con
@@ -792,6 +1004,9 @@ class Session:
         self._dedupe.reset()
         self._explore_budget.reset()
         self._analyze_budget.reset()
+        self._called_tools.clear()
+        self._runtime_healthy = None
+        self._runtime_report = None
         if new_role == Role.EXECUTE:
             self._explore_budget.max_calls = EXECUTE_EXPLORE_BUDGET
             self._explore_budget.max_reads_after_explore = EXECUTE_MAX_READS_AFTER_EXPLORE
@@ -811,6 +1026,47 @@ class Session:
         agent_input = user_input
         if new_role == Role.EXECUTE:
             agent_input = preload_cited_files(user_input, self.repo_path)
+            # EXECUTE SIEMPRE recibe el mapa del repo (layout + símbolos), haya
+            # paths citados o no. Sin esto, el modelo chico está ciego a la
+            # estructura (E2E f2: leyó la raíz del repo como archivo 3 veces)
+            # y quema el presupuesto explorando. Escalable: aplica a cualquier
+            # repo, cualquier stack.
+            if "CONTEXTO DE REPO PRECARGADO" not in agent_input:
+                repo_hints = inject_repo_hints(self.repo_path)
+                if repo_hints:
+                    agent_input = agent_input + "\n\n" + repo_hints
+            if self._graph_project:
+                # El 4B inventa la key del grafo y trace_component falla;
+                # inyectarla determinísticamente evita el loop de reintentos.
+                agent_input = (
+                    f"{agent_input}\n\n[KNOWLEDGE GRAPH] Project key de este repo: "
+                    f"'{self._graph_project}'. Si usás trace_component, pasá "
+                    f"project='{self._graph_project}' (o omitilo: el sistema "
+                    f"lo resuelve solo)."
+                )
+            # Detección + FIX determinístico de mismatch frontend↔backend.
+            # El modelo chico no hace este diagnóstico cross-file y aplica
+            # fixes mecánicos a medias (E2E: arregló 6 paths, se saltó 6).
+            # El SISTEMA detecta y aplica el codemod; el modelo solo verifica.
+            if detect_path_mismatches(self.repo_path):
+                fix_report = apply_mismatch_fixes(self.repo_path)
+                if fix_report:
+                    agent_input = f"{agent_input}\n\n{fix_report}"
+                    console.print("[dim]🔧 PATH FIX aplicado por el sistema (codemod determinístico).[/dim]\n")
+            # Diagnóstico de RUNTIME: si el usuario reporta errores de servidor
+            # ("Error interno del servidor", 500, no guarda...), el problema
+            # puede ser del ENTORNO (container Docker con código viejo pisando
+            # el puerto, dev server caído) — el modelo no puede descubrirlo
+            # (sin shell) y el error handler esconde la causa real.
+            # runtime_status SIEMPRE reporta: el modelo debe saber que el
+            # entorno fue chequeado (tanto si está roto como si está sano).
+            if any(k in _extract_command_prefix(user_input).lower() for k in _RUNTIME_ERROR_HINTS):
+                runtime_report = runtime_status(self.repo_path)
+                if runtime_report:
+                    agent_input = f"{agent_input}\n\n{runtime_report}"
+                    self._runtime_healthy = "entorno SANO" in runtime_report
+                    self._runtime_report = runtime_report
+                    console.print("[dim]🩺 RUNTIME: diagnóstico de puertos ejecutado.[/dim]\n")
             if agent_input != user_input:
                 nums = extract_requested_task_numbers(user_input)
                 scope = f" (solo Tarea(s) {', '.join(map(str, nums))})" if nums else ""
@@ -820,9 +1076,11 @@ class Session:
                 # El 4B con max_calls=1 recibe strings STOP y los ignora, quemando el
                 # recursion limit sin escribir. Con 0, la excepción corta de inmediato.
                 if hints_on:
-                    self._explore_budget.max_calls = 0
-                    self._explore_budget.max_reads_after_explore = 5
-                    self._explore_budget.max_tools_before_write = 8
+                    # MCP + trace_component activos: 1 exploración para tracear
+                    # el componente, luego solo leer + escribir.
+                    self._explore_budget.max_calls = 1
+                    self._explore_budget.max_reads_after_explore = 3
+                    self._explore_budget.max_tools_before_write = 4
                     self._dedupe.max_repeats = 1
                 extra = " · explore=0 (hints)" if hints_on else ""
                 console.print(
@@ -895,13 +1153,20 @@ class Session:
         while attempt < max_attempts:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            # require_write solo aplica a retries write-only de EXECUTE/REVIEW.
-            # ANALYZE/PLAN NUNCA deben ser forzados a escribir (el usuario los
-            # usa para analizar/planificar, no para tocar el repo).
-            is_write_retry = (
+            # require_write: EXECUTE desde el INTENTO 1 (EXECUTE_REQUIRE_WRITE):
+            # si el modelo termina el turno en texto sin NINGUNA tool de
+            # escritura, stream_agent_turn lanza ReasoningOnlyResponse → retry
+            # write-only. Antes solo aplicaba a retries y el 4B "escapaba"
+            # respondiendo un análisis sin tocar el repo.
+            # REVIEW y ANALYZE/PLAN NUNCA se fuerzan a escribir.
+            require_write = (
+                new_role == Role.EXECUTE
+                and EXECUTE_REQUIRE_WRITE
+                and REASONING_RETRY_ENABLED
+            ) or (
                 attempt > 0
                 and REASONING_RETRY_ENABLED
-                and new_role not in (Role.ANALYZE, Role.PLAN)
+                and new_role == Role.REVIEW
             )
             task = loop.create_task(
                 stream_agent_turn(
@@ -914,11 +1179,18 @@ class Session:
                     # Cortar por MAX_REASONING_SECONDS mata justo antes de la
                     # respuesta (verificado: responde en ~387s con ancla).
                     # idle_timeout cubre un modelo realmente colgado.
+                    # EXECUTE: 90s por bloque de razonamiento (el 4B razona
+                    # 30-60s antes de cada tool call; si razona más, se colgó).
                     max_reasoning_seconds=(
-                        None if self._no_explore_retry else MAX_REASONING_SECONDS
+                        None if self._no_explore_retry
+                        else (
+                            EXECUTE_MAX_REASONING_SECONDS
+                            if new_role == Role.EXECUTE
+                            else MAX_REASONING_SECONDS
+                        )
                     ),
                     max_tool_calls=MAX_TOOL_CALLS_PER_TURN,
-                    require_write=is_write_retry,
+                    require_write=require_write,
                 )
             )
 
@@ -980,12 +1252,12 @@ class Session:
                             "read_file → edit_file ahora."
                         ))
                         messages_for_agent = list(self._messages)
-                        # Budget: sin tools de búsqueda en GATE_RETRY_TOOLS, pero
-                        # read_file sí está limitado post-explore; reset para darle
-                        # margen de lecturas al fix.
-                        self._explore_budget.max_calls = 10
-                        self._explore_budget.max_reads_after_explore = 8
-                        self._explore_budget.max_tools_before_write = 30
+                        # Budget ajustado: sin tools de búsqueda en GATE_RETRY_TOOLS,
+                        # pero read_file sí está limitado post-explore; reset con
+                        # margen controlado para lecturas del fix (no infinito).
+                        self._explore_budget.max_calls = 3
+                        self._explore_budget.max_reads_after_explore = 4
+                        self._explore_budget.max_tools_before_write = 6
                         self._explore_budget.reset()
                         self._dedupe.max_repeats = 2
                         self._rebuild_agent_gate_retry()
@@ -1004,28 +1276,9 @@ class Session:
                     and not self._verify_tools_called(messages_for_agent)
                 ):
                     gate_retries += 1
-                    self._messages.append(HumanMessage(
-                        "⚠️ No ejecutaste run_lint, run_tests ni run_build.\n"
-                        "Es OBLIGATORIO verificar que el código compila y pasa "
-                        "tests ANTES de dar la tarea por terminada.\n\n"
-                        "Ejecutá AHORA (no respondas con texto — ejecutá las "
-                        "tools directamente):\n"
-                        f"  run_lint(path=\"{self.repo_path}\")\n"
-                        f"  run_tests(path=\"{self.repo_path}\")\n"
-                        f"  run_build(path=\"{self.repo_path}\")\n"
-                        "\nSi alguna falla, CORREGÍ el error y volvé a ejecutar "
-                        "la verificación hasta que las tres pasen."
-                    ))
-                    messages_for_agent = list(self._messages)
-                    self._explore_budget.max_calls = 10
-                    self._explore_budget.max_reads_after_explore = 8
-                    self._explore_budget.max_tools_before_write = 30
-                    self._explore_budget.reset()
-                    self._dedupe.max_repeats = 2
-                    self._rebuild_agent_gate_retry()
+                    self._inject_verify_gate()
                     console.print(
-                        "\n[yellow]🔍 Verificación: el modelo no corrió verify "
-                        "tools. Inyectando gate de verificación…[/yellow]\n"
+                        "\n[dim]↻ Verificando los cambios (lint/tests/build)…[/dim]\n"
                     )
                     continue
                 break
@@ -1045,8 +1298,12 @@ class Session:
                 if attempt + 1 >= max_attempts:
                     interrupted = True
                     print(
-                        f"\n\n⚡ Presupuesto de tools agotado: {e} "
-                        "Reintentá pidiendo implementar directamente o con un path más concreto.",
+                        self._closing_message(
+                            "\n\n↻ Este turno no logró escribir el fix. "
+                            "Podés reintentar con un prompt más específico "
+                            "(archivo, endpoint o línea concreta) o pedir un "
+                            "análisis primero."
+                        ),
                         flush=True,
                     )
                     break
@@ -1070,8 +1327,8 @@ class Session:
                 self._explore_budget.reset()
                 self._rebuild_agent_write_only()
                 console.print(
-                    f"\n[yellow]⚠️  Tool budget agotado: {e}. "
-                    "Reintentando con read_file + edit_file (sin exploración)...[/yellow]"
+                    "\n[dim]↻ Presupuesto de exploración agotado. Reintentando "
+                    "con lectura acotada + escritura…[/dim]"
                 )
                 continue
             except ReasoningOnlyResponse as e:
@@ -1080,6 +1337,15 @@ class Session:
                         print(
                             f"\n\n⚠️  El modelo hizo {e.total_calls} tool calls (límite {e.limit}) "
                             "y entró en loop. Reinicia con /new o reduce el prompt.",
+                            flush=True,
+                        )
+                    elif getattr(e, "reason", "") == "no-write":
+                        print(
+                            self._closing_message(
+                                "\n\n↻ El modelo no logró escribir el cambio. "
+                                "Reintentá con un prompt más específico "
+                                "(archivo o línea concreta) o pedí un análisis primero."
+                            ),
                             flush=True,
                         )
                     else:
@@ -1104,30 +1370,94 @@ class Session:
                 self._messages = self._messages[-3:] if len(self._messages) > 3 else self._messages
                 self._messages.append(HumanMessage(self._retry_with_read_anchor()))
                 messages_for_agent = list(self._messages)
+                # Reset dedupe + budget: el intento anterior dejó el contador
+                # alto (total=5) y la primera tool no-productiva del retry
+                # cortaba al instante (bug detectado en E2E).
+                self._dedupe.reset()
+                self._dedupe.max_repeats = 2
+                self._explore_budget.reset()
                 self._rebuild_agent_write_only()
                 if isinstance(e, ToolCallLimitExceeded):
                     console.print(
-                        f"\n[yellow]⚠️  El modelo hizo {e.total_calls} tool calls (loop de reads). "
-                        "Reintentando con SOLO tools de escritura (sin read_file)...[/yellow]"
+                        f"\n[dim]↻ Muchas tool calls seguidas ({e.total_calls}). "
+                        "Reintentando con lectura acotada + escritura…[/dim]"
+                    )
+                elif getattr(e, "reason", "") == "no-write":
+                    console.print(
+                        "\n[dim]↻ Reintentando con lectura acotada + escritura…[/dim]"
                     )
                 else:
                     console.print(
-                        f"\n[yellow]⚠️  El modelo gastó {len(e.reasoning_text)} chars en razonamiento "
-                        "sin actuar. Reintentando con SOLO tools de escritura (sin read_file)...[/yellow]"
+                        "\n[dim]↻ El modelo no produjo acción. Reintentando con "
+                        "lectura acotada + escritura…[/dim]"
                     )
                 continue
             except Exception as e:
                 name = type(e).__name__
-                if "Recursion" in name or "recursion" in str(e).lower():
+                err_text = str(e)
+                # Error de GRAMMAR de llama.cpp (peg-gemma4): el modelo emitió
+                # un tool call malformado tras escribir (con tool_choice=required
+                # no puede terminar en texto y el retry sin verify no le da una
+                # acción natural). Si YA escribió, el fix está aplicado: pasar
+                # a las compuertas de verificación (que SÍ tienen verify tools).
+                # Si NO escribió: retry con un nudge para que emita output válido.
+                if "peg-gemma4" in err_text or "does not match the expected" in err_text:
+                    wrote = bool(self._called_tools & WRITE_TOOL_NAMES)
+                    if wrote and new_role == Role.EXECUTE:
+                        # El modelo escribió y el parser de tool calls rechazó
+                        # su respuesta de cierre (con tool_choice=required no
+                        # puede terminar en texto). El fix quedó aplicado:
+                        # seguimos con la compuerta de verificación real.
+                        console.print(
+                            "\n[green]✓ Cambios aplicados. Verificando el resultado…[/green]"
+                        )
+                        if gate_retries < POST_WRITE_GATE_MAX_RETRIES and not (
+                            self._verify_tools_called(messages_for_agent)
+                        ):
+                            gate_retries += 1
+                            self._inject_verify_gate()
+                            console.print(
+                                "\n[dim]↻ Verificando los cambios (lint/tests/build)…[/dim]\n"
+                            )
+                            continue
+                        break
+                    if attempt + 1 >= max_attempts:
+                        print(
+                            self._closing_message(
+                                "\n\n↻ El modelo tuvo problemas para emitir "
+                                "una respuesta válida (parser de tool calls). "
+                                "Reintentá con un prompt más específico o pedí "
+                                "un análisis primero."
+                            ),
+                            flush=True,
+                        )
+                        break
+                    attempt += 1
+                    self._messages.append(HumanMessage(
+                        "⚠️ Tu último output no fue válido (el parser de tool calls "
+                        "lo rechazó). Respondé con UNA tool call VÁLIDA: "
+                        "edit_file/write_file/read_file/search_code, o un texto breve."
+                    ))
+                    messages_for_agent = list(self._messages)
+                    self._dedupe.reset()
+                    self._explore_budget.reset()
+                    self._rebuild_agent_write_only()
+                    console.print(
+                        "\n[dim]↻ Reintentando con lectura acotada + escritura…[/dim]"
+                    )
+                    continue
+                if "Recursion" in name or "recursion" in err_text.lower():
                     lim = (
                         EXECUTE_RECURSION_LIMIT
                         if new_role == Role.EXECUTE
                         else AGENT_RECURSION_LIMIT
                     )
                     print(
-                        f"\n\n⚠️  Turno cortado: demasiados pasos de exploración "
-                        f"(límite {lim}). "
-                        "Reintentá pidiendo implementar directamente o con un path más concreto.",
+                        self._closing_message(
+                            f"\n\n↻ El turno se alargó demasiado ({lim} pasos) sin "
+                            "completar. Reintentá con un prompt más específico "
+                            "(archivo o endpoint concreto)."
+                        ),
                         flush=True,
                     )
                 else:
@@ -1168,6 +1498,11 @@ class Session:
             self._session_time,
             interrupt_source="ESC" if interrupted_by_esc else None,
         )
+
+        # Commit preguntado: tras un turno EXECUTE completo, si hay cambios
+        # sin commitear y el usuario no interrumpió, ofrecer commitear.
+        if new_role == Role.EXECUTE and not interrupted:
+            self._maybe_ask_commit(user_input)
 
         ctx_status = self._check_context()
         if ctx_status == "warning":
