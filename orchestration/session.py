@@ -1423,8 +1423,12 @@ class Session:
                         break
                     if attempt + 1 >= max_attempts:
                         print(
-                            "\n\n⚠️  El modelo emitió output inválido repetidamente "
-                            "(grammar de tool calls). Reinicia con /new o reducí el prompt.",
+                            self._closing_message(
+                                "\n\n↻ El modelo tuvo problemas para emitir "
+                                "una respuesta válida (parser de tool calls). "
+                                "Reintentá con un prompt más específico o pedí "
+                                "un análisis primero."
+                            ),
                             flush=True,
                         )
                         break
