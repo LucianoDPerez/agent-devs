@@ -158,6 +158,31 @@ class TestEditFileFuzzy:
         assert "PacientesPage" in result
         assert (Path(repo) / "PacientesPage.tsx").read_text() == self.CONTENT
 
+    def test_blocks_whole_file_rewrite(self):
+        """Guard anti-reescritura: edit_file con el archivo ENTERO como bloque
+        debe ser bloqueado (el modelo chico reescribe de memoria y rompe
+        interfaces/duplicados — bug real: useConsultasList/useMigracion)."""
+        content = "\n".join(f"const line_{i} = {i};" for i in range(60)) + "\n"
+        repo = _create_repo({"big.ts": content})
+        result = edit_file.invoke({
+            "path": str(Path(repo) / "big.ts"),
+            "old_str": content,          # archivo entero
+            "new_str": content + "// reescritura\n",
+        })
+        assert "QUIRÚRGICAS" in result
+        assert (Path(repo) / "big.ts").read_text() == content
+
+    def test_surgical_edit_still_allowed(self):
+        content = "\n".join(f"const line_{i} = {i};" for i in range(60)) + "\n"
+        repo = _create_repo({"big.ts": content})
+        result = edit_file.invoke({
+            "path": str(Path(repo) / "big.ts"),
+            "old_str": "const line_10 = 10;",
+            "new_str": "const line_10 = 100;",
+        })
+        assert "Replaced" in result or "✅" in result
+        assert "const line_10 = 100;" in (Path(repo) / "big.ts").read_text()
+
     def test_ambiguous_match_needs_more_context(self):
         repo = _create_repo({"a.ts": "const x = 1\nconst x = 1\n"})
         result = edit_file.invoke({

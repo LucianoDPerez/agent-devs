@@ -280,6 +280,27 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
 
     content = p.read_text(encoding="utf-8")
 
+    # GUARD ANTI-REESCRITURA MASIVA: el modelo chico usa edit_file con
+    # old_str/new_str = archivo ENTERO para "reescribir de memoria" — rompe
+    # el código (interfaces inválidas, funciones duplicadas 3 veces, TS1005…
+    # visto en E2E real: useConsultasList/useMigracion). write_file ya está
+    # bloqueado para archivos existentes; edit_file debe ser QUIRÚRGICO.
+    total_lines = len(content.splitlines())
+    block_lines = len(old_str.splitlines()) + len(new_str.splitlines())
+    if block_lines > 40 or (total_lines > 0 and len(old_str.splitlines()) > max(10, total_lines // 2)):
+        return (
+            f"⛔ edit_file es para ediciones QUIRÚRGICAS, no para reescribir "
+            f"archivos enteros.\n"
+            f"Tu bloque cubre {len(old_str.splitlines())} de {total_lines} líneas "
+            f"del archivo — reescribirlo de memoria rompe el código "
+            f"(imports, interfaces, duplicados).\n"
+            f"PROCEDÉ ASÍ:\n"
+            f"  1) read_file(path='{path}') para ver el contenido EXACTO.\n"
+            f"  2) edit_file con UN CAMBIO CHICO a la vez (máx ~20 líneas por "
+            f"bloque): la línea que cambiás + 2-5 de contexto.\n"
+            f"  3) Repetí para cada cambio. Verificá con run_lint/run_build."
+        )
+
     spans = _find_spans(content, old_str)
     if not spans:
         return (

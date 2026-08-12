@@ -192,7 +192,8 @@ def test_e2e_verify_gate_exists_in_session():
     assert "Compuerta de verificación" in src, (
         "Verify gate comment must be present"
     )
-    assert "No ejecutaste run_lint" in src, (
+    gate_src = inspect.getsource(Session._inject_verify_gate)
+    assert "No ejecutaste run_lint" in gate_src, (
         "Verify gate message must mention run_lint/run_tests/run_build"
     )
 

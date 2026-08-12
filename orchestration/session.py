@@ -56,8 +56,15 @@ from orchestration.execute_bootstrap import (
 )
 from orchestration.framework_rules import inject_framework_rules
 from orchestration.path_mismatch import apply_mismatch_fixes, detect_path_mismatches
+from orchestration.runtime_diagnostics import runtime_status
 from orchestration.router import _extract_command_prefix, classify_intent
-from orchestration.tool_dedupe import ExploreBudget, ToolBudgetExceeded, ToolCallDedupe, VERIFY_TOOL_NAMES
+from orchestration.tool_dedupe import (
+    ExploreBudget,
+    ToolBudgetExceeded,
+    ToolCallDedupe,
+    VERIFY_TOOL_NAMES,
+    WRITE_TOOL_NAMES,
+)
 
 _ROLE_LABELS = {
     Role.ANALYZE: "🔍 Análisis", Role.PLAN: "📋 Planificación",
@@ -109,6 +116,16 @@ def _build_commit_message(user_input: str) -> str:
     )
     summary = " ".join(prefix.split())[:70] or "autonomous edits"
     return f"{kind}: {summary}"
+
+
+# Frases que sugieren un problema de RUNTIME (no de lógica): el sistema corre
+# el diagnóstico de puertos (container Docker con código viejo, dev server
+# caído) antes de que el modelo toque el código.
+_RUNTIME_ERROR_HINTS = (
+    "error interno", "internal server", "500",
+    "no guarda", "no me guarda", "no se guarda", "no guardó", "no guardo",
+    "no carga", "no se carga", "no funciona", "no anda", "no responde",
+)
 
 
 # Palabras que indican que el usuario quiere continuar con lo que estaba
@@ -399,6 +416,12 @@ class Session:
         # grafo, NO en self._messages — la compuerta de verificación escaneaba
         # self._messages y daba falsos positivos: "no corrió verify" cuando sí).
         self._called_tools: set[str] = set()
+        # Resultado del diagnóstico de runtime del turno actual (True=entorno
+        # sano, False=hallazgos, None=no se ejecutó). Lo usa _closing_message
+        # para concluir "probablemente ya está resuelto" cuando corresponde.
+        self._runtime_healthy: bool | None = None
+        # Reporte completo del runtime (para la evidencia del cierre).
+        self._runtime_report: str | None = None
         self._dedupe = ToolCallDedupe(max_repeats=1)
         self._explore_budget = ExploreBudget(
             max_calls=EXECUTE_EXPLORE_BUDGET,
@@ -547,6 +570,28 @@ class Session:
             )
         finally:
             loop.close()
+
+    def _inject_verify_gate(self) -> None:
+        """Inyecta la compuerta de verificación (obliga a correr
+        run_lint/run_tests/run_build) y reconstruye el agente gate-retry."""
+        self._messages.append(HumanMessage(
+            "⚠️ No ejecutaste run_lint, run_tests ni run_build.\n"
+            "Es OBLIGATORIO verificar que el código compila y pasa "
+            "tests ANTES de dar la tarea por terminada.\n\n"
+            "Ejecutá AHORA (no respondas con texto — ejecutá las "
+            "tools directamente):\n"
+            f"  run_lint(path=\"{self.repo_path}\")\n"
+            f"  run_tests(path=\"{self.repo_path}\")\n"
+            f"  run_build(path=\"{self.repo_path}\")\n"
+            "\nSi alguna falla, CORREGÍ el error y volvé a ejecutar "
+            "la verificación hasta que las tres pasen."
+        ))
+        self._explore_budget.max_calls = 3
+        self._explore_budget.max_reads_after_explore = 4
+        self._explore_budget.max_tools_before_write = 6
+        self._explore_budget.reset()
+        self._dedupe.max_repeats = 2
+        self._rebuild_agent_gate_retry()
 
     def _rebuild_agent_gate_retry(self):
         """Reconstruye EXECUTE para el retry de la compuerta post-escritura.
@@ -834,6 +879,47 @@ class Session:
         turno extra de verificación aunque el modelo YA había verificado."""
         return bool(self._called_tools & VERIFY_TOOL_NAMES)
 
+    def _closing_message(self, base: str) -> str:
+        """Mensaje de cierre contexto-dependiente: si el entorno fue chequeado
+        y está SANO, y el turno no logró escribir, la conclusión honesta es
+        que el problema probablemente ya está resuelto — no "no logré escribir
+        el fix" a secas (feedback real del usuario: el bug estaba arreglado y
+        el agente nunca se lo dijo). Incluye EVIDENCIA de lo revisado:
+        archivos leídos, herramientas usadas y el reporte de runtime."""
+        if not self._runtime_healthy:
+            return base
+        msg = (
+            "\n\n✓ No se aplicaron cambios de código. El entorno está SANO "
+            "(backend responde, sin containers Docker pisando puertos) y "
+            "no se encontró un bug evidente — es probable que el problema "
+            "ya esté resuelto.\n"
+            "Probá la acción de nuevo en tu app. Si el error persiste, "
+            "decime exactamente qué respuesta ves (mensaje, pantalla, "
+            "endpoint) y lo investigo más fino."
+        )
+        evidence: list[str] = []
+        if self._runtime_report:
+            evidence.append(
+                "Runtime:\n"
+                + "\n".join(f"    {ln}" for ln in self._runtime_report.splitlines())
+            )
+        files = sorted(
+            k for k in self._read_cache
+            if k and not k.startswith("[") and not k.startswith("(")
+        )
+        if files:
+            evidence.append(
+                "Archivos inspeccionados:\n"
+                + "\n".join(f"    - {f}" for f in files[:12])
+                + ("\n    …" if len(files) > 12 else "")
+            )
+        tools = sorted(self._called_tools)
+        if tools:
+            evidence.append("Herramientas usadas: " + ", ".join(tools))
+        if evidence:
+            msg += "\n\n📋 Evidencia de lo revisado:\n" + "\n".join(evidence)
+        return msg
+
     def _maybe_ask_commit(self, user_input: str) -> None:
         """Tras un turno EXECUTE con cambios sin commitear, preguntar al usuario.
 
@@ -919,6 +1005,8 @@ class Session:
         self._explore_budget.reset()
         self._analyze_budget.reset()
         self._called_tools.clear()
+        self._runtime_healthy = None
+        self._runtime_report = None
         if new_role == Role.EXECUTE:
             self._explore_budget.max_calls = EXECUTE_EXPLORE_BUDGET
             self._explore_budget.max_reads_after_explore = EXECUTE_MAX_READS_AFTER_EXPLORE
@@ -965,6 +1053,20 @@ class Session:
                 if fix_report:
                     agent_input = f"{agent_input}\n\n{fix_report}"
                     console.print("[dim]🔧 PATH FIX aplicado por el sistema (codemod determinístico).[/dim]\n")
+            # Diagnóstico de RUNTIME: si el usuario reporta errores de servidor
+            # ("Error interno del servidor", 500, no guarda...), el problema
+            # puede ser del ENTORNO (container Docker con código viejo pisando
+            # el puerto, dev server caído) — el modelo no puede descubrirlo
+            # (sin shell) y el error handler esconde la causa real.
+            # runtime_status SIEMPRE reporta: el modelo debe saber que el
+            # entorno fue chequeado (tanto si está roto como si está sano).
+            if any(k in _extract_command_prefix(user_input).lower() for k in _RUNTIME_ERROR_HINTS):
+                runtime_report = runtime_status(self.repo_path)
+                if runtime_report:
+                    agent_input = f"{agent_input}\n\n{runtime_report}"
+                    self._runtime_healthy = "entorno SANO" in runtime_report
+                    self._runtime_report = runtime_report
+                    console.print("[dim]🩺 RUNTIME: diagnóstico de puertos ejecutado.[/dim]\n")
             if agent_input != user_input:
                 nums = extract_requested_task_numbers(user_input)
                 scope = f" (solo Tarea(s) {', '.join(map(str, nums))})" if nums else ""
@@ -1174,28 +1276,9 @@ class Session:
                     and not self._verify_tools_called(messages_for_agent)
                 ):
                     gate_retries += 1
-                    self._messages.append(HumanMessage(
-                        "⚠️ No ejecutaste run_lint, run_tests ni run_build.\n"
-                        "Es OBLIGATORIO verificar que el código compila y pasa "
-                        "tests ANTES de dar la tarea por terminada.\n\n"
-                        "Ejecutá AHORA (no respondas con texto — ejecutá las "
-                        "tools directamente):\n"
-                        f"  run_lint(path=\"{self.repo_path}\")\n"
-                        f"  run_tests(path=\"{self.repo_path}\")\n"
-                        f"  run_build(path=\"{self.repo_path}\")\n"
-                        "\nSi alguna falla, CORREGÍ el error y volvé a ejecutar "
-                        "la verificación hasta que las tres pasen."
-                    ))
-                    messages_for_agent = list(self._messages)
-                    self._explore_budget.max_calls = 3
-                    self._explore_budget.max_reads_after_explore = 4
-                    self._explore_budget.max_tools_before_write = 6
-                    self._explore_budget.reset()
-                    self._dedupe.max_repeats = 2
-                    self._rebuild_agent_gate_retry()
+                    self._inject_verify_gate()
                     console.print(
-                        "\n[yellow]🔍 Verificación: el modelo no corrió verify "
-                        "tools. Inyectando gate de verificación…[/yellow]\n"
+                        "\n[dim]↻ Verificando los cambios (lint/tests/build)…[/dim]\n"
                     )
                     continue
                 break
@@ -1215,8 +1298,12 @@ class Session:
                 if attempt + 1 >= max_attempts:
                     interrupted = True
                     print(
-                        f"\n\n⚡ Presupuesto de tools agotado: {e} "
-                        "Reintentá pidiendo implementar directamente o con un path más concreto.",
+                        self._closing_message(
+                            "\n\n↻ Este turno no logró escribir el fix. "
+                            "Podés reintentar con un prompt más específico "
+                            "(archivo, endpoint o línea concreta) o pedir un "
+                            "análisis primero."
+                        ),
                         flush=True,
                     )
                     break
@@ -1240,8 +1327,8 @@ class Session:
                 self._explore_budget.reset()
                 self._rebuild_agent_write_only()
                 console.print(
-                    f"\n[yellow]⚠️  Tool budget agotado: {e}. "
-                    "Reintentando con read_file + edit_file (sin exploración)...[/yellow]"
+                    "\n[dim]↻ Presupuesto de exploración agotado. Reintentando "
+                    "con lectura acotada + escritura…[/dim]"
                 )
                 continue
             except ReasoningOnlyResponse as e:
@@ -1254,10 +1341,11 @@ class Session:
                         )
                     elif getattr(e, "reason", "") == "no-write":
                         print(
-                            "\n\n⚠️  EXECUTE: el modelo no escribió ningún cambio "
-                            "ni siquiera en el retry write-only. "
-                            "Intentá con un path más concreto o describiendo "
-                            "el cambio exacto a hacer.",
+                            self._closing_message(
+                                "\n\n↻ El modelo no logró escribir el cambio. "
+                                "Reintentá con un prompt más específico "
+                                "(archivo o línea concreta) o pedí un análisis primero."
+                            ),
                             flush=True,
                         )
                     else:
@@ -1291,32 +1379,81 @@ class Session:
                 self._rebuild_agent_write_only()
                 if isinstance(e, ToolCallLimitExceeded):
                     console.print(
-                        f"\n[yellow]⚠️  El modelo hizo {e.total_calls} tool calls (loop de reads). "
-                        "Reintentando con read_file limitado + edit_file...[/yellow]"
+                        f"\n[dim]↻ Muchas tool calls seguidas ({e.total_calls}). "
+                        "Reintentando con lectura acotada + escritura…[/dim]"
                     )
                 elif getattr(e, "reason", "") == "no-write":
                     console.print(
-                        "\n[yellow]⚠️  El turno terminó sin escribir ningún archivo. "
-                        "Reintentando con read_file limitado + edit_file...[/yellow]"
+                        "\n[dim]↻ Reintentando con lectura acotada + escritura…[/dim]"
                     )
                 else:
                     console.print(
-                        f"\n[yellow]⚠️  El modelo gastó {len(e.reasoning_text)} chars en razonamiento "
-                        "sin actuar. Reintentando con read_file limitado + edit_file...[/yellow]"
+                        "\n[dim]↻ El modelo no produjo acción. Reintentando con "
+                        "lectura acotada + escritura…[/dim]"
                     )
                 continue
             except Exception as e:
                 name = type(e).__name__
-                if "Recursion" in name or "recursion" in str(e).lower():
+                err_text = str(e)
+                # Error de GRAMMAR de llama.cpp (peg-gemma4): el modelo emitió
+                # un tool call malformado tras escribir (con tool_choice=required
+                # no puede terminar en texto y el retry sin verify no le da una
+                # acción natural). Si YA escribió, el fix está aplicado: pasar
+                # a las compuertas de verificación (que SÍ tienen verify tools).
+                # Si NO escribió: retry con un nudge para que emita output válido.
+                if "peg-gemma4" in err_text or "does not match the expected" in err_text:
+                    wrote = bool(self._called_tools & WRITE_TOOL_NAMES)
+                    if wrote and new_role == Role.EXECUTE:
+                        # El modelo escribió y el parser de tool calls rechazó
+                        # su respuesta de cierre (con tool_choice=required no
+                        # puede terminar en texto). El fix quedó aplicado:
+                        # seguimos con la compuerta de verificación real.
+                        console.print(
+                            "\n[green]✓ Cambios aplicados. Verificando el resultado…[/green]"
+                        )
+                        if gate_retries < POST_WRITE_GATE_MAX_RETRIES and not (
+                            self._verify_tools_called(messages_for_agent)
+                        ):
+                            gate_retries += 1
+                            self._inject_verify_gate()
+                            console.print(
+                                "\n[dim]↻ Verificando los cambios (lint/tests/build)…[/dim]\n"
+                            )
+                            continue
+                        break
+                    if attempt + 1 >= max_attempts:
+                        print(
+                            "\n\n⚠️  El modelo emitió output inválido repetidamente "
+                            "(grammar de tool calls). Reinicia con /new o reducí el prompt.",
+                            flush=True,
+                        )
+                        break
+                    attempt += 1
+                    self._messages.append(HumanMessage(
+                        "⚠️ Tu último output no fue válido (el parser de tool calls "
+                        "lo rechazó). Respondé con UNA tool call VÁLIDA: "
+                        "edit_file/write_file/read_file/search_code, o un texto breve."
+                    ))
+                    messages_for_agent = list(self._messages)
+                    self._dedupe.reset()
+                    self._explore_budget.reset()
+                    self._rebuild_agent_write_only()
+                    console.print(
+                        "\n[dim]↻ Reintentando con lectura acotada + escritura…[/dim]"
+                    )
+                    continue
+                if "Recursion" in name or "recursion" in err_text.lower():
                     lim = (
                         EXECUTE_RECURSION_LIMIT
                         if new_role == Role.EXECUTE
                         else AGENT_RECURSION_LIMIT
                     )
                     print(
-                        f"\n\n⚠️  Turno cortado: demasiados pasos de exploración "
-                        f"(límite {lim}). "
-                        "Reintentá pidiendo implementar directamente o con un path más concreto.",
+                        self._closing_message(
+                            f"\n\n↻ El turno se alargó demasiado ({lim} pasos) sin "
+                            "completar. Reintentá con un prompt más específico "
+                            "(archivo o endpoint concreto)."
+                        ),
                         flush=True,
                     )
                 else:

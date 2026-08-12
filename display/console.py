@@ -123,9 +123,8 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                     elapsed = time.monotonic() - reasoning_since
                     if elapsed > max_reasoning_seconds:
                         console.print(
-                            f"\n⏱️  Razonamiento excesivo ({elapsed:.0f}s sin output). "
-                            "Cortando y reintentando...",
-                            style="yellow",
+                            f"\n[dim]↻ Modelo pensando sin producir output "
+                            f"({elapsed:.0f}s). Reintentando…[/dim]"
                         )
                         break
             else:
@@ -178,10 +177,8 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
 
     if require_write and not wrote_something:
         console.print(
-            "\n[red]⛔ EXECUTE: el turno terminó sin escribir ningún archivo "
-            "(el modelo solo leyó/analizó). Forzando retry con SOLO tools de "
-            "escritura.[/red]",
-            style="red",
+            "\n[dim]↻ El modelo terminó su turno sin escribir cambios. "
+            "Reintentando con foco en escritura…[/dim]"
         )
         raise ReasoningOnlyResponse("".join(response_parts), reason="no-write")
 

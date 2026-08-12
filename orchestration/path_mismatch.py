@@ -217,20 +217,49 @@ def _compute_findings(
     elif prefix_from_routes:
         resolved_routes = set(backend_routes)
     findings: list[dict] = []
-    seen: set[str] = set()
+    seen: set[tuple] = set()
     for literal, rel, line in frontend_paths:
         fn = _norm(literal)
-        # Dedupe por LITERAL EXACTO (no por normalizado): "/pacientes" y
-        # "/pacientes?page=..." son literales distintos y ambos necesitan fix
-        # (bug real: el create con path plano quedó sin arreglar).
-        if literal in seen:
+        # Dedupe por (literal, rel, line): el MISMO literal en líneas distintas
+        # necesita fix por separado (el codemod reemplaza por línea — bug real:
+        # getById y update con '/api/api/pacientes/${id}' en líneas distintas,
+        # solo se arreglaba la primera). No dedupe por normalizado: "/pacientes"
+        # y "/pacientes?page=..." son literales distintos.
+        key = (literal, rel, line)
+        if key in seen:
             continue
-        seen.add(literal)
+        seen.add(key)
         if not fn.startswith("/") or fn == "/":
             continue
         # ¿Ya es correcto? Con prefijos montados → ruta resuelta; sin
         # prefijos → match directo contra los literales del router.
         if api_prefixes:
+            # PREFIJO DUPLICADO: '/api/api/pacientes' empieza con '/api' y el
+            # check startswith() lo daba por correcto (bug real: 9 líneas
+            # rotas en Medicos invisibles para el detector). Corregir a
+            # '/api/pacientes' si el resto queda grounded.
+            dup_corrected = None
+            for p in api_prefixes:
+                if fn.startswith(p) and fn[len(p):].startswith(p):
+                    corrected = literal
+                    while corrected.startswith(p) and corrected[len(p):].startswith(p):
+                        corrected = corrected[len(p):]
+                    cnorm = _norm(corrected)
+                    if cnorm in resolved_routes or any(
+                        w in backend_resources for w in _resource_words(cnorm)
+                    ):
+                        dup_corrected = corrected
+                        break
+            if dup_corrected is not None:
+                findings.append({
+                    "literal": literal,
+                    "rel": rel,
+                    "line": line,
+                    "target": dup_corrected,
+                })
+                if len(findings) >= max_findings:
+                    break
+                continue
             if fn in resolved_routes:
                 continue
             if any(fn.startswith(p) for p in api_prefixes):

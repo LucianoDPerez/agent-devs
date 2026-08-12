@@ -187,3 +187,30 @@ class TestApplyFixes:
         ).read_text()
         assert "/api/api" not in content, f"Doble prefijo: {content}"
         assert content.count("/api/pacientes") == 3, content
+
+    def test_detects_existing_double_prefix(self):
+        """Regresión (bug real en Medicos): '/api/api/pacientes' YA presente
+        en el repo era INVISIBLE para el detector (startswith('/api') lo daba
+        por correcto). Ahora debe detectarse y corregirse a '/api/pacientes'."""
+        repo = _repo({
+            "frontend/src/application/services/api.ts": (
+                "export const pacientesApi = {\n"
+                "  list: () => apiClient.get(`/api/api/pacientes?page=${p}`),\n"
+                "  getById: (id) => apiClient.get(`/api/api/pacientes/${id}`),\n"
+                "};\n"
+            ),
+            "backend/src/server.ts": "app.use('/api', apiRoutes);\n",
+            "backend/src/interfaces/http/routes/index.ts": (
+                "router.use('/pacientes', pacientesRoutes);\n"
+            ),
+            "backend/src/interfaces/http/routes/pacientesRoutes.ts": (
+                "router.get('/', c.list);\n"
+            ),
+        })
+        report = apply_mismatch_fixes(repo)
+        assert "PATH FIX APLICADO" in report
+        content = (
+            Path(repo) / "frontend/src/application/services/api.ts"
+        ).read_text()
+        assert "/api/api" not in content, f"Quedó doble: {content}"
+        assert content.count("/api/pacientes") == 2, content
