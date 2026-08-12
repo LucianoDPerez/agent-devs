@@ -23,9 +23,15 @@ from tools.mcp_client import load_mcp_tools, mcp_tool_count
 from tools.graph_trace import build_trace_component
 from tools import GATE_RETRY_TOOLS, WRITE_ONLY_TOOLS
 
-# Solo ANALYZE/PLAN usan MCP. EXECUTE y REVIEW van locales-only:
-# (el 4B con 27+ schemas entra en loops y tool calls basura)
+# ANALYZE/PLAN usan las tools MCP crudas (search_graph, trace_path, etc).
+# EXECUTE NO recibe MCP crudo (el 4B se pierde entre 14 schemas y loops de
+# búsqueda) pero SÍ recibe trace_component: la tool compuesta que envuelve
+# search_graph + get_code_snippet + grep — poder MCP en UNA llamada.
+# Además EXECUTE recibe SOLO cm__list_projects (read-only, sin args, no puede
+# causar loops): le permite descubrir la project key correcta si la necesita.
 _ROLES_WITH_MCP = {Role.ANALYZE, Role.PLAN}
+_ROLES_WITH_TRACE = {Role.EXECUTE}
+_ROLES_WITH_PROJECT_TOOL = {Role.EXECUTE}
 
 _ROLE_TEMPERATURE = {
     Role.EXECUTE: 0.2,
@@ -43,6 +49,9 @@ async def init_mcp() -> tuple[list, int]:
 
 
 def _mcp_for_role(role: Role, mcp_tools: list | None) -> list:
+    if role in _ROLES_WITH_PROJECT_TOOL:
+        # EXECUTE: SOLO la tool de listar proyectos (descubrimiento de la key)
+        return [t for t in (mcp_tools or []) if t.name == "cm__list_projects"]
     if role not in _ROLES_WITH_MCP:
         return []
     return list(mcp_tools or [])
@@ -62,6 +71,7 @@ async def build_agent(
     no_explore: bool = False,
     tools_override: list | None = None,
     force_tool_calls: bool = False,
+    tool_call_logger: set | None = None,
 ) -> tuple:
     """Construye un agente LangChain con tools y prompt del rol indicado.
 
@@ -96,9 +106,12 @@ async def build_agent(
     """
     if tools_override is not None:
         local_tools = list(tools_override)
+        role_mcp = []  # retry/gate: nada de MCP (ni cm__list_projects)
     else:
         local_tools = WRITE_ONLY_TOOLS if force_write else tools_for_role(role)
-    role_mcp = _mcp_for_role(role, mcp_tools)
+        # force_write (retry write-only): tampoco MCP — el retry debe ser TRULY
+        # sin exploración (bug real: el modelo llamaba trace_component en el retry)
+        role_mcp = [] if force_write else _mcp_for_role(role, mcp_tools)
     if no_explore:
         # Retry ANALYZE/PLAN: CERO tools. El 4B usa read_file/cm__get_code_snippet/
         # trace_component como muleta y razona "qué más leer" en vez de responder.
@@ -108,10 +121,19 @@ async def build_agent(
         local_tools = []
         role_mcp = []
     all_tools = role_mcp + local_tools
-    # Tool compuesta para ANALYZE/PLAN: traza una componente en UNA llamada
-    # (resolver + source + usos). El 4B no puede orquestar esa cadena solo.
-    # En el retry no_explore NO se agrega: el sistema la usa para el ancla.
-    if role in _ROLES_WITH_MCP and mcp_tools and not no_explore:
+    # Tool compuesta para ANALYZE/PLAN/EXECUTE: traza una componente en UNA
+    # llamada (resolver + source + usos). El 4B no puede orquestar esa cadena
+    # solo. En el retry no_explore NO se agrega: el sistema la usa para el ancla.
+    # Con tools_override (retry write-only / gate) TAMPOCO: el retry debe ser
+    # TRULY sin exploración — el modelo llamaba trace_component en el retry
+    # write-only porque seguía disponible (bug real detectado en E2E).
+    if (
+        role in (_ROLES_WITH_MCP | _ROLES_WITH_TRACE)
+        and mcp_tools
+        and not no_explore
+        and tools_override is None
+        and not force_write
+    ):
         all_tools = [build_trace_component(mcp_tools, repo_path)] + all_tools
     if dedupe is not None:
         # EXECUTE y REVIEW reciben explore_budget (evita loops infinitos del 4B)
@@ -121,7 +143,10 @@ async def build_agent(
             budget = analyze_budget
         else:
             budget = None
-        all_tools = wrap_tools_with_dedupe(all_tools, dedupe, budget, read_cache)
+        all_tools = wrap_tools_with_dedupe(
+            all_tools, dedupe, budget, read_cache,
+            repo_path=repo_path, tool_call_logger=tool_call_logger,
+        )
 
     prompt_template = load_prompt(role)
     extra_context = ""
@@ -133,12 +158,14 @@ async def build_agent(
     fw_rules = inject_framework_rules(repo_path)
     if force_write:
         extra_context += (
-            "\n⛔ RETRY: tenés read_file pero NO tools de exploración.\n"
-            "1) Leé el archivo a modificar con read_file.\n"
-            "2) Aplicá el fix con edit_file (old_str=new_str EXACTOS).\n"
+            "\n⛔ RETRY: NO tenés read_file ni tools de exploración.\n"
+            "1) El CONTENIDO EXACTO de los archivos ya leídos está inyectado "
+            "en el mensaje (sección CONTENIDO DE ARCHIVOS YA LEÍDOS).\n"
+            "2) Aplicá el fix con edit_file (old_str=new_str copiados LITERALES "
+            "de ese contenido).\n"
             "3) write_file SOLO para archivos NUEVOS (bloqueado para existentes).\n"
             "4) Verificá con run_lint, run_tests, run_build.\n"
-            "No explores. No hagas list_files ni search_code.\n"
+            "No explores. No leas. ESCRIBÍ YA.\n"
         )
     if no_explore:
         extra_context += (
@@ -175,7 +202,16 @@ async def build_agent(
     if force_write or force_tool_calls:
         # Retry write-only / compuerta: obliga al modelo a emitir tool calls
         # siempre (no puede responder con texto plano / monólogo circular).
-        role_llm = role_llm.model_copy(update={"force_tool_calls": True}, deep=False)
+        # Y DESACTIVA el thinking: con tool_choice="required" + thinking activo,
+        # el modelo razona sin converger y nunca emite la tool call (bug real
+        # en E2E: retries de 90s+ con 0 tool calls, tanto Agents-A1 como Gemma).
+        role_llm = role_llm.model_copy(
+            update={
+                "force_tool_calls": True,
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
+            deep=False,
+        )
 
     agent = create_agent(role_llm, all_tools, system_prompt=system_prompt)
     return agent, len(local_tools), len(role_mcp)

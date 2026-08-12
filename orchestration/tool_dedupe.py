@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
@@ -224,17 +225,41 @@ def wrap_tools_with_dedupe(
     dedupe: ToolCallDedupe,
     explore_budget: ExploreBudget | None = None,
     read_cache: dict | None = None,
+    repo_path: str | None = None,
+    tool_call_logger: set | None = None,
 ) -> list:
     """Envuelve tools: dedupe idéntico + (opcional) explore/write guard.
 
     ``read_cache`` (dict path→content): si se provee, cada read_file exitoso
     almacena su contenido. El retry write-only inyecta ese contenido como
     anclaje para que el modelo pueda reescribir archivos sin necesidad de leer.
+
+    ``repo_path``: si se provee, los paths RELATIVOS que pasen las tools se
+    resuelven contra la raíz del repo (Gemma 4 tiende a pasar paths relativos;
+    sin resolución, read_file falla contra el CWD del proceso).
+
+    ``tool_call_logger`` (set): si se provee, cada tool invocada agrega su
+    nombre al set. La sesión lo usa para saber si el modelo corrió verify
+    tools (la compuerta de verificación NO puede ver los tool calls en el
+    estado del grafo — escanear self._messages daba falsos positivos).
     """
     wrapped: list[BaseTool] = []
     for t in tools:
-        wrapped.append(_wrap_one(t, dedupe, explore_budget, read_cache))
+        wrapped.append(_wrap_one(t, dedupe, explore_budget, read_cache, repo_path, tool_call_logger))
     return wrapped
+
+
+def _resolve_relative_path(path: str, repo_path: str | None) -> str:
+    """Convierte un path relativo a absoluto contra la raíz del repo.
+
+    Cualquier path que no arranque con / ~ . o un prefijo de drive se considera
+    relativo al repo (Gemma 4 pasa 'frontend/src/x.ts'; sin resolución,
+    read_file/edit_file fallan contra el CWD del proceso)."""
+    if not repo_path or not path:
+        return path
+    if path.startswith(("/", "~", "./", "../")) or (len(path) > 1 and path[1] == ":"):
+        return path
+    return str(Path(repo_path) / path)
 
 
 def _wrap_one(
@@ -242,8 +267,17 @@ def _wrap_one(
     dedupe: ToolCallDedupe,
     explore_budget: ExploreBudget | None,
     read_cache: dict | None = None,
+    repo_path: str | None = None,
+    tool_call_logger: set | None = None,
 ) -> BaseTool:
     name = tool.name
+
+    def _resolve_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+        # Paths relativos → absolutos contra la raíz del repo (Gemma 4 usa
+        # paths relativos y read_file/edit_file fallaban contra el CWD).
+        if repo_path and "path" in kwargs and isinstance(kwargs["path"], str):
+            kwargs = {**kwargs, "path": _resolve_relative_path(kwargs["path"], repo_path)}
+        return kwargs
 
     def _policy(kwargs: dict[str, Any]) -> tuple[str, Any]:
         """Presupuesto de exploración + dedupe.
@@ -252,6 +286,7 @@ def _wrap_one(
         la tool, o ("proceed", None) para ejecutarla. `ToolBudgetExceeded`
         (GraphBubbleUp) se re-lanza siempre: es la única forma de frenar el 4B.
         """
+        kwargs = _resolve_kwargs(kwargs)
         if explore_budget is not None:
             stop = explore_budget.consume(name, kwargs)
             if stop:
@@ -302,7 +337,15 @@ def _wrap_one(
             return
         if name == "read_file":
             path = kwargs.get("path")
-            if isinstance(result, str) and path:
+            # NO cachear errores (path inexistente, directorio): contaminan el
+            # ancla del retry con mensajes de error en vez de contenido útil.
+            if (
+                isinstance(result, str)
+                and path
+                and not result.startswith("File does not exist")
+                and "is a directory" not in result
+                and "does not exist" not in result[:80]
+            ):
                 read_cache[path] = result
         elif name == "trace_component":
             # El resultado de trace_component (source + página + usos) vive en el
@@ -313,17 +356,23 @@ def _wrap_one(
                 read_cache[f"[trace:{comp}]"] = result
 
     def _invoke(**kwargs):
+        kwargs = _resolve_kwargs(kwargs)
         action, value = _policy(kwargs)
         if action == "return":
             return value
+        if tool_call_logger is not None:
+            tool_call_logger.add(name)
         result = tool.invoke(kwargs)
         _cache_read(kwargs, result)
         return result
 
     async def _ainvoke(**kwargs):
+        kwargs = _resolve_kwargs(kwargs)
         action, value = _policy(kwargs)
         if action == "return":
             return value
+        if tool_call_logger is not None:
+            tool_call_logger.add(name)
         result = await tool.ainvoke(kwargs)
         _cache_read(kwargs, result)
         return result

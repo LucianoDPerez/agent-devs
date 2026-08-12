@@ -106,18 +106,25 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
 
             is_reasoning = bool(chunk.additional_kwargs.get("is_reasoning"))
 
-            if is_reasoning and not reasoning_started:
-                reasoning_started = True
-                reasoning_since = time.monotonic()
-                console.print("💭 [dim]Razonando…[/dim]")
-
             if is_reasoning:
                 reasoning_text.append(chunk.additional_kwargs.get("reasoning_content") or "")
-                if max_reasoning_seconds is not None and reasoning_since is not None:
+                # Timeout POR BLOQUE de razonamiento: el timer arranca cuando
+                # empieza el bloque y se resetea al emitir output (content o
+                # tool call). Si un MISMO bloque razona > límite sin emitir
+                # nada, cortar. Antes el timer era global y tras el primer
+                # output nunca más cortaba → el 4B razonaba 30-60s antes de
+                # cada tool call sin límite (turnos de 400-500s).
+                if reasoning_since is None:
+                    reasoning_since = time.monotonic()
+                    if not reasoning_started:
+                        reasoning_started = True
+                        console.print("💭 [dim]Razonando…[/dim]")
+                if max_reasoning_seconds is not None:
                     elapsed = time.monotonic() - reasoning_since
-                    if elapsed > max_reasoning_seconds and not produced_output:
+                    if elapsed > max_reasoning_seconds:
                         console.print(
-                            f"\n⏱️  Razonamiento excesivo ({elapsed:.0f}s sin output). Cortando y reintentando...",
+                            f"\n⏱️  Razonamiento excesivo ({elapsed:.0f}s sin output). "
+                            "Cortando y reintentando...",
                             style="yellow",
                         )
                         break
@@ -145,6 +152,10 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                         console.print(f"[blue]{escape(tc['args'])}[/blue]", end="", highlight=False)
                     saw_tool_call = True
                     produced_output = True
+                if produced_output:
+                    # Reset del timer: el próximo bloque de razonamiento
+                    # arranca con presupuesto fresco.
+                    reasoning_since = None
                 if tool_call_limit_hit:
                     break
     except StopAsyncIteration:
@@ -167,8 +178,9 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
 
     if require_write and not wrote_something:
         console.print(
-            "\n[red]⛔ EXECUTE retry: el modelo respondió sin escribir ningún archivo. "
-            "Forzando retry con instrucción de escritura estricta.[/red]",
+            "\n[red]⛔ EXECUTE: el turno terminó sin escribir ningún archivo "
+            "(el modelo solo leyó/analizó). Forzando retry con SOLO tools de "
+            "escritura.[/red]",
             style="red",
         )
         raise ReasoningOnlyResponse("".join(response_parts), reason="no-write")
@@ -203,12 +215,15 @@ def print_role_switch(role_label: str, local_count: int, mcp_count: int):
     console.print(f"\n[{role_label}] [dim]Tools: {local_count} locales + {mcp_count} graph[/dim]")
 
 
-def print_welcome(repo_path: str, model: str, url: str, temp: float, tool_counts: tuple):
+def print_welcome(repo_path: str, model: str, url: str, temp: float, tool_counts: tuple, branch: str = ""):
     from config import LLM_MAX_TOKENS
     local, mcp = tool_counts
+    repo_line = f"[bold cyan]📁 Repo:[/bold cyan] {repo_path}"
+    if branch:
+        repo_line += f"  [bold green]🌿 {branch}[/bold green]"
     info = (
         f"[bold cyan]🔌 LLM:[/bold cyan] {url}\n"
-        f"[bold cyan]📁 Repo:[/bold cyan] {repo_path}\n"
+        f"{repo_line}\n"
         f"[bold cyan]⚡ Modelo:[/bold cyan] {model} | Temp: {temp} | Max: {LLM_MAX_TOKENS}\n"
         f"[bold cyan]🛠️  Tools:[/bold cyan] {local} locales + {mcp} graph (cm__*)"
     )

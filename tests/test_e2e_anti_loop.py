@@ -137,50 +137,24 @@ def test_e2e_read_file_triggers_write_pressure():
 
 
 def test_e2e_verify_gate_correct_detection():
-    """_verify_tools_called debe detectar run_lint/run_tests/run_build en los
-    mensajes proporcionados, no en self._messages."""
+    """_verify_tools_called debe detectar run_lint/run_tests/run_build vía el
+    set _called_tools (los tool calls viven en el estado del grafo, no en
+    self._messages — escanear mensajes daba falsos positivos)."""
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-    from langchain_core.messages import AIMessage, ToolMessage
-    from langchain_core.messages.tool import ToolCall
-
-    def _make_ai(name: str):
-        return AIMessage(content="", tool_calls=[
-            ToolCall(name=name, args={"path": "x"}, id=f"call_{name}")
-        ])
-
-    msgs = [
-        _make_ai("read_file"),
-        ToolMessage(content="file content", tool_call_id="call_read_file"),
-        _make_ai("run_lint"),
-        ToolMessage(content="[PASSED]", tool_call_id="call_run_lint"),
-        _make_ai("run_tests"),
-        ToolMessage(content="[PASSED]", tool_call_id="call_run_tests"),
-        _make_ai("run_build"),
-        ToolMessage(content="[PASSED]", tool_call_id="call_run_build"),
-        AIMessage(content="LISTO"),
-    ]
-
     from orchestration.session import Session
 
-    # Crear sesión mínima para acceder al método
     session = Session.__new__(Session)
-    session._messages = msgs
+    session._called_tools = {"read_file", "run_lint", "run_tests", "run_build"}
 
-    assert session._verify_tools_called() is True, "Should detect verify tools in messages"
+    assert session._verify_tools_called() is True, "Should detect verify tools"
     print(f"  ✅ Verify gate correctly detects verify tools")
 
-    # Messages sin verify tools
-    msgs2 = [
-        _make_ai("read_file"),
-        ToolMessage(content="content", tool_call_id="call_read_file"),
-        AIMessage(content="LISTO"),
-    ]
-    session2 = Session.__new__(Session)
-    session2._messages = msgs2
-    assert session2._verify_tools_called() is False, "Should NOT detect verify tools"
-    print(f"  ✅ Verify gate correctly identifies missing verify tools")
+    # Sin verify tools
+    session._called_tools = {"read_file", "edit_file"}
+    assert session._verify_tools_called() is False, "Should NOT detect verify tools"
+    print(f"  ✅ Verify gate correctly rejects turns without verify")
 
 
 # ── Test 4: Dedupe bloquea repeticiones ────────────────────────────────────

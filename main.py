@@ -24,6 +24,7 @@ from orchestration.session import Session
 from analyzer import run_analysis
 from display.console import console, print_welcome
 from display.tui import get_user_input
+from tools import ALL_TOOLS
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -126,7 +127,11 @@ def main():
 
     session = Session(_make_llm(), repo_path, cached_analysis=_format_cached_context(cached))
     session.start()
-    print_welcome(repo_path, LLM_MODEL_NAME, LLM_BASE_URL, LLM_TEMPERATURE, (session._local_count, session._mcp_count))
+    print_welcome(
+        repo_path, LLM_MODEL_NAME, LLM_BASE_URL, LLM_TEMPERATURE,
+        (len(ALL_TOOLS), session._mcp_count),
+        branch=session.get_status().get("branch", ""),
+    )
 
     if cached.get("analysis"):
         print("📚 Análisis cacheado encontrado. No se re-explora.")

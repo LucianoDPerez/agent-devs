@@ -83,10 +83,110 @@ class TestEditFile:
         assert (Path(repo) / "test.py").read_text() == "new code"
 
 
+class TestEditFileFuzzy:
+    """Matching tolerante estilo aider SEARCH/REPLACE: el modelo copia el
+    bloque con contexto pero puede errar espacios/indentación."""
+
+    CONTENT = (
+        "import React from 'react'\n"
+        "\n"
+        "export function PacientesPage() {\n"
+        "  const [pacientes, setPacientes] = useState([])\n"
+        "  const [error, setError] = useState(null)\n"
+        "\n"
+        "  useEffect(() => {\n"
+        "    loadPacientes()\n"
+        "  }, [])\n"
+        "}\n"
+    )
+
+    def _apply(self, old_str: str, new_str: str) -> str:
+        repo = _create_repo({"PacientesPage.tsx": self.CONTENT})
+        result = edit_file.invoke({
+            "path": str(Path(repo) / "PacientesPage.tsx"),
+            "old_str": old_str,
+            "new_str": new_str,
+        })
+        assert "Replaced" in result or "✅" in result, result
+        return (Path(repo) / "PacientesPage.tsx").read_text()
+
+    def test_exact_match(self):
+        out = self._apply(
+            "const [error, setError] = useState(null)",
+            "const [error, setError] = useState<string | null>(null)",
+        )
+        assert "useState<string | null>(null)" in out
+
+    def test_trailing_whitespace_difference(self):
+        # El modelo copió el bloque con espacios de más al final de línea
+        out = self._apply(
+            "const [pacientes, setPacientes] = useState([])   ",
+            "const [pacientes, setPacientes] = useState<Paciente[]>([])",
+        )
+        assert "useState<Paciente[]>([])" in out
+
+    def test_indentation_difference(self):
+        # El modelo copió la línea sin indentación
+        out = self._apply(
+            "useEffect(() => {\n    loadPacientes()\n  }, [])",
+            "useEffect(() => {\n    loadPacientes().catch(console.error)\n  }, [])",
+        )
+        assert "loadPacientes().catch(console.error)" in out
+
+    def test_anchor_match_multiline(self):
+        # Bloque con contexto: falla el match exacto de líneas, matchea por anclas
+        out = self._apply(
+            "import React from 'react'\n\n\n\nexport function PacientesPage() {\n"
+            "  const [pacientes, setPacientes] = useState([])",
+            "import React, { useState, useEffect } from 'react'\n\n"
+            "export function PacientesPage() {\n"
+            "  const [pacientes, setPacientes] = useState([])",
+        )
+        assert "useState, useEffect" in out
+
+    def test_not_found_returns_context_hint(self):
+        repo = _create_repo({"PacientesPage.tsx": self.CONTENT})
+        # La primera línea (ancla) existe, pero la segunda línea inventada NO →
+        # falla el matching y el error muestra el contexto real del archivo
+        result = edit_file.invoke({
+            "path": str(Path(repo) / "PacientesPage.tsx"),
+            "old_str": "export function PacientesPage() {\n  const [pacientes] = useState([])",
+            "new_str": "export function PacientesPage() {\n  const [pacientes] = useState<Paciente[]>([])",
+        })
+        assert "old_str not found" in result
+        assert "Contexto real del archivo" in result
+        assert "PacientesPage" in result
+        assert (Path(repo) / "PacientesPage.tsx").read_text() == self.CONTENT
+
+    def test_ambiguous_match_needs_more_context(self):
+        repo = _create_repo({"a.ts": "const x = 1\nconst x = 1\n"})
+        result = edit_file.invoke({
+            "path": str(Path(repo) / "a.ts"),
+            "old_str": "const x = 1",
+            "new_str": "const y = 2",
+        })
+        assert "possible matches" in result.lower() or "disambiguate" in result.lower()
+        assert (Path(repo) / "a.ts").read_text() == "const x = 1\nconst x = 1\n"
+
+
 class TestSoftErrors:
     def test_read_file_missing(self):
         result = read_file.invoke({"path": "/nonexistent/path/file.txt"})
         assert "does not exist" in result
+
+    def test_read_file_missing_suggests_similar(self):
+        """'Did you mean': si el path no existe pero hay un archivo con nombre
+        similar en el repo, sugerirlo (el modelo inventa paths)."""
+        repo = _create_repo({
+            "package.json": "{}\n",
+            "frontend/src/application/services/api.ts": "export const api = {};\n",
+        })
+        result = read_file.invoke({
+            "path": str(Path(repo) / "frontend/src/services/api/pacientesApi.ts"),
+        })
+        assert "does not exist" in result
+        assert "Archivos similares" in result
+        assert "application/services/api.ts" in result
 
     def test_read_file_on_directory(self):
         repo = tempfile.mkdtemp()

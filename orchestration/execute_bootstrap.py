@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 from config import EXECUTE_PRELOAD_MAX_CHARS, EXECUTE_PRELOAD_MAX_FILES
+from tools._helpers import _is_excluded
 
 _CODE_EXTENSIONS: set[str] = {
     ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
@@ -436,6 +437,94 @@ def _collect_java_application_files(root: Path, limit: int = 2) -> list[Path]:
     return found
 
 
+# Patterns de firmas por lenguaje (estilo repo map de aider, versión regex).
+# Cada patrón captura el nombre del símbolo en el grupo 1.
+_SYMBOL_PATTERNS: list[re.Pattern] = [
+    # TS/JS: export function / function / export const arrow / const arrow
+    re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\("),
+    re.compile(r"^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\("),
+    re.compile(r"^\s*(?:export\s+)?class\s+([A-Za-z_$][\w$]*)"),
+    re.compile(r"^\s*(?:export\s+)?interface\s+([A-Za-z_$][\w$]*)"),
+    # Python
+    re.compile(r"^\s*(?:async\s+)?def\s+([a-zA-Z_]\w*)\s*\("),
+    re.compile(r"^\s*class\s+([a-zA-Z_]\w*)\s*[:(]"),
+    # Go
+    re.compile(r"^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)\s*\("),
+    # Java/Kotlin
+    re.compile(
+        r"^\s*(?:public|private|protected)\s+(?:static\s+)?(?:final\s+)?"
+        r"(?:class|interface|enum|record)\s+([A-Za-z_]\w*)"
+    ),
+]
+
+
+def _extract_symbols(path: Path, max_symbols: int = 8) -> list[str]:
+    """Firmas de funciones/clases de un archivo (primera línea de cada símbolo)."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    found: list[str] = []
+    for ln in text.splitlines():
+        if len(ln) > 100 or not ln.strip():
+            continue
+        for pat in _SYMBOL_PATTERNS:
+            if pat.match(ln):
+                found.append(ln.strip()[:80])
+                break
+        if len(found) >= max_symbols:
+            break
+    return found
+
+
+def build_symbol_map(
+    repo_path: str,
+    dirs: list[str],
+    *,
+    max_files: int = 24,
+    max_chars: int = 2_000,
+) -> str:
+    """Mapa compacto de símbolos (repo map estilo aider): para cada archivo de
+    los directorios clave, sus funciones/clases con firma. El modelo sabe dónde
+    vive cada cosa SIN gastar exploraciones ni reads.
+
+    Si los directorios del perfil no existen (estructura atípica, código al
+    root), cae a los subdirectorios top-level del repo."""
+    root = Path(repo_path)
+    out: list[str] = []
+    budget = max_chars
+    scanned = 0
+
+    def _scan_dir(d: Path) -> None:
+        nonlocal scanned, budget
+        for p in sorted(d.iterdir()):
+            if scanned >= max_files or budget <= 0:
+                return
+            if not p.is_file() or _is_excluded(p):
+                continue
+            syms = _extract_symbols(p)
+            if not syms:
+                continue
+            relp = str(p.relative_to(root))
+            block = f"{relp}:\n  " + "\n  ".join(syms)
+            if len(block) > budget:
+                block = block[:budget].rsplit("\n", 1)[0] + "\n  …"
+            out.append(block)
+            budget -= len(block) + 2
+            scanned += 1
+
+    profile_dirs = [root / rel for rel in dirs if (root / rel).is_dir()]
+    if profile_dirs:
+        for d in profile_dirs:
+            _scan_dir(d)
+    if not out:
+        # Estructura atípica: escanear subdirectorios top-level del repo
+        for d in sorted(root.iterdir()):
+            if d.is_dir() and not _is_excluded(d) and not d.name.startswith("."):
+                _scan_dir(d)
+    return "\n\n".join(out)
+
+
 def inject_repo_hints(repo_path: str | None, *, max_chars: int = 8_000) -> str:
     """Precarga layout + env + entrypoints según stacks detectados.
 
@@ -492,6 +581,12 @@ def inject_repo_hints(repo_path: str | None, *, max_chars: int = 8_000) -> str:
             continue
         _take(f"listing {rel}", "\n".join(names))
         listed += 1
+
+    # Repo map estilo aider: firmas de funciones/clases de los dirs clave.
+    # Le da al modelo el "dónde está cada cosa" sin gastar exploraciones.
+    if budget > 500:
+        symbol_map = build_symbol_map(repo_path, list_dirs, max_chars=min(2_000, budget - 500))
+        _take("mapa de símbolos (funciones/clases por archivo)", symbol_map)
 
     for name in _HINT_ENV_FILES:
         if budget <= 0:

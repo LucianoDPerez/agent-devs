@@ -1,5 +1,6 @@
 """Tools de operaciones sobre el sistema de archivos."""
 
+import re
 from pathlib import Path
 
 from langchain_core.tools import tool
@@ -87,6 +88,45 @@ def list_files(path: str, recursive: bool = False) -> str:
     return f"Contents of {path}:\n" + "\n".join(results)
 
 
+def _suggest_paths(path: str, limit: int = 5) -> str:
+    """'Did you mean' para paths inexistentes: busca en el repo archivos con
+    el mismo nombre o similar. El modelo chico inventa paths (pacientesApi.ts
+    cuando el real es services/api.ts) y quedaba en dead end. Escalable:
+    funciona para cualquier repo, cualquier estructura."""
+    try:
+        name = Path(path).name
+        if not name:
+            return ""
+        name_stem = Path(name).stem.lower()
+        # Raíz del repo: subir hasta encontrar un marcador de proyecto
+        root = Path(path)
+        markers = (".git", "package.json", "go.mod", "pyproject.toml", "requirements.txt")
+        while root != root.parent:
+            if any((root / m).exists() for m in markers):
+                break
+            root = root.parent
+        if root == root.parent:
+            root = Path.cwd()  # último recurso: árbol del proceso
+        candidates: list[str] = []
+        for p in root.rglob("*"):
+            if not p.is_file() or _is_excluded(p):
+                continue
+            p_stem = p.stem.lower()
+            # match por nombre exacto o por stem contenido (pacientesApi.ts → api.ts)
+            if p.name == name or p_stem in name_stem or name_stem in p_stem:
+                candidates.append(str(p.relative_to(root)))
+            if len(candidates) > limit:
+                break
+        candidates = list(dict.fromkeys(candidates))[:limit]
+        if not candidates:
+            return ""
+        return "\nArchivos similares en el repo (candidatos reales):\n" + "\n".join(
+            f"  - {c}" for c in candidates
+        )
+    except Exception:
+        return ""
+
+
 @tool
 def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> str:
     """
@@ -102,6 +142,7 @@ def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> st
             f"File does not exist: {path}. "
             "Do not retry this path or search for name variants "
             "(e.g. README.md / README / ENV.md). If documentation is required, create the file."
+            + _suggest_paths(path)
         )
     if p.is_dir():
         return (
@@ -213,9 +254,12 @@ def delete_file(path: str) -> str:
 @tool
 def edit_file(path: str, old_str: str, new_str: str) -> str:
     """
-    Edit a file by replacing old_str with new_str (exact match required).
-    Only replaces the first occurrence. Use carefully.
-    Usage: edit_file(path="file.py", old_str="old code", new_str="new code")
+    Edit a file by replacing a block of code (aider-style SEARCH/REPLACE).
+    Include 2-5 lines of context around the change (the lines you change plus
+    neighbors). The matcher is tolerant: it tries exact match first, then
+    ignores whitespace differences (trailing spaces, indentation), then
+    matches by the first/last anchor lines of your block.
+    Usage: edit_file(path="file.py", old_str="old code block", new_str="new code block")
     """
     if _is_protected_task_path(path):
         return (
@@ -236,19 +280,102 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
 
     content = p.read_text(encoding="utf-8")
 
-    if old_str not in content:
+    spans = _find_spans(content, old_str)
+    if not spans:
         return (
-            f"old_str not found in {path}. Cannot perform replacement. "
-            "Re-read the file and use an exact substring that exists."
+            f"old_str not found in {path}. Cannot perform replacement.\n"
+            f"Re-read the file with read_file and copy the block LITERALLY, "
+            f"with 2-5 lines of context around the change.{_context_hint(content, old_str)}"
         )
 
-    occurrences = content.count(old_str)
-    if occurrences > 1:
+    if len(spans) > 1:
         return (
-            f"⚠️ Found {occurrences} occurrences of old_str in {path}. "
-            f"Only the first was replaced. Provide more context to disambiguate."
+            f"⚠️ Found {len(spans)} possible matches for old_str in {path}. "
+            "Add more surrounding context lines to disambiguate."
         )
 
-    new_content = content.replace(old_str, new_str, 1)
+    start, end = spans[0]
+    new_content = content[:start] + new_str + content[end:]
     p.write_text(new_content, encoding="utf-8")
-    return f"✅ Replaced text in {path} (1 occurrence)"
+    return f"✅ Replaced block in {path}"
+
+
+def _exact_spans(content: str, needle: str) -> list[tuple[int, int]]:
+    """All spans of an exact substring match."""
+    spans: list[tuple[int, int]] = []
+    idx = content.find(needle)
+    while idx >= 0:
+        spans.append((idx, idx + len(needle)))
+        idx = content.find(needle, idx + len(needle))
+    return spans
+
+
+def _build_fuzzy_regex(old_str: str) -> re.Pattern | None:
+    """Regex tolerante a espacios/indentación: cada línea del bloque se matchea
+    por su contenido stripped, permitiendo whitespace variable entre palabras
+    y en los bordes. Ignora líneas vacías del bloque."""
+    lines = [ln.strip() for ln in old_str.splitlines() if ln.strip()]
+    if not lines:
+        return None
+    parts = []
+    for ln in lines:
+        parts.append(re.escape(ln).replace(r"\ ", r"\s+"))
+    return re.compile(r"(?m)^\s*" + r"\s*\n\s*".join(parts))
+
+
+def _anchor_spans(content: str, old_str: str) -> list[tuple[int, int]]:
+    """Fallback estilo aider: matchea por la primera y última línea no vacía
+    del bloque. Devuelve todos los spans candidatos (el caller decide si es
+    ambiguo)."""
+    old_lines = [ln.strip() for ln in old_str.splitlines() if ln.strip()]
+    if len(old_lines) < 2:
+        return []
+    first, last = old_lines[0], old_lines[-1]
+    content_lines = content.splitlines()
+    spans: list[tuple[int, int]] = []
+    for i, ln in enumerate(content_lines):
+        if ln.strip() != first:
+            continue
+        window = content_lines[i : i + len(old_lines)]
+        for j, wln in enumerate(window):
+            if wln.strip() == last:
+                start = sum(len(l) + 1 for l in content_lines[:i])
+                end = start + sum(len(l) + 1 for l in content_lines[i : i + j + 1])
+                spans.append((start, end))
+                break
+    return spans
+
+
+def _find_spans(content: str, old_str: str) -> list[tuple[int, int]]:
+    """Cascada de matching: exacto → rstrip del bloque → regex fuzzy → anclas."""
+    spans = _exact_spans(content, old_str)
+    if spans:
+        return spans
+    stripped = old_str.rstrip()
+    if stripped and stripped != old_str:
+        spans = _exact_spans(content, stripped)
+        if spans:
+            return spans
+    pat = _build_fuzzy_regex(old_str)
+    if pat is not None:
+        spans = [(m.start(), m.end()) for m in pat.finditer(content)]
+        if spans:
+            return spans
+    return _anchor_spans(content, old_str)
+
+
+def _context_hint(content: str, old_str: str) -> str:
+    """Ayuda para el error: muestra las líneas reales del archivo alrededor de
+    la primera línea del bloque buscado, para que el modelo corrija el block."""
+    anchor = next((ln.strip() for ln in old_str.splitlines() if ln.strip()), None)
+    if not anchor:
+        return ""
+    lines = content.splitlines()
+    for i, ln in enumerate(lines):
+        if ln.strip() == anchor:
+            lo, hi = max(0, i - 3), min(len(lines), i + 4)
+            return (
+                "\nContexto real del archivo "
+                f"(líneas {lo + 1}-{hi}):\n" + "\n".join(lines[lo:hi])
+            )
+    return ""

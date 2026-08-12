@@ -1,14 +1,15 @@
 from pathlib import Path
 
 LLM_BASE_URL = "http://localhost:8080/v1"
-LLM_MODEL_NAME = "agents-a1-4b"
+LLM_MODEL_NAME = "gemma-4-e4b"
 LLM_TEMPERATURE = 0.2
 # 600s: el 4B con razonamiento Qwen3 puede tardar 2-3 min antes de emitir la
 # respuesta final (razona 1500-2500 chars). 300s cortaba respuestas largas.
 LLM_TIMEOUT = 600
 LLM_MAX_TOKENS = 3584
-# EXECUTE: modelo 4B quema tokens en razonamiento; 2560 obliga a actuar rápido
-EXECUTE_MAX_TOKENS = 2560
+# EXECUTE: 2560 era para el 4B que quemaba tokens en razonamiento.
+# Modelos nuevos (Ling-3.0-tiny) necesitan más margen para tool calls + verify.
+EXECUTE_MAX_TOKENS = 4096
 # REVIEW: 4096 para leer archivos, correr verify y emitir informe detallado
 REVIEW_MAX_TOKENS = 4096
 # ANALYZE: 4096 para que el razonamiento (~300 tokens) no consuma todo el
@@ -76,20 +77,33 @@ EXECUTE_RECURSION_LIMIT = 30
 # Pre-cargar en el mensaje de EXECUTE archivos .md/.txt citados por path absoluto
 EXECUTE_PRELOAD_MAX_CHARS = 20_000
 EXECUTE_PRELOAD_MAX_FILES = 2
-# Máx list_files/search_code/inspect_routes por turno EXECUTE. EXPLORE es lo que
-# causa loops (el modelo re-busca lo mismo con queries distintas). Mantener BAJO.
-EXECUTE_EXPLORE_BUDGET = 2
+# Máx list_files/search_code/inspect_routes por turno EXECUTE. Mantener BAJO:
+# el modelo debe diagnosticar en 1-2 llamadas (trace_component) y escribir YA.
+EXECUTE_EXPLORE_BUDGET = 3
 # Tras agotar explore: máx read_file antes de forzar write. Dar margen razonable
 # para diagnóstico de bugs (hook + página + API + backend + domain type).
 EXECUTE_MAX_READS_AFTER_EXPLORE = 5
-# Si no escribió nada tras N tool calls totales → forzar write. read_file NO
-# cuenta como productivo en EXECUTE (solo verify tools). Dar margen para 2
-# explore + 4-5 reads = diagnóstico completo sin loop infinito.
-EXECUTE_MAX_TOOLS_BEFORE_WRITE = 6
-# Límite duro total de tool calls por turno (EXECUTE). Ya no previene read-loops
-# (eso lo hace max_calls=0 + retry write-only); 20 da margen al flujo completo:
-# 5-6 writes + stage + commits + verify. Solo corta si el 4B entra en runaway.
+# Si no escribió nada tras N tool calls totales → forzar write. Con trace_component
+# (1 llamada = source + usos + página) + 3-4 reads hay suficiente para diagnosticar.
+EXECUTE_MAX_TOOLS_BEFORE_WRITE = 5
+# Límite duro total de tool calls por turno (EXECUTE). Solo corta si el modelo
+# entra en runaway.
 MAX_TOOL_CALLS_PER_TURN = 20
+# Razonamiento por bloque: si el modelo razona > N segundos SIN emitir output
+# (content o tool call), cortar el stream. El 4B razona 30-60s antes de cada
+# tool call; 90s por bloque corta runaway sin afectar el flujo normal.
+EXECUTE_MAX_REASONING_SECONDS = 90
+
+# Tras un turno EXECUTE con cambios sin commitear, preguntar al usuario si
+# quiere commitear (nunca commit automático). Si el stdin no es un tty (tests,
+# scripts), se omite la pregunta.
+EXECUTE_ASK_COMMIT = True
+
+# EXECUTE: si el turno termina (el modelo responde texto) SIN haber llamado
+# NINGUNA tool de escritura, lanzar retry write-only (sin read_file). Aider
+# evita esto porque su formato de edición ES texto; acá el modelo puede
+# "escapar" respondiendo un análisis — este flag lo impide desde el intento 1.
+EXECUTE_REQUIRE_WRITE = True
 
 # REVIEW budgets: el reviewer no escribe, solo lee y verifica
 REVIEW_EXPLORE_BUDGET = 1

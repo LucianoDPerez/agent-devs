@@ -178,6 +178,11 @@ class LocalLLM(BaseChatModel):
     api_key: str = "not-needed"
     max_reasoning_tokens: int = 0
     force_tool_calls: bool = False
+    # Control de thinking vía chat_template_kwargs (ej. {"enable_thinking": False}
+    # para Gemma 4/Qwen3 en llama.cpp). El retry desactiva el thinking: con
+    # tool_choice="required" + thinking activo, el modelo razona sin converger
+    # y nunca emite la tool call (turnos colgados de 90s+ en E2E).
+    chat_template_kwargs: dict | None = None
     _client: AsyncOpenAI | None = PrivateAttr(default=None)
     _tools: list[BaseTool] = PrivateAttr(default_factory=list)
     _tool_choice: Any | None = PrivateAttr(default=None)
@@ -242,11 +247,13 @@ class LocalLLM(BaseChatModel):
             params["tool_choice"] = self._tool_choice
         if stop:
             params["stop"] = stop
-        if self.max_reasoning_tokens > 0:
-            params["extra_body"] = {
-                **kwargs.get("extra_body", {}),
-                "max_reasoning_tokens": self.max_reasoning_tokens,
-            }
+        if self.max_reasoning_tokens > 0 or self.chat_template_kwargs:
+            body = {**kwargs.get("extra_body", {})}
+            if self.max_reasoning_tokens > 0:
+                body["max_reasoning_tokens"] = self.max_reasoning_tokens
+            if self.chat_template_kwargs:
+                body["chat_template_kwargs"] = self.chat_template_kwargs
+            params["extra_body"] = body
         return params
 
     @property
