@@ -146,3 +146,41 @@ class TestDedupe:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestEditsPerFile:
+    """Tope de edit_file al MISMO archivo sin verify en el medio (anti-loop)."""
+
+    def setup_method(self):
+        self.budget = ExploreBudget(
+            max_calls=5,
+            max_reads_after_explore=10,
+            max_tools_before_write=30,
+            max_edits_per_file=3,
+        )
+
+    def test_edits_below_cap_allowed(self):
+        for i in range(3):
+            result = self.budget.consume(
+                "edit_file", {"path": "/repo/a.ts", "old_str": f"x{i}", "new_str": "y"}
+            )
+            assert result is None
+
+    def test_edits_past_cap_raise(self):
+        for i in range(3):
+            self.budget.consume("edit_file", {"path": "/repo/a.ts", "old_str": f"x{i}", "new_str": "y"})
+        with pytest.raises(ToolBudgetExceeded, match="edit_file"):
+            self.budget.consume("edit_file", {"path": "/repo/a.ts", "old_str": "x", "new_str": "y"})
+
+    def test_edits_to_other_file_not_blocked(self):
+        for i in range(3):
+            self.budget.consume("edit_file", {"path": "/repo/a.ts", "old_str": f"x{i}", "new_str": "y"})
+        # Otro archivo: cuenta aparte
+        assert self.budget.consume("edit_file", {"path": "/repo/b.ts", "old_str": "z", "new_str": "w"}) is None
+
+    def test_verify_resets_edit_counter(self):
+        for i in range(3):
+            self.budget.consume("edit_file", {"path": "/repo/a.ts", "old_str": f"x{i}", "new_str": "y"})
+        self.budget.consume("run_build", {"path": "/repo"})
+        # Tras verify, editar de nuevo es legítimo
+        assert self.budget.consume("edit_file", {"path": "/repo/a.ts", "old_str": "x", "new_str": "y"}) is None

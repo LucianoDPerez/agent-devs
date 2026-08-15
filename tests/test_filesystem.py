@@ -275,3 +275,37 @@ class TestSoftErrors:
         result = delete_file.invoke({"path": str(p)})
         assert "PROHIBIDO" in result
         assert p.exists()
+
+
+class TestWriteOverride:
+    """Escalamiento de estrategia: write_file habilitado para un path tras
+    fallar la cirugía fina de edit_file (WRITE_OVERRIDE_PATHS)."""
+
+    def setup_method(self):
+        from tools.filesystem import WRITE_OVERRIDE_PATHS, clear_write_overrides
+        clear_write_overrides()
+        self._set = WRITE_OVERRIDE_PATHS
+
+    def teardown_method(self):
+        from tools.filesystem import clear_write_overrides
+        clear_write_overrides()
+
+    def test_override_allows_full_overwrite(self):
+        content = "\n".join(f"const line_{i} = {i};" for i in range(60)) + "\n"
+        repo = _create_repo({"big.ts": content})
+        path = str(Path(repo) / "big.ts")
+        # Sin override: bloqueado
+        assert "BLOQUEADO" in write_file.invoke({"path": path, "content": "x"})
+        # Con override: se escribe
+        self._set.add(path)
+        result = write_file.invoke({"path": path, "content": "// full rewrite\n"})
+        assert "Written" in result
+        assert (Path(repo) / "big.ts").read_text() == "// full rewrite\n"
+
+    def test_override_still_blocks_protected_paths(self):
+        from tools.filesystem import clear_write_overrides
+        repo = _create_repo({"tasks.md": "plan"})
+        path = str(Path(repo) / "tasks.md")
+        self._set.add(path)
+        result = write_file.invoke({"path": path, "content": "hack"})
+        assert "PLANIFICACIÓN" in result or "PROHIBIDO" in result

@@ -9,6 +9,8 @@ from typing import Any
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.errors import GraphBubbleUp
 
+from config import MAX_EDIT_REJECTIONS_BEFORE_OVERWRITE
+
 
 class ToolBudgetExceeded(GraphBubbleUp):
     """Raised when a tool call is blocked by dedupe or explore budget.
@@ -96,6 +98,7 @@ class ExploreBudget:
         *,
         write_pressure: bool = True,
         productive_names: frozenset | None = None,
+        max_edits_per_file: int = 4,
     ):
         """``write_pressure=False`` → modo ANALYZE/PLAN: capa la exploración
         pero NUNCA presiona a escribir. Al agotar el presupuesto lanza
@@ -105,10 +108,16 @@ class ExploreBudget:
         ``productive_names``: override de PRODUCTIVE_TOOL_NAMES. EXECUTE
         solo considera VERIFY tools como productivas (read_file NO cuenta —
         el modelo se escondía en lecturas infinitas sin escribir).
+
+        ``max_edits_per_file``: tope de edit_file al MISMO path sin correr
+        verify en el medio. El dedupe solo atrapa args idénticos; el modelo
+        en loop variaba los bloques (8 edit_file a un path corrompiendo el
+        JSX por partes). Correr lint/tests/build resetea el contador.
         """
         self.max_calls = max_calls
         self.max_reads_after_explore = max_reads_after_explore
         self.max_tools_before_write = max_tools_before_write
+        self.max_edits_per_file = max_edits_per_file
         self.write_pressure = write_pressure
         self._productive_names = (
             productive_names if productive_names is not None
@@ -119,6 +128,7 @@ class ExploreBudget:
         self._total = 0
         self._wrote = False
         self._explore_exhausted = False
+        self._edits_per_path: dict[str, int] = {}
 
     def reset(self) -> None:
         self._count = 0
@@ -126,6 +136,7 @@ class ExploreBudget:
         self._total = 0
         self._wrote = False
         self._explore_exhausted = self.max_calls <= 0
+        self._edits_per_path.clear()
 
     @property
     def used(self) -> int:
@@ -143,9 +154,33 @@ class ExploreBudget:
         if self.max_calls <= 0:
             self._explore_exhausted = True
 
+        # Tope de edit_file al MISMO archivo sin verify en el medio: el modelo
+        # en loop varía los bloques (dedupe ciego) y corrompe el archivo por
+        # partes (E2E: 8 edits a PacienteDetailPage.tsx). Verify resetea.
+        # DEBE ir ANTES del early-return de WRITE_TOOL_NAMES (edit_file está
+        # en ese set y se saltearía el chequeo).
+        if name == "edit_file":
+            path = (kwargs or {}).get("path", "")
+            if path:
+                n = self._edits_per_path.get(path, 0) + 1
+                self._edits_per_path[path] = n
+                if n > self.max_edits_per_file:
+                    raise ToolBudgetExceeded(
+                        f"{n} edit_file a '{path}' sin correr verify en el medio. "
+                        "PARÁ de editar a ciegas. Releé el archivo con read_file "
+                        "y aplicá UN edit con el bloque EXACTO del archivo real, "
+                        "o corré run_lint/run_tests/run_build para verificar "
+                        "el estado actual."
+                    )
+
         if name in WRITE_TOOL_NAMES:
             self._wrote = True
             return None
+
+        # Verify tools resetean el contador de edits: después de verificar,
+        # el estado es conocido y editar de nuevo es legítimo.
+        if name in VERIFY_TOOL_NAMES:
+            self._edits_per_path.clear()
 
         # VERIFY / git RO siempre permitidos una vez que ya escribió
         # (y también antes, con tope de tools sin write)
@@ -243,9 +278,19 @@ def wrap_tools_with_dedupe(
     tools (la compuerta de verificación NO puede ver los tool calls en el
     estado del grafo — escanear self._messages daba falsos positivos).
     """
+    # Rechazos del guard quirúrgico de edit_file por path: al llegar al tope,
+    # se habilita write_file completo para ese archivo (escalamiento de
+    # estrategia — el modelo no converge con cirugía fina en cambios
+    # estructurales). El estado vive en este closure: se recrea por agente.
+    edit_rejections: dict[str, int] = {}
     wrapped: list[BaseTool] = []
     for t in tools:
-        wrapped.append(_wrap_one(t, dedupe, explore_budget, read_cache, repo_path, tool_call_logger))
+        wrapped.append(
+            _wrap_one(
+                t, dedupe, explore_budget, read_cache, repo_path,
+                tool_call_logger, edit_rejections,
+            )
+        )
     return wrapped
 
 
@@ -269,8 +314,38 @@ def _wrap_one(
     read_cache: dict | None = None,
     repo_path: str | None = None,
     tool_call_logger: set | None = None,
+    edit_rejections: dict | None = None,
 ) -> BaseTool:
     name = tool.name
+
+    # Guard quirúrgico de edit_file rechazado N veces sobre el mismo archivo →
+    # habilitar write_file completo (escalamiento de estrategia). El estado
+    # viene del closure de wrap_tools_with_dedupe (compartido entre tools).
+    def _escalate_edit_rejections(path: str, result: Any) -> Any:
+        if edit_rejections is None or not isinstance(result, str):
+            return result
+        if "QUIRÚRGICAS" not in result:
+            return result
+        n = edit_rejections.get(path, 0) + 1
+        edit_rejections[path] = n
+        if n < MAX_EDIT_REJECTIONS_BEFORE_OVERWRITE:
+            return result
+        try:
+            from tools.filesystem import WRITE_OVERRIDE_PATHS
+            WRITE_OVERRIDE_PATHS.add(path)
+        except Exception:
+            pass
+        return (
+            f"⛔ edit_file quirúrgico está BLOQUEADO para '{path}' y ya "
+            f"fallaste {n} veces intentando editarlo por partes. "
+            f"CAMBIÁ DE ESTRATEGIA: reemplazá el archivo COMPLETO con write_file.\n"
+            f"  1) read_file(path='{path}') para ver el contenido EXACTO actual.\n"
+            f"  2) write_file(path='{path}', content='<archivo COMPLETO con tu cambio>').\n"
+            f"     ⚠️  El overwrite de ESTE archivo está habilitado por el sistema.\n"
+            f"  3) PRESERVÁ todo lo que existe (imports, componentes, estado, "
+            f"handlers, SVG) — solo aplicá TU cambio encima.\n"
+            f"  4) Después corré run_lint/run_tests/run_build."
+        )
 
     def _resolve_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
         # Paths relativos → absolutos contra la raíz del repo (Gemma 4 usa
@@ -363,6 +438,8 @@ def _wrap_one(
         if tool_call_logger is not None:
             tool_call_logger.add(name)
         result = tool.invoke(kwargs)
+        if name == "edit_file":
+            result = _escalate_edit_rejections(kwargs.get("path", ""), result)
         _cache_read(kwargs, result)
         return result
 
@@ -374,6 +451,8 @@ def _wrap_one(
         if tool_call_logger is not None:
             tool_call_logger.add(name)
         result = await tool.ainvoke(kwargs)
+        if name == "edit_file":
+            result = _escalate_edit_rejections(kwargs.get("path", ""), result)
         _cache_read(kwargs, result)
         return result
 

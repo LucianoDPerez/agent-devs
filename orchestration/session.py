@@ -1007,6 +1007,14 @@ class Session:
         self._called_tools.clear()
         self._runtime_healthy = None
         self._runtime_report = None
+        # Los overrides de write_file (habilitados tras fallar la cirugía fina
+        # de edit_file) son por TURNO: limpiar para que el próximo turno
+        # arranque con los guards de sobrescritura activos.
+        try:
+            from tools.filesystem import clear_write_overrides
+            clear_write_overrides()
+        except Exception:
+            pass
         if new_role == Role.EXECUTE:
             self._explore_budget.max_calls = EXECUTE_EXPLORE_BUDGET
             self._explore_budget.max_reads_after_explore = EXECUTE_MAX_READS_AFTER_EXPLORE
@@ -1076,13 +1084,18 @@ class Session:
                 # El 4B con max_calls=1 recibe strings STOP y los ignora, quemando el
                 # recursion limit sin escribir. Con 0, la excepción corta de inmediato.
                 if hints_on:
-                    # MCP + trace_component activos: 1 exploración para tracear
-                    # el componente, luego solo leer + escribir.
-                    self._explore_budget.max_calls = 1
-                    self._explore_budget.max_reads_after_explore = 3
-                    self._explore_budget.max_tools_before_write = 4
+                    # Los hints cubren stack/config del repo, NO el archivo
+                    # objetivo de la tarea. Budget acotado pero real: ubicar el
+                    # componente + leer el archivo a tocar ANTES de la presión
+                    # de escritura. Con max_calls=1 el modelo quemaba su única
+                    # exploración (trace_component con nombre equivocado) y
+                    # escribía de memoria — el guard lo bloqueó, pero alucinó
+                    # clases CSS inexistentes (ConsultaTable sin estilos).
+                    self._explore_budget.max_calls = 3
+                    self._explore_budget.max_reads_after_explore = 5
+                    self._explore_budget.max_tools_before_write = 8
                     self._dedupe.max_repeats = 1
-                extra = " · explore=0 (hints)" if hints_on else ""
+                extra = " · explore=acotado (hints)" if hints_on else ""
                 console.print(
                     f"[dim]📎 Archivos de tareas pre-cargados{scope} "
                     f"+ checklist AC{extra}.[/dim]\n"
@@ -1149,6 +1162,10 @@ class Session:
         gate_retries = 0
         interrupted = False
         interrupted_by_esc = False
+        # Turno terminó en FALLO (loop, recursion, error): los cambios pueden
+        # estar incompletos/rotos sin pasar la compuerta de verificación →
+        # NO se ofrece commit (E2E: recursion limit + commit de JSX corrupto).
+        turn_failed = False
 
         while attempt < max_attempts:
             loop = asyncio.new_event_loop()
@@ -1296,6 +1313,7 @@ class Session:
                 break
             except ToolBudgetExceeded as e:
                 if attempt + 1 >= max_attempts:
+                    turn_failed = True
                     interrupted = True
                     print(
                         self._closing_message(
@@ -1333,6 +1351,7 @@ class Session:
                 continue
             except ReasoningOnlyResponse as e:
                 if attempt + 1 >= max_attempts:
+                    turn_failed = True
                     if isinstance(e, ToolCallLimitExceeded):
                         print(
                             f"\n\n⚠️  El modelo hizo {e.total_calls} tool calls (límite {e.limit}) "
@@ -1422,6 +1441,7 @@ class Session:
                             continue
                         break
                     if attempt + 1 >= max_attempts:
+                        turn_failed = True
                         print(
                             self._closing_message(
                                 "\n\n↻ El modelo tuvo problemas para emitir "
@@ -1447,6 +1467,7 @@ class Session:
                     )
                     continue
                 if "Recursion" in name or "recursion" in err_text.lower():
+                    turn_failed = True
                     lim = (
                         EXECUTE_RECURSION_LIMIT
                         if new_role == Role.EXECUTE
@@ -1461,6 +1482,7 @@ class Session:
                         flush=True,
                     )
                 else:
+                    turn_failed = True
                     print(f"\n\n❌ Error en la iteración: {e}", flush=True)
                 break
             finally:
@@ -1499,10 +1521,18 @@ class Session:
             interrupt_source="ESC" if interrupted_by_esc else None,
         )
 
-        # Commit preguntado: tras un turno EXECUTE completo, si hay cambios
+        # Commit preguntado: tras un turno EXECUTE EXITOSO, si hay cambios
         # sin commitear y el usuario no interrumpió, ofrecer commitear.
-        if new_role == Role.EXECUTE and not interrupted:
+        # Turnos FALLIDOS (loop/recursion/error) pueden dejar el árbol roto
+        # sin pasar la compuerta de verificación → NO se ofrece commit
+        # (E2E: JSX corrupto commiteado tras recursion limit).
+        if new_role == Role.EXECUTE and not interrupted and not turn_failed:
             self._maybe_ask_commit(user_input)
+        elif new_role == Role.EXECUTE and turn_failed and not interrupted:
+            console.print(
+                "\n[dim]↻ Turno fallido (sin verificación) — no se ofrece "
+                "commit. Revisá los cambios antes de commitearlos.[/dim]"
+            )
 
         ctx_status = self._check_context()
         if ctx_status == "warning":

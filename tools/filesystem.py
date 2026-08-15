@@ -16,6 +16,18 @@ from config import (
 from ._helpers import _is_excluded
 
 
+# Paths autorizados por el ORQUESTADOR para sobrescribir con write_file pese al
+# guard anti-destrucción. Se habilita SOLO tras N rechazos del guard quirúrgico
+# de edit_file sobre el mismo archivo (escalamiento de estrategia, ver
+# orchestration/tool_dedupe.py). El modelo no converge con cirugía fina →
+# reemplazo completo anclado en el read cache. Se limpia al inicio de cada turno.
+WRITE_OVERRIDE_PATHS: set[str] = set()
+
+
+def clear_write_overrides() -> None:
+    WRITE_OVERRIDE_PATHS.clear()
+
+
 def _is_protected_task_path(path: str) -> bool:
     """True si el path corresponde a un archivo de planificación que el agente
     NUNCA debe escribir/editar/borrar (tasks.md, .agent-devs/, plans/, etc.).
@@ -198,11 +210,13 @@ def write_file(path: str, content: str) -> str:
             f"Call write_file with a FILE name inside it, for example: "
             f"write_file(path='{path}/index.ts', content='...')"
         )
-    if p.exists() and p.is_file():
+    if p.exists() and p.is_file() and path not in WRITE_OVERRIDE_PATHS:
         # Guard anti-destrucción: write_file NO puede sobrescribir archivos
         # existentes (salvo configs triviales de ≤5 líneas). Reescribir desde
         # memoria pierde imports/hooks/lógica — el 4B mutiló PacientesPage.tsx.
         # Forzamos el path quirúrgico: read_file + edit_file.
+        # EXCEPCIÓN: paths en WRITE_OVERRIDE_PATHS (autorizados por el
+        # orquestador tras fallar la cirugía fina de edit_file N veces).
         try:
             existing_lines = len(p.read_text(encoding="utf-8", errors="replace").splitlines())
         except OSError:

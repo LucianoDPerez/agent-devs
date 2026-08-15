@@ -89,6 +89,15 @@ EXECUTE_MAX_TOOLS_BEFORE_WRITE = 5
 # Límite duro total de tool calls por turno (EXECUTE). Solo corta si el modelo
 # entra en runaway.
 MAX_TOOL_CALLS_PER_TURN = 20
+# Máx edit_file al MISMO archivo por turno sin correr verify (lint/tests/build)
+# en el medio. El loop de la iteración E2E: 8 edit_file al mismo path con args
+# distintos (el dedupe solo atrapa args idénticos) corrompiendo el JSX por
+# partes. Al superar el tope se lanza ToolBudgetExceeded → retry con ancla.
+MAX_EDITS_PER_FILE = 4
+# Rechazos del guard quirúrgico de edit_file (bloque > 40 líneas) al mismo
+# archivo antes de habilitar write_file completo para ese path: el modelo no
+# converge con cirugía fina → cambiamos de estrategia con ancla del read cache.
+MAX_EDIT_REJECTIONS_BEFORE_OVERWRITE = 2
 # Razonamiento por bloque: si el modelo razona > N segundos SIN emitir output
 # (content o tool call), cortar el stream. El 4B razona 30-60s antes de cada
 # tool call; 90s por bloque corta runaway sin afectar el flujo normal.
