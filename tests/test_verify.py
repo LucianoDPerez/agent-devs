@@ -132,7 +132,9 @@ class TestRunVerifyTools:
                 result = run_lint.invoke({"path": tmp})
 
             assert "FAILED" in result
-            mock_run.assert_called_once()
+            # Auto-install (deps faltantes) agrega install + re-run; con el
+            # mock todo "falla" y devuelve string SIEMPRE (nunca raise).
+            assert isinstance(result, str)
 
     def test_unknown_stack_message(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -163,3 +165,130 @@ class TestRunVerifyTools:
 
         assert "PASSED" in result
         mock_run.assert_called_once_with(tmp, ["npm", "run", "build"])
+
+
+def test_run_install_reinstalls_when_workspaces_missing_symlinks(tmp_path):
+    """Workspaces declarados sin symlinks en node_modules → install stale."""
+    from tools.verify import _needs_node_install
+    (tmp_path / "package.json").write_text(json.dumps({
+        "name": "root", "private": True,
+        "workspaces": ["backend", "frontend"],
+    }))
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / ".package-lock.json").write_text("{}")
+    assert _needs_node_install(tmp_path) is True
+
+
+def test_run_install_ok_when_workspace_symlinks_exist(tmp_path):
+    """Workspace con symlink en node_modules → install OK."""
+    from tools.verify import _needs_node_install
+    (tmp_path / "package.json").write_text(json.dumps({
+        "name": "root", "private": True,
+        "workspaces": ["backend"],
+    }))
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / "backend").mkdir()  # symlink materializado
+    (tmp_path / "node_modules" / ".package-lock.json").write_text("{}")
+    assert _needs_node_install(tmp_path) is False
+
+
+def test_workspace_symlink_detected_by_package_name(tmp_path):
+    """El symlink del workspace se crea con el NOMBRE del paquete, no la carpeta."""
+    from tools.verify import _needs_node_install
+    (tmp_path / "package.json").write_text(json.dumps({
+        "name": "root", "private": True, "workspaces": ["backend"],
+    }))
+    (tmp_path / "backend").mkdir()
+    (tmp_path / "backend" / "package.json").write_text(json.dumps({"name": "medica-backend"}))
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / ".package-lock.json").write_text("{}")
+    # Sin symlink del paquete → stale → hay que instalar
+    assert _needs_node_install(tmp_path) is True
+    (tmp_path / "node_modules" / "medica-backend").mkdir()
+    # Symlink materializado (con el nombre del paquete) → install OK
+    assert _needs_node_install(tmp_path) is False
+
+
+def test_needs_install_when_declared_dep_missing(tmp_path):
+    """Dep declarada en package.json pero ausente de node_modules → stale."""
+    import json
+    from tools.verify import _needs_node_install
+    (tmp_path / "package.json").write_text(json.dumps({
+        "name": "root", "private": True,
+        "devDependencies": {"jest": "^29.7.0"},
+    }))
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / ".package-lock.json").write_text("{}")
+    assert _needs_node_install(tmp_path) is True
+    (tmp_path / "node_modules" / "jest").mkdir()
+    assert _needs_node_install(tmp_path) is False
+
+
+def test_needs_install_scoped_dep(tmp_path):
+    """Dep scoped (@types/jest) resuelve contra node_modules/@types/jest."""
+    import json
+    from tools.verify import _needs_node_install
+    (tmp_path / "package.json").write_text(json.dumps({
+        "name": "root", "private": True,
+        "devDependencies": {"@types/jest": "^29.5.1"},
+    }))
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / ".package-lock.json").write_text("{}")
+    assert _needs_node_install(tmp_path) is True
+    (tmp_path / "node_modules" / "@types").mkdir()
+    (tmp_path / "node_modules" / "@types" / "jest").mkdir()
+    assert _needs_node_install(tmp_path) is False
+
+
+def test_run_tests_auto_installs_when_deps_missing(tmp_path):
+    """Verify falla por deps faltantes → auto-install + re-run (E2E real: los
+    LLM chicos ignoran el hint de run_install)."""
+    import json
+    from unittest.mock import patch
+    from tools import verify as v
+    (tmp_path / "package.json").write_text(json.dumps({
+        "name": "t", "private": True,
+        "scripts": {"test": "jest"},
+        "devDependencies": {"jest": "^29.7.0"},
+    }))
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / ".package-lock.json").write_text("{}")
+    # Primera corrida falla (jest no instalado); install "lo instala"; re-run pasa.
+    calls = {"n": 0}
+
+    def fake_run_command(path, args, timeout=180):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return "[FAILED] exit=127\n$ npm run test\nsh: jest: command not found"
+        return "[PASSED] exit=0\n$ npm run test\n2 passed"
+
+    with patch.object(v, "_run_command", side_effect=fake_run_command), \
+         patch.object(v, "_run_node_install", return_value="[PASSED] npm install ok"):
+        result = v.run_tests.invoke({"path": str(tmp_path)})
+    assert "npm install" in result
+    assert "Re-run" in result
+    assert calls["n"] == 2
+
+
+def test_run_npm_script_runs_declared_script(tmp_path):
+    import json
+    from unittest.mock import patch
+    from tools import verify as v
+    (tmp_path / "package.json").write_text(json.dumps({
+        "name": "t", "private": True, "scripts": {"db:generate": "prisma generate"},
+    }))
+    with patch.object(v, "_run_command", return_value="[PASSED] exit=0\n$ npm run db:generate\nok") as m:
+        result = v.run_npm_script.invoke({"path": str(tmp_path), "script": "db:generate"})
+    assert "PASSED" in result
+    m.assert_called_once()
+
+
+def test_run_npm_script_rejects_undeclared_script(tmp_path):
+    import json
+    from tools import verify as v
+    (tmp_path / "package.json").write_text(json.dumps({
+        "name": "t", "private": True, "scripts": {"dev": "vite"},
+    }))
+    result = v.run_npm_script.invoke({"path": str(tmp_path), "script": "rm -rf /"})
+    assert "No 'rm -rf /' script" in result
+    assert "dev" in result  # lista los disponibles

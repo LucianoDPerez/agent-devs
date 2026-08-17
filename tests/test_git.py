@@ -76,3 +76,26 @@ class TestCreateCommit:
         stage_files.invoke({"path": repo, "files": "test.txt"})
         result = create_commit.invoke({"path": repo, "message": "test: add test file"})
         assert "Commit created" in result or "✅" in result
+
+
+def test_git_restore_reverts_tracked_file(tmp_path):
+    from tools.git import git_restore
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path)
+    subprocess.run(["git", "config", "user.email", "t@t.t"], cwd=tmp_path)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=tmp_path)
+    (tmp_path / "a.ts").write_text("v1\n")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=tmp_path)
+    (tmp_path / "a.ts").write_text("v2 modified\n")
+    assert (tmp_path / "a.ts").read_text() == "v2 modified\n"
+    result = git_restore.invoke({"path": str(tmp_path), "files": "a.ts"})
+    assert "Restored" in result
+    assert (tmp_path / "a.ts").read_text() == "v1\n"
+
+
+def test_git_restore_requires_files(tmp_path):
+    import pytest
+    from langchain_core.tools import ToolException
+    from tools.git import git_restore
+    with pytest.raises(ToolException):
+        git_restore.invoke({"path": str(tmp_path), "files": ""})

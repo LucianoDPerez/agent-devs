@@ -16,6 +16,7 @@ from .git import (
     create_pr,
     current_branch,
     git_log,
+    git_restore,
     git_status,
     list_prs,
     push,
@@ -24,11 +25,11 @@ from .git import (
 )
 from .routes import inspect_routes
 from .search import search_code
-from .verify import run_build, run_install, run_lint, run_tests
+from .verify import run_build, run_install, run_lint, run_npm_script, run_tests
 
 ALL_TOOLS = [
     list_files, read_file, write_file, edit_file, delete_file, search_code, inspect_routes,
-    run_install, run_lint, run_tests, run_build,
+    run_install, run_lint, run_tests, run_build, run_npm_script,
     current_branch, changed_files, git_status, git_log,
     stage_files, create_commit, push, create_pr, read_pr, list_prs,
 ]
@@ -46,8 +47,8 @@ PLANNER_TOOLS = [list_files, read_file, search_code, inspect_routes, write_file,
 EXECUTOR_TOOLS = [
     read_file, write_file, edit_file, delete_file,
     search_code, inspect_routes,
-    run_lint, run_tests, run_build,
-    stage_files, create_commit, push,
+    run_lint, run_tests, run_build, run_npm_script,
+    stage_files, create_commit, push, git_restore,
 ]
 REVIEWER_TOOLS = [list_files, read_file, search_code, inspect_routes, *_READONLY_GIT, *_VERIFY]
 
@@ -81,7 +82,7 @@ WRITE_RETRY_TOOLS = [
 # no debe volver a commiteear).
 GATE_RETRY_TOOLS = [
     read_file, edit_file, write_file, delete_file,
-    *_READONLY_GIT, *_VERIFY,
+    *_READONLY_GIT, *_VERIFY, run_npm_script,
 ]
 
 AGENTS: dict[str, list] = {

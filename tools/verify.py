@@ -8,6 +8,11 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
+try:
+    from config import AUTO_INSTALL_ON_VERIFY_FAIL
+except ImportError:  # pragma: no cover - tests sin config
+    AUTO_INSTALL_ON_VERIFY_FAIL = True
+
 _MAX_OUTPUT_BYTES = 40_000
 _DEFAULT_TIMEOUT = 180
 
@@ -19,6 +24,8 @@ def _truncate(text: str, limit: int = _MAX_OUTPUT_BYTES) -> str:
 
 
 def _validate_cwd(path: str) -> str | None:
+    if not path or not str(path).strip():
+        return "No path provided. Pass the project root directory: run_lint(path=\"/abs/path/to/repo\")"
     root = Path(path)
     if not root.exists():
         return f"Path does not exist: {path}"
@@ -157,12 +164,47 @@ def _resolve_command(root: Path, action: str) -> list[str] | str:
     return f"Unknown action: {action}"
 
 
+def _any_dep_missing(root: Path, pkg: dict) -> bool:
+    """True si alguna dependency/devDependency declarada NO está en node_modules.
+
+    Con workspaces, npm hoistea casi todo a node_modules raíz: chequear que
+    cada dep tenga su carpeta ahí detecta installs incompletos (ej: npm install
+    falló a mitad por un 404 de otra dep, o se agregó una dep después de la
+    última instalación — el caso @types/supertest: declarada y lockeada pero
+    nunca materializada).
+    """
+    for section in ("dependencies", "devDependencies"):
+        for dep in (pkg.get(section) or {}):
+            dep_dir = root / "node_modules" / dep
+            if not dep_dir.is_dir():
+                return True
+    return False
+
+
 def _needs_node_install(root: Path) -> bool:
     """Detects if node_modules is missing or stale."""
     if not (root / "package.json").is_file():
         return False
     if not (root / "node_modules").is_dir():
         return True
+    pkg = _read_package_json(root)
+    # Deps declaradas (raíz o workspaces) pero ausentes en node_modules →
+    # install incompleto. npm install las completa (es idempotente).
+    if pkg and _any_dep_missing(root, pkg):
+        return True
+    # Workspaces declarados en package.json pero SIN sus symlinks en
+    # node_modules → install stale (ej: se agregó "workspaces" después de la
+    # última instalación; npm no materializó los bins del workspace y los
+    # scripts -w fallan con "command not found"). OJO: npm crea el symlink con
+    # el NOMBRE DEL PAQUETE (node_modules/<name>), no con la carpeta.
+    workspaces = pkg.get("workspaces") or [] if pkg else []
+    for ws in workspaces:
+        ws_pkg = _read_package_json(root / ws)
+        link_name = (ws_pkg or {}).get("name") or Path(ws).name
+        if not (root / "node_modules" / link_name).exists():
+            return True
+        if ws_pkg and _any_dep_missing(root, ws_pkg):
+            return True
     # node_modules/.package-lock.json missing → likely incomplete install
     pm = _node_package_manager(root)
     lockfile = f"node_modules/.{pm}-install"
@@ -201,11 +243,22 @@ def _run_verify(path: str, action: str) -> str:
 
     result = _run_command(path, command)
 
-    # Auto-detect missing dependencies and suggest install
-    if "FAILED" in result:
+    # Auto-detect missing dependencies: los LLM chicos (4B/9B) sistemáticamente
+    # ignoran el hint de correr run_install (visto N veces en E2E real: el
+    # flujo se traba para siempre en "command not found"). Cuando el verify
+    # FALLA y faltan deps declaradas, el harness instala solo (npm install es
+    # idempotente) y re-corre el verify UNA vez. Config: AUTO_INSTALL_ON_VERIFY_FAIL.
+    if "FAILED" in result and AUTO_INSTALL_ON_VERIFY_FAIL:
         stack = _detect_stack(root)
         if stack == "node" and _needs_node_install(root):
-            result += "\n⚠️  node_modules missing or incomplete. Run: run_install(path=...) first."
+            result += (
+                "\n⚠️  Dependencias faltantes detectadas (node_modules incompleto). "
+                "El sistema ejecuta npm install automáticamente y re-corre la verificación..."
+            )
+            install_result = _run_node_install(root)
+            result += "\n\n--- npm install ---\n" + install_result
+            rerun = _run_command(path, command)
+            result += "\n\n--- Re-run después del install ---\n" + rerun
         elif stack == "python" and not (root / ".venv").is_dir():
             result += "\n⚠️  .venv missing. Run: run_install(path=...) first."
 
@@ -268,3 +321,29 @@ def run_install(path: str) -> str:
     if stack == "python":
         return _run_python_install(root)
     return f"Unknown stack: {stack}"
+
+
+@tool
+def run_npm_script(path: str, script: str) -> str:
+    """Run a script DECLARED in the project's package.json (npm/pnpm/yarn run).
+
+    Use it for project-specific lifecycle scripts that the verify tools don't
+    cover — e.g. prisma generate (db:generate), db:migrate, db:studio, dev.
+    Only scripts that EXIST in package.json can run (no arbitrary commands).
+    If the script doesn't exist, the available scripts are listed.
+
+    Usage: run_npm_script(path="/Users/me/repo", script="db:generate")
+    """
+    error = _validate_cwd(path)
+    if error:
+        return error
+
+    root = Path(path)
+    resolved = _node_script(root, script)
+    if isinstance(resolved, str):
+        pkg = _read_package_json(root)
+        scripts = ", ".join(sorted((pkg or {}).get("scripts") or {}))
+        return f"{resolved}. Available scripts: {scripts or '(none)'}"
+
+    result = _run_command(path, resolved)
+    return result

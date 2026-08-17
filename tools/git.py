@@ -136,6 +136,24 @@ def create_commit(path: str, message: str) -> str:
 
 
 @tool
+def git_restore(path: str, files: str) -> str:
+    """Revert TRACKED files to their last committed state (git restore).
+
+    Use this ONLY to undo YOUR OWN accidental edits to files that were NOT
+    part of the task (e.g. you edited a file outside the requested scope).
+    It discards ALL uncommitted changes to those files — including changes
+    made by the user in previous iterations — so NEVER restore files that
+    contain legitimate work. Pass file paths relative to the repo root,
+    space-separated: git_restore(path=\"/repo\", files=\"a.ts b/c.ts\")
+    """
+    paths = [f.strip() for f in files.replace(",", " ").split() if f.strip()]
+    if not paths:
+        raise ToolException("No files provided. Pass at least one file path.")
+    _run(path, ["git", "restore", "--"] + paths)
+    return f"✅ Restored {len(paths)} file(s) to HEAD: {', '.join(paths)}"
+
+
+@tool
 def push(path: str, remote: str | None = None, branch: str | None = None) -> str:
     """Push the current branch (or `branch`) to `remote` (default 'origin')."""
     branch = branch or _current_branch_impl(path)
