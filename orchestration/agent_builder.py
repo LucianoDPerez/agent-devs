@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from langchain.agents import create_agent
 
 from config import (
@@ -13,6 +15,7 @@ from config import (
     PLAN_MAX_REASONING_TOKENS,
 )
 from core.roles import Role, load_prompt, tools_for_role
+from display.console import console
 from orchestration.framework_rules import inject_framework_rules
 from orchestration.tool_dedupe import (
     ExploreBudget,
@@ -43,8 +46,19 @@ _ROLE_TEMPERATURE = {
 
 
 async def init_mcp() -> tuple[list, int]:
-    """Conecta MCP y devuelve (tools, count)."""
-    tools = await load_mcp_tools()
+    """Conecta MCP y devuelve (tools, count).
+
+    Con timeout duro: si el MCP externo (codebase-memory-mcp) está colgado,
+    el harness NO debe quedarse bloqueado para siempre en session.start()
+    (E2E real: subprocess de main.py sin emitir ni el banner durante 40 min
+    porque la conexión stdio al MCP no respondía). Sin MCP, el agente arranca
+    igual con las tools locales.
+    """
+    try:
+        tools = await asyncio.wait_for(load_mcp_tools(), timeout=MCP_CONNECT_TIMEOUT)
+    except (asyncio.TimeoutError, Exception):
+        console.print("[yellow]⚠️  MCP no respondió — se continúa sin tools del knowledge graph.[/yellow]")
+        tools = []
     return tools, mcp_tool_count()
 
 

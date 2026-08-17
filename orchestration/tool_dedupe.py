@@ -29,6 +29,17 @@ class ToolBudgetExceeded(GraphBubbleUp):
     pass
 
 
+class VerifyRequired(ToolBudgetExceeded):
+    """El modelo escribió N veces sin correr verify (lint/tests/build) en el medio.
+
+    Subclase de ToolBudgetExceeded: session.py la maneja ANTES que el genérico
+    e inyecta la compuerta de verificación (GATE_RETRY_TOOLS, que SÍ tiene
+    run_lint/run_tests/run_build) en lugar del retry write-only — ese retry no
+    tiene verify tools y chocaría con el mismo tope al instante.
+    """
+    pass
+
+
 # Tools MCP (cm__*) de BÚSQUEDA en el knowledge graph — gastan presupuesto de
 # exploración. El 4B en ANALYZE/PLAN se mareaba re-buscando lo mismo con
 # queries distintas (el dedupe solo frena args idénticos).
@@ -99,6 +110,8 @@ class ExploreBudget:
         write_pressure: bool = True,
         productive_names: frozenset | None = None,
         max_edits_per_file: int = 4,
+        max_writes_before_verify: int = 0,
+        max_verify_before_write: int = 5,
     ):
         """``write_pressure=False`` → modo ANALYZE/PLAN: capa la exploración
         pero NUNCA presiona a escribir. Al agotar el presupuesto lanza
@@ -113,11 +126,27 @@ class ExploreBudget:
         verify en el medio. El dedupe solo atrapa args idénticos; el modelo
         en loop variaba los bloques (8 edit_file a un path corrompiendo el
         JSX por partes). Correr lint/tests/build resetea el contador.
+
+        ``max_writes_before_verify``: tope de escrituras TOTALES (cualquier
+        archivo) sin correr verify en el medio (EXECUTE). max_edits_per_file
+        no atrapa el spree multi-archivo (15 writes ciegos en la iteración de
+        Medicos). Al superarlo lanza ``VerifyRequired`` → session inyecta la
+        compuerta de verificación en vez del retry write-only.
+
+        ``max_verify_before_write``: tope de verify calls SEGUIDAS sin escribir
+        (solo aplica cuando max_writes_before_verify > 0, i.e. EXECUTE). El
+        modelo entraba en loop de run_lint/run_tests sin escribir NADA (15
+        run_lint seguidos, E2E real): el dedupe nunca bloquea verify tools por
+        diseño y la write pressure las considera productivas → loop infinito
+        hasta recursion limit. Una verificación honesta va acompañada de
+        escritura o cierre; el 6to verify sin write es un loop.
         """
         self.max_calls = max_calls
         self.max_reads_after_explore = max_reads_after_explore
         self.max_tools_before_write = max_tools_before_write
         self.max_edits_per_file = max_edits_per_file
+        self.max_writes_before_verify = max_writes_before_verify
+        self.max_verify_before_write = max_verify_before_write
         self.write_pressure = write_pressure
         self._productive_names = (
             productive_names if productive_names is not None
@@ -129,6 +158,8 @@ class ExploreBudget:
         self._wrote = False
         self._explore_exhausted = False
         self._edits_per_path: dict[str, int] = {}
+        self._writes_since_verify = 0
+        self._verify_streak = 0
 
     def reset(self) -> None:
         self._count = 0
@@ -137,6 +168,16 @@ class ExploreBudget:
         self._wrote = False
         self._explore_exhausted = self.max_calls <= 0
         self._edits_per_path.clear()
+        self._writes_since_verify = 0
+        self._verify_streak = 0
+
+    def limit_reads_now(self) -> None:
+        """Activa el tope de lecturas (max_reads_after_explore) DE INMEDIATO,
+        sin esperar a que el modelo agote la exploración. Lo usa el retry
+        write-only: "lectura acotada" real, no una promesa incumplida (los
+        reads no se capaban hasta agotar explore, y en el retry casi nunca
+        exploraban → reads ilimitados)."""
+        self._explore_exhausted = True
 
     @property
     def used(self) -> int:
@@ -175,12 +216,40 @@ class ExploreBudget:
 
         if name in WRITE_TOOL_NAMES:
             self._wrote = True
+            self._verify_streak = 0
+            # Tope de escrituras totales sin verify en el medio: atrapa el
+            # spree multi-archivo (max_edits_per_file solo capa el MISMO path).
+            # Lanza VerifyRequired → session inyecta la compuerta de verify.
+            if self.write_pressure and self.max_writes_before_verify > 0:
+                self._writes_since_verify += 1
+                if self._writes_since_verify > self.max_writes_before_verify:
+                    raise VerifyRequired(
+                        f"{self._writes_since_verify} escrituras sin correr verify "
+                        f"en el medio (límite: {self.max_writes_before_verify}). "
+                        "PARÁ de escribir a ciegas. CORRÉ AHORA "
+                        "run_lint(path=...), run_tests(path=...) y "
+                        "run_build(path=...) para verificar lo que escribiste "
+                        "y corregir los errores antes de seguir."
+                    )
             return None
 
-        # Verify tools resetean el contador de edits: después de verificar,
-        # el estado es conocido y editar de nuevo es legítimo.
+        # Verify tools resetean los contadores de edits y escrituras: después
+        # de verificar, el estado es conocido y editar de nuevo es legítimo.
+        # PERO: verify en loop SIN escribir es un loop (15 run_lint seguidos
+        # en E2E real) — tope de streak (solo EXECUTE, ver __init__).
         if name in VERIFY_TOOL_NAMES:
             self._edits_per_path.clear()
+            self._writes_since_verify = 0
+            if self.write_pressure and self.max_writes_before_verify > 0:
+                self._verify_streak += 1
+                if self._verify_streak > self.max_verify_before_write:
+                    raise ToolBudgetExceeded(
+                        f"{self._verify_streak} verifies seguidos sin escribir nada. "
+                        "Correr run_lint/run_tests/run_build en loop no arregla "
+                        "nada. TU ÚNICA ACCIÓN: aplicá el cambio con "
+                        "edit_file/write_file, o si ya está hecho, continuá con "
+                        "stage_files + create_commit."
+                    )
 
         # VERIFY / git RO siempre permitidos una vez que ya escribió
         # (y también antes, con tope de tools sin write)

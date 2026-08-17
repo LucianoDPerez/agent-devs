@@ -94,6 +94,31 @@ MAX_TOOL_CALLS_PER_TURN = 20
 # distintos (el dedupe solo atrapa args idénticos) corrompiendo el JSX por
 # partes. Al superar el tope se lanza ToolBudgetExceeded → retry con ancla.
 MAX_EDITS_PER_FILE = 4
+# Máx escrituras TOTALES (cualquier archivo) sin correr verify (lint/tests/build)
+# en el medio. MAX_EDITS_PER_FILE solo capa el MISMO path; el spree multi-archivo
+# (15 writes ciegos en la iteración de Medicos: scaffolding de tests roto sin
+# instalar deps ni verificar) se colaba entre archivos distintos. Al superarlo
+# se lanza VerifyRequired → session inyecta la compuerta de verificación
+# (GATE_RETRY_TOOLS, que SÍ incluye run_lint/run_tests/run_build).
+EXECUTE_MAX_WRITES_BEFORE_VERIFY = 6
+# Si un verify (lint/tests/build) FALLA y faltan dependencias declaradas en
+# node_modules, el harness ejecuta npm install automáticamente y re-corre la
+# verificación UNA vez. Los LLM chicos (4B/9B) ignoran sistemáticamente el
+# hint "corré run_install" (E2E real: flujo trabado N turnos en "command not
+# found"). npm install es idempotente: instala solo lo declarado que falte.
+AUTO_INSTALL_ON_VERIFY_FAIL = True
+# Máx verify calls SEGUIDAS sin escribir (loop anti-run_lint): el modelo
+# entraba en loop de run_lint/run_tests sin escribir NADA (15 run_lint
+# seguidos en iteración real). Una verificación honesta viene acompañada de
+# escritura o cierre; el 6to verify sin write es un loop.
+EXECUTE_MAX_VERIFY_BEFORE_WRITE = 5
+# Máx inyecciones MID-TURN de la compuerta de verificación (VerifyRequired)
+# antes de declarar el turno fallido: evita ping-pong infinito write→gate.
+VERIFY_GATE_MAX_INJECTIONS = 3
+# Timeout de conexión al MCP externo (codebase-memory-mcp) en session.start().
+# Si el MCP está colgado, el harness arranca SIN tools del knowledge graph en
+# vez de bloquearse para siempre (E2E real: main.py sin emitir output 40 min).
+MCP_CONNECT_TIMEOUT = 90
 # Rechazos del guard quirúrgico de edit_file (bloque > 40 líneas) al mismo
 # archivo antes de habilitar write_file completo para ese path: el modelo no
 # converge con cirugía fina → cambiamos de estrategia con ancla del read cache.

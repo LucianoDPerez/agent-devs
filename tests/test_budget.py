@@ -1,6 +1,10 @@
 """Unit tests for tool budget and dedupe logic."""
 import pytest
-from orchestration.tool_dedupe import ExploreBudget, ToolBudgetExceeded
+from orchestration.tool_dedupe import (
+    ExploreBudget,
+    ToolBudgetExceeded,
+    VerifyRequired,
+)
 
 
 class TestExploreBudgetReview:
@@ -184,3 +188,148 @@ class TestEditsPerFile:
         self.budget.consume("run_build", {"path": "/repo"})
         # Tras verify, editar de nuevo es legítimo
         assert self.budget.consume("edit_file", {"path": "/repo/a.ts", "old_str": "x", "new_str": "y"}) is None
+
+
+class TestWritesBeforeVerify:
+    """Tope de escrituras TOTALES (cualquier archivo) sin verify en el medio.
+
+    Anti-spree multi-archivo (iteración de Medicos: 15 writes ciegos a
+    package.json x3 + 4 archivos de scaffolding, 0 verificación).
+    """
+
+    def setup_method(self):
+        self.budget = ExploreBudget(
+            max_calls=3,
+            max_reads_after_explore=10,
+            max_tools_before_write=30,
+            max_writes_before_verify=3,
+        )
+
+    def test_writes_below_cap_allowed(self):
+        for i in range(3):
+            result = self.budget.consume(
+                "write_file", {"path": f"/repo/f{i}.ts", "content": "x"}
+            )
+            assert result is None
+
+    def test_writes_across_files_past_cap_raise(self):
+        """El spree multi-archivo SÍ se atrapa (a diferencia de max_edits_per_file)."""
+        for i in range(3):
+            self.budget.consume("write_file", {"path": f"/repo/f{i}.ts", "content": "x"})
+        with pytest.raises(VerifyRequired, match="verify"):
+            self.budget.consume("write_file", {"path": "/repo/f3.ts", "content": "x"})
+
+    def test_verify_required_is_tool_budget_exceeded(self):
+        """Subclase: cualquier handler genérico de ToolBudgetExceeded la atrapa."""
+        assert issubclass(VerifyRequired, ToolBudgetExceeded)
+
+    def test_verify_resets_write_counter(self):
+        for i in range(3):
+            self.budget.consume("write_file", {"path": f"/repo/f{i}.ts", "content": "x"})
+        self.budget.consume("run_tests", {"path": "/repo"})
+        # Tras verify, escribir de nuevo es legítimo
+        assert self.budget.consume("write_file", {"path": "/repo/f3.ts", "content": "x"}) is None
+
+    def test_git_write_counts_toward_cap(self):
+        """Commit sin verificar también queda bloqueado."""
+        for i in range(3):
+            self.budget.consume("write_file", {"path": f"/repo/f{i}.ts", "content": "x"})
+        with pytest.raises(VerifyRequired):
+            self.budget.consume("stage_files", {"path": "/repo"})
+
+    def test_reset_clears_write_counter(self):
+        for i in range(3):
+            self.budget.consume("write_file", {"path": f"/repo/f{i}.ts", "content": "x"})
+        self.budget.reset()
+        assert self.budget.consume("write_file", {"path": "/repo/f3.ts", "content": "x"}) is None
+
+    def test_disabled_when_zero(self):
+        """Default 0 → comportamiento histórico sin tope."""
+        budget = ExploreBudget(
+            max_calls=3,
+            max_reads_after_explore=10,
+            max_tools_before_write=30,
+        )
+        for i in range(15):
+            assert budget.consume("write_file", {"path": f"/repo/f{i}.ts", "content": "x"}) is None
+
+    def test_analyze_never_raises_verify_required(self):
+        """write_pressure=False (ANALYZE/PLAN) → el tope no aplica."""
+        budget = ExploreBudget(
+            max_calls=3,
+            max_reads_after_explore=10,
+            max_tools_before_write=0,
+            write_pressure=False,
+            max_writes_before_verify=2,
+        )
+        for i in range(5):
+            assert budget.consume("write_file", {"path": f"/repo/f{i}.ts", "content": "x"}) is None
+
+
+class TestLimitReadsNow:
+    """limit_reads_now(): tope de lecturas activo DESDE EL INICIO (retry write-only)."""
+
+    def test_reads_capped_immediately(self):
+        budget = ExploreBudget(
+            max_calls=3,
+            max_reads_after_explore=2,
+            max_tools_before_write=30,
+        )
+        budget.limit_reads_now()
+        assert budget.consume("read_file", {"path": "/repo/a.ts"}) is None
+        assert budget.consume("read_file", {"path": "/repo/b.ts"}) is None
+        # Tercera lectura → bloqueada aunque nunca haya explorado
+        result = budget.consume("read_file", {"path": "/repo/c.ts"})
+        assert result is not None
+        assert "read_file" in result
+
+    def test_explore_still_allowed_once_after_limit(self):
+        """max_calls=1 + limit_reads_now: UNA búsqueda sigue permitida."""
+        budget = ExploreBudget(
+            max_calls=1,
+            max_reads_after_explore=2,
+            max_tools_before_write=30,
+        )
+        budget.limit_reads_now()
+        assert budget.consume("search_code", {"pattern": "foo"}) is None
+        result = budget.consume("search_code", {"pattern": "bar"})
+        assert result is not None
+
+
+class TestVerifyStreak:
+    """Tope de verify calls SEGUIDAS sin escribir (anti-loop run_lint)."""
+
+    def setup_method(self):
+        self.budget = ExploreBudget(
+            max_calls=3,
+            max_reads_after_explore=10,
+            max_tools_before_write=30,
+            max_writes_before_verify=6,
+            max_verify_before_write=3,
+        )
+
+    def test_verify_below_cap_allowed(self):
+        for i in range(3):
+            assert self.budget.consume("run_lint", {"path": "/repo"}) is None
+
+    def test_verify_loop_raises(self):
+        for i in range(3):
+            self.budget.consume("run_lint", {"path": "/repo"})
+        with pytest.raises(ToolBudgetExceeded, match="verifies seguidos"):
+            self.budget.consume("run_lint", {"path": "/repo"})
+
+    def test_write_resets_verify_streak(self):
+        for i in range(3):
+            self.budget.consume("run_lint", {"path": "/repo"})
+        self.budget.consume("edit_file", {"path": "/repo/a.ts", "old_str": "x", "new_str": "y"})
+        assert self.budget.consume("run_lint", {"path": "/repo"}) is None
+
+    def test_disabled_when_no_write_cap(self):
+        """REVIEW (max_writes_before_verify=0) → verify sin límite de streak."""
+        budget = ExploreBudget(
+            max_calls=3,
+            max_reads_after_explore=15,
+            max_tools_before_write=30,
+        )
+        for i in range(10):
+            assert budget.consume("run_lint", {"path": "/repo"}) is None

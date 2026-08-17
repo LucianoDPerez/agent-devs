@@ -19,6 +19,8 @@ from config import (
     EXECUTE_EXPLORE_BUDGET,
     EXECUTE_MAX_READS_AFTER_EXPLORE,
     EXECUTE_MAX_TOOLS_BEFORE_WRITE,
+    EXECUTE_MAX_VERIFY_BEFORE_WRITE,
+    EXECUTE_MAX_WRITES_BEFORE_VERIFY,
     EXECUTE_RECURSION_LIMIT,
     EXECUTE_MAX_REASONING_SECONDS,
     EXECUTE_REQUIRE_WRITE,
@@ -38,6 +40,7 @@ from config import (
     REASONING_RETRY_ENABLED,
     MAX_REASONING_SECONDS,
     MAX_TOOL_CALLS_PER_TURN,
+    VERIFY_GATE_MAX_INJECTIONS,
 )
 from core.intents import Intent
 from core.roles import Role, role_for_intent
@@ -63,6 +66,7 @@ from orchestration.tool_dedupe import (
     ToolBudgetExceeded,
     ToolCallDedupe,
     VERIFY_TOOL_NAMES,
+    VerifyRequired,
     WRITE_TOOL_NAMES,
 )
 
@@ -428,6 +432,8 @@ class Session:
             max_reads_after_explore=EXECUTE_MAX_READS_AFTER_EXPLORE,
             max_tools_before_write=EXECUTE_MAX_TOOLS_BEFORE_WRITE,
             productive_names=VERIFY_TOOL_NAMES,
+            max_writes_before_verify=EXECUTE_MAX_WRITES_BEFORE_VERIFY,
+            max_verify_before_write=EXECUTE_MAX_VERIFY_BEFORE_WRITE,
         )
         # ANALYZE/PLAN: capa la búsqueda MCP pero NUNCA presiona a escribir.
         # Al agotarse lanza ToolBudgetExceeded → retry no_explore (no write-only).
@@ -1160,6 +1166,7 @@ class Session:
         max_attempts = 1 + (2 if REASONING_RETRY_ENABLED else 0)
         attempt = 0
         gate_retries = 0
+        verify_injections = 0
         interrupted = False
         interrupted_by_esc = False
         # Turno terminó en FALLO (loop, recursion, error): los cambios pueden
@@ -1294,6 +1301,9 @@ class Session:
                 ):
                     gate_retries += 1
                     self._inject_verify_gate()
+                    # Bug latente: messages_for_agent quedaba STALE y el gate
+                    # NUNCA llegaba al modelo — la verificación era un no-op.
+                    messages_for_agent = list(self._messages)
                     console.print(
                         "\n[dim]↻ Verificando los cambios (lint/tests/build)…[/dim]\n"
                     )
@@ -1311,6 +1321,34 @@ class Session:
                 interrupted = True
                 interrupted_by_esc = watcher.interrupted.is_set()
                 break
+            except VerifyRequired as e:
+                # El modelo escribió N veces sin verificar: inyectar la
+                # compuerta de verificación AHORA (GATE_RETRY_TOOLS tiene
+                # run_lint/run_tests/run_build). El retry write-only NO tiene
+                # verify tools y chocaría con el mismo tope al instante.
+                if new_role != Role.EXECUTE or verify_injections >= VERIFY_GATE_MAX_INJECTIONS:
+                    turn_failed = True
+                    interrupted = True
+                    print(
+                        self._closing_message(
+                            "\n\n↻ El modelo escribió demasiado sin verificar "
+                            "y la compuerta de verificación se inyectó "
+                            f"{verify_injections} veces sin converger. "
+                            "Reintentá con un prompt más específico "
+                            "(archivo, endpoint o línea concreta)."
+                        ),
+                        flush=True,
+                    )
+                    break
+                verify_injections += 1
+                self._called_tools.clear()
+                self._inject_verify_gate()
+                messages_for_agent = list(self._messages)
+                console.print(
+                    "\n[yellow]🔧 El modelo escribió sin verificar. Inyectando "
+                    "compuerta de verificación (lint/tests/build)…[/yellow]\n"
+                )
+                continue
             except ToolBudgetExceeded as e:
                 if attempt + 1 >= max_attempts:
                     turn_failed = True
@@ -1340,9 +1378,21 @@ class Session:
                 messages_for_agent = list(self._messages)
                 # Reset dedupe + budget para el retry: el modelo necesita margen
                 # para read_file -> edit_file con el old_str correcto.
+                # "Lectura ACOTADA" real: max_calls=1 (una búsqueda por retry)
+                # + tope de lecturas activo DESDE EL INICIO (limit_reads_now).
+                # El estado previo no frenaba nada: _explore_exhausted recién
+                # se activaba tras explorar, y el retry casi nunca exploraba →
+                # reads ilimitados hasta el corte por recursion (iteración
+                # Medicos: 15 tool calls ciegas, 0 verificación).
+                # _called_tools.clear(): la compuerta final debe exigir verify
+                # en ESTE intento — no dejar pasar verify stale del intento 1.
+                self._called_tools.clear()
                 self._dedupe.reset()
                 self._dedupe.max_repeats = 2
+                self._explore_budget.max_calls = 1
+                self._explore_budget.max_reads_after_explore = EXECUTE_MAX_READS_AFTER_EXPLORE
                 self._explore_budget.reset()
+                self._explore_budget.limit_reads_now()
                 self._rebuild_agent_write_only()
                 console.print(
                     "\n[dim]↻ Presupuesto de exploración agotado. Reintentando "
@@ -1392,9 +1442,14 @@ class Session:
                 # Reset dedupe + budget: el intento anterior dejó el contador
                 # alto (total=5) y la primera tool no-productiva del retry
                 # cortaba al instante (bug detectado en E2E).
+                # "Lectura ACOTADA" real + verify limpio (ver retry de budget).
+                self._called_tools.clear()
                 self._dedupe.reset()
                 self._dedupe.max_repeats = 2
+                self._explore_budget.max_calls = 1
+                self._explore_budget.max_reads_after_explore = EXECUTE_MAX_READS_AFTER_EXPLORE
                 self._explore_budget.reset()
+                self._explore_budget.limit_reads_now()
                 self._rebuild_agent_write_only()
                 if isinstance(e, ToolCallLimitExceeded):
                     console.print(
@@ -1435,6 +1490,10 @@ class Session:
                         ):
                             gate_retries += 1
                             self._inject_verify_gate()
+                            # Bug latente: el mensaje de la compuerta se
+                            # agregaba a self._messages pero messages_for_agent
+                            # quedaba STALE → el gate NUNCA llegaba al modelo.
+                            messages_for_agent = list(self._messages)
                             console.print(
                                 "\n[dim]↻ Verificando los cambios (lint/tests/build)…[/dim]\n"
                             )
@@ -1459,8 +1518,12 @@ class Session:
                         "edit_file/write_file/read_file/search_code, o un texto breve."
                     ))
                     messages_for_agent = list(self._messages)
+                    self._called_tools.clear()
                     self._dedupe.reset()
+                    self._explore_budget.max_calls = 1
+                    self._explore_budget.max_reads_after_explore = EXECUTE_MAX_READS_AFTER_EXPLORE
                     self._explore_budget.reset()
+                    self._explore_budget.limit_reads_now()
                     self._rebuild_agent_write_only()
                     console.print(
                         "\n[dim]↻ Reintentando con lectura acotada + escritura…[/dim]"
