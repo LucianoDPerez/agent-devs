@@ -1,0 +1,15 @@
+M backend/package.json
+ M backend/src/server.ts
+ M backend/tsconfig.json
+ M frontend/package.json
+ M frontend/src/application/hooks/useRecentConsultas.ts
+ M frontend/src/application/services/api.ts
+ M frontend/src/presentation/components/CreateConsultaModal.tsx
+ M frontend/src/presentation/pages/PacienteDetailPage.tsx
+ M frontend/tsconfig.tsbuildinfo
+ M package.json
+?? backend/jest.config.js
+?? backend/src/tests/
+?? frontend/src/tests/
+?? frontend/vitest.config.ts
+?? package-lock.json

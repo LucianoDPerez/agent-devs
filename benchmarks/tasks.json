@@ -1,0 +1,211 @@
+{
+  "repo": "/Users/luchop/PROYECTOS IA/Medicos",
+  "objetivo": "15 tareas reales sobre Medicos ejecutadas por el agente AgentDevs (main.py). NO se toca Medicos fuera del agente: este benchmark solo lee (git) y verifica (npm scripts).",
+  "contexto": "El repo tiene deuda real sin commitear: scaffolding de tests/lint roto de una iteración anterior (jest/vitest sin config, @types/vitest inexistente en npm, import path roto en server.test.ts) + cambios previos en PacienteDetailPage/api.ts/useRecentConsultas.",
+  "tasks": [
+    {
+      "id": "J1",
+      "nivel": "junior",
+      "titulo": "Hacer funcionar los tests del backend (npm run test -w backend)",
+      "prompt": "implementar: el repo tiene scaffolding de tests roto. Objetivo: que `npm run test -w backend` corra y pase. Pasos: 1) corré run_install para instalar deps (jest, ts-jest, supertest ya figuran en devDependencies del root y backend); 2) creá la config de jest con preset ts-jest (jest.config.js o en package.json) para backend; 3) el archivo backend/src/tests/__tests__/server.test.ts importa `{ app }` desde '../server' pero vive en src/tests/__tests__ (el import apunta a un archivo inexistente) y backend/src/server.ts no exporta la app: exportá la app Express desde server.ts (sin que rompa el start) y corregí el import del test a '../../server'; 4) verificá con run_install, run_tests, run_lint y run_build hasta que los tres scripts del backend pasen. No toques nada que no sea necesario para que los tests corran.",
+      "criterio": [
+        {"label": "test backend", "cmd": "npm run test -w backend -- --passWithNoTests=false 2>&1 || npm run test -w backend"}
+      ]
+    },
+    {
+      "id": "J1b",
+      "nivel": "junior",
+      "titulo": "[ITERACIÓN 2] Agregar workspaces al root para que npm run test -w backend funcione",
+      "prompt": "implementar: ya creaste backend/jest.config.js y exportaste la app en backend/src/server.ts (están en el working tree). El comando `npm run test -w backend` sigue fallando con 'npm error No workspaces found: --workspace=backend' porque el package.json RAÍZ no tiene el campo `workspaces`. Pasos: 1) agregá `\"workspaces\": [\"backend\", \"frontend\"]` al package.json raíz (medica-saas); 2) corré run_install en la raíz para que npm re-ligüe los workspaces (esto re-instala y puede tardar); 3) corré run_tests con path de la RAÍZ (npm run test -w backend) y verificá que los tests de backend/src/tests/__tests__/server.test.ts pasen (si el import o la config de jest fallan, corregilo); 4) verificá también run_build y run_lint de la raíz hasta que los tres pasen o queden documentados los errores restantes; 5) NO toques frontend ni el resto del repo: solo lo necesario para que el workspace backend quede funcional.",
+      "criterio": [
+        {"label": "test backend (workspace)", "cmd": "npm run test -w backend"}
+      ]
+    },
+    {
+      "id": "J1c",
+      "nivel": "junior",
+      "titulo": "[ITERACIÓN 3] Quitar workspaces duplicado + run_install + tests verdes",
+      "prompt": "implementar: dos bugs puntuales en el working tree. 1) El package.json RAÍZ quedó con DOS bloques `\"workspaces\"` duplicados (uno seguido del otro): quedate con UNO solo (JSON sin duplicar, manteniendo backend y frontend). 2) `npm run test -w backend` falla con 'sh: jest: command not found' porque NUNCA se instaló tras agregar workspaces: corré run_install(path de la RAÍZ del repo) y ESPERÁ a que termine (npm install). 3) Recién después corré run_tests(path de la RAÍZ) y arreglá lo que falle (la config backend/jest.config.js y el test backend/src/tests/__tests__/server.test.ts ya existen; corregí import paths o config si jest lo pide). Objetivo final: `npm run test -w backend` corre y TODOS los tests pasan. NO toques frontend. Verificá con run_tests y run_build de la raíz al final.",
+      "criterio": [
+        {"label": "test backend (workspace)", "cmd": "npm run test -w backend"},
+        {"label": "build backend", "cmd": "npm run build -w backend"}
+      ]
+    },
+    {
+      "id": "J1d",
+      "nivel": "junior",
+      "titulo": "[ITERACIÓN 4] run_install PRIMERO + setup.ts + tests/build verdes",
+      "prompt": "implementar: fallaste porque nunca instalaste las dependencias. Tu PRIMERA acción DEBE ser: run_install(path=\"/Users/luchop/PROYECTOS IA/Medicos\") — el resultado debe mostrar que npm install corrió (los workspaces backend/frontend no tienen symlinks en node_modules todavía). Después de instalar: 1) Arreglá backend/src/tests/setup.ts: importa `{ prisma }` desde '../database/prisma' pero el archivo real está en backend/src/infrastructure/database/prisma.ts (path correcto: '../../infrastructure/database/prisma') y usa el módulo 'dotenv' que no está en package.json: o agregalo a devDependencies O eliminá su uso (el proyecto ya carga env en src/config/dotenv.ts); 2) backend/src/tests/__tests__/server.test.ts usa globals de jest (it/expect): verifica que @types/jest esté instalado (es devDependency) y que el tsconfig de build NO compile src/tests (excluí 'src/tests' en tsconfig.json exclude — el build de producción no debe compilar tests); 3) corré run_tests(path raíz) y run_build(path raíz) hasta que AMBOS pasen: `npm run test -w backend` con tests verdes y `npm run build -w backend` sin errores de tsc. No inventes archivos: usá read_file antes de editar.",
+      "criterio": [
+        {"label": "test backend (workspace)", "cmd": "npm run test -w backend"},
+        {"label": "build backend", "cmd": "npm run build -w backend"}
+      ]
+    },
+    {
+      "id": "J1e",
+      "nivel": "junior",
+      "titulo": "[ITERACIÓN 5] Quitar @types/vitest (E404) + run_install + tests verdes",
+      "prompt": "implementar: DIAGNÓSTICO CONFIRMADO: `npm install` falla con 'npm error 404 Not Found - GET https://registry.npmjs.org/@types%2fvitest' — el paquete @types/vitest NO EXISTE en npm y está en devDependencies de frontend/package.json (scaffolding roto de una iteración anterior). Como npm workspaces instala TODO junto, ESO bloquea la instalación de TODOS los workspaces (por eso jest nunca se instala). Pasos OBLIGATORIOS en orden: 1) editá frontend/package.json: ELIMINÁ la línea `\"@types/vitest\": \"^1.6.0\"` de devDependencies; 2) corré run_install(path=\"/Users/luchop/PROYECTOS IA/Medicos\") y VERIFICÁ que el resultado muestre que npm install se ejecutó sin error 404 (npm ya no debe mencionar @types/vitest); 3) corré run_tests(path raíz) → jest ahora debe estar disponible; arreglá lo que falle en backend/src/tests/__tests__/server.test.ts (imports, supertest) hasta que los tests pasen; 4) run_build(path raíz) también debe pasar (ya estaba casi listo). Objetivo: `npm run test -w backend` ✅ y `npm run build -w backend` ✅. NO toques nada del frontend salvo la línea de @types/vitest.",
+      "criterio": [
+        {"label": "test backend (workspace)", "cmd": "npm run test -w backend"},
+        {"label": "build backend", "cmd": "npm run build -w backend"}
+      ]
+    },
+    {
+      "id": "J1f",
+      "nivel": "junior",
+      "titulo": "[ITERACIÓN 6] jest.config: roots/src + ignore dist + @types/supertest",
+      "prompt": "implementar: npm install YA funcionó (no toques dependencias de @types/vitest ni workspaces). El build YA pasa. Ahora jest falla porque está recogiendo los tests COMPILADOS de backend/dist/ (dejados por tsc): los suites 'dist/tests/__tests__/server.test.d.ts' y 'dist/tests/__tests__/server.test.js' fallan y hasta 2 tests fallan por errores de tipos. Pasos: 1) leé backend/jest.config.js; 2) configurá jest para que corra SOLO los fuentes: agrega roots: ['<rootDir>/src'], testMatch: ['**/__tests__/**/*.test.ts', '**/?(*.)+(spec|test).ts'] y testPathIgnorePatterns: ['/node_modules/', '/dist/']; 3) corré run_tests(path raíz) y arreglá los errores de tipos que queden (si supertest reporta TS7016 implicit any, agregá '@types/supertest' a devDependencies de backend/package.json y corré run_install para instalarlo); 4) también limpiá backend/dist si jest sigue viendo tests ahí; 5) objetivo: `npm run test -w backend` con los 2 tests de server.test.ts PASANDO y `npm run build -w backend` pasando.",
+      "criterio": [
+        {"label": "test backend (workspace)", "cmd": "npm run test -w backend"},
+        {"label": "build backend", "cmd": "npm run build -w backend"}
+      ]
+    },
+    {
+      "id": "J1g",
+      "nivel": "junior",
+      "titulo": "[ITERACIÓN 7] Agregar @types/supertest e instalar — último error TS7016",
+      "prompt": "implementar: queda UN SOLO error: 'TS7016: Could not find a declaration file for module supertest' en backend/src/tests/__tests__/server.test.ts (jest ya corre solo src/, el build pasa). Pasos EXACTOS: 1) agregá la línea `\"@types/supertest\": \"^6.0.2\"` en devDependencies de backend/package.json (después de \"@types/jest\"); 2) corré run_install(path=\"/Users/luchop/PROYECTOS IA/Medicos\") para instalar el paquete; 3) corré run_tests(path raíz): `npm run test -w backend` debe pasar con los 2 tests (health + root) en verde; 4) corré run_build(path raíz) para confirmar que sigue pasando. NO toques ningún otro archivo.",
+      "criterio": [
+        {"label": "test backend (workspace)", "cmd": "npm run test -w backend"},
+        {"label": "build backend", "cmd": "npm run build -w backend"}
+      ]
+    },
+    {
+      "id": "J1h",
+      "nivel": "junior",
+      "titulo": "[ITERACIÓN 8] Versión correcta de @types/supertest (^6.0.2) + install",
+      "prompt": "implementar: inventaste la versión `@types/supertest: ^6.3.10` que NO EXISTE en npm ('npm error 404 No match found for version 6.3.10') — por eso npm install falla y el TS7016 sigue. La versión que puse en el prompt original era correcta. Pasos EXACTOS: 1) editá backend/package.json: reemplazá `\"@types/supertest\": \"^6.3.10\"` por `\"@types/supertest\": \"^6.0.2\"` (esa versión SÍ existe en el registry); 2) corré run_install(path=\"/Users/luchop/PROYECTOS IA/Medicos\") y confirmá en el resultado que NO aparece '404' ni '@types/supertest' como error; 3) corré run_tests(path raíz) hasta que `npm run test -w backend` pase con los 2 tests en verde; 4) corré run_build(path raíz) para confirmar que sigue pasando.",
+      "criterio": [
+        {"label": "test backend (workspace)", "cmd": "npm run test -w backend"},
+        {"label": "build backend", "cmd": "npm run build -w backend"}
+      ]
+    },
+    {
+      "id": "J2",
+      "nivel": "junior",
+      "titulo": "Hacer funcionar los tests del frontend (npm run test -w frontend)",
+      "prompt": "implementar: el repo tiene scaffolding de tests frontend roto. Objetivo: que `npm run test -w frontend` corra y pase. Pasos: 1) `@types/vitest` NO existe en npm (404) — quitarlo de frontend/package.json devDependencies o npm install falla; 2) frontend/vitest.config.ts usa environment 'jsdom' pero jsdom no está instalado: agregalo a devDependencies e instalá; 3) los tests en frontend/src/tests/__tests__/app.test.ts son placeholders (`expect(true).toBe(true)`): reemplazalos por tests REALES mínimos de algo del frontend (por ejemplo un test de frontend/src/application/services/api.ts o apiClient.ts con fetch mockeado, o un test de un formateador si existe); 4) corré run_install y run_tests (y run_lint si configuraste lint) hasta que pasen. Cuidado: no rompas el build de vite.",
+      "criterio": [
+        {"label": "test frontend", "cmd": "npm run test -w frontend"}
+      ]
+    },
+    {
+      "id": "J3",
+      "nivel": "junior",
+      "titulo": "Configurar eslint (backend y frontend) con 0 errores",
+      "prompt": "implementar: el root package.json tiene `lint` scripts que apuntan a `npm run lint -w backend` y `npm run lint -w frontend`, pero NO existe ninguna config de eslint (ni .eslintrc ni eslint.config) ni script lint en los workspaces. Objetivo: que `npm run lint` desde la raíz corra y termine con exit 0. Pasos: 1) agregá script lint en backend/package.json (eslint sobre src/ con typescript-eslint) y frontend/package.json (eslint sobre src/); 2) creá las configs de eslint para backend (TypeScript + ts-node/tsx) y frontend (TypeScript + React) con typescript-eslint; 3) corré `npm run lint` (raíz), arreglá TODOS los errores que reporte (priorizá los que son reales: no-var, unused vars, import paths) sin cambiar comportamiento; 4) NO agregues reglas que ya estén desactivadas en el proyecto; 5) verificá también que el build siga pasando. Si un archivo es ruidoso, configurá reglas razonables (ej: '@typescript-eslint/no-explicit-any' en warn).",
+      "criterio": [
+        {"label": "lint root", "cmd": "npm run lint"}
+      ]
+    },
+    {
+      "id": "J4",
+      "nivel": "junior",
+      "titulo": "Test real del endpoint /health + export de app",
+      "prompt": "implementar: el test backend/src/tests/__tests__/server.test.ts existe pero solo verifica /health y / con supertest. Objetivo: tests de supertest REALES sobre la app Express exportada. Pasos: 1) verificá si backend/src/server.ts exporta la app Express (si no, exportala sin romper el arranque — separá app de listen si hace falta); 2) revisá qué rutas existen en backend/src/interfaces/http/routes (index.ts) y si existe un endpoint /health; si no existe, agregalo (respuesta JSON con status 'ok' y timestamp); 3) escribí tests con supertest para: GET /health → 200 con body.status, y UNA ruta de la API real (ej: GET /api/pacientes → 200 con array, o la que exista); 4) corré run_install si falta algo, run_tests, run_lint y run_build hasta que todo pase. NO levantes servidores ni uses la base de datos real: solo la app con supertest.",
+      "criterio": [
+        {"label": "test backend", "cmd": "npm run test -w backend"}
+      ]
+    },
+    {
+      "id": "J5",
+      "nivel": "junior",
+      "titulo": "Fix de tipado o bug menor en el frontend (api.ts / hooks)",
+      "prompt": "implementar: frontend/src/application/services/api.ts y frontend/src/application/hooks/useRecentConsultas.ts tienen cambios sin commitear de una iteración anterior (probablemente con problemas de tipado o lógica). Objetivo: revisar ambos archivos y dejar TODO el proyecto con TypeScript sin errores y el build verde. Pasos: 1) leé api.ts, useRecentConsultas.ts y sus tipos (domain/Consulta.ts, domain/Paciente.ts); 2) corré el build del frontend (tsc -b && vite build) y arreglá TODOS los errores de tipo que reporte, incluidos los de PacienteDetailPage.tsx si los hay; 3) NO cambies comportamiento de las vistas ni estilos: solo tipos e importaciones; 4) verificá con run_build y run_tests (si los tests existen) hasta que pasen.",
+      "criterio": [
+        {"label": "build frontend", "cmd": "npm run build -w frontend"}
+      ]
+    },
+    {
+      "id": "S1",
+      "nivel": "semi-senior",
+      "titulo": "PacienteDetailPage: convertir cards de consultas en tabla con los estilos REALES de /pacientes",
+      "prompt": "implementar: la vista /pacientes/{id} (frontend/src/presentation/pages/PacienteDetailPage.tsx) muestra las consultas como cards básicas. El usuario quiere una TABLA con el MISMO estilo que la tabla de /pacientes (frontend/src/presentation/pages/PacientesPage.tsx). CRÍTICO: los estilos ya existen — NUNCA inventes clases CSS nuevas. Pasos: 1) leé PacientesPage.tsx y Copiá la estructura/clases de su tabla (columnas, filas, header, empty state) tal cual; 2) leé PacienteDetailPage.tsx y reemplazá el bloque de consultas (cards) por la tabla usando las MISMAS clases del CSS existente; 3) verificá que el archivo CSS de PacientesPage no esté importado en PacienteDetailPage (si la tabla usa estilos de un archivo CSS propio, importalo); 4) corré run_build (frontend) y run_tests hasta que pasen; 5) NO toques nada más de la página (datos del paciente, formulario de nueva consulta, etc.) — solo el bloque de consultas.",
+      "criterio": [
+        {"label": "build frontend", "cmd": "npm run build -w frontend"}
+      ]
+    },
+    {
+      "id": "S2",
+      "nivel": "semi-senior",
+      "titulo": "Validación de datos en CreatePaciente con errores 400 claros + tests",
+      "prompt": "implementar: la creación de pacientes en el backend (backend/src/interfaces/http/controllers/PacienteController.ts + backend/src/interfaces/dtos/CreatePacienteDTO.ts + application/pacientes/CreatePaciente.ts) debe validar datos de entrada y responder 400 con mensajes claros. Pasos: 1) leé el middleware de validación backend/src/interfaces/http/middlewares/validate.ts y los DTOs para ver qué hay; 2) definí reglas realistas: nombre obligatorio y sin espacios en blanco, dni obligatorio (y único si el schema Prisma lo permite — revisá backend/prisma/schema.prisma), email formato básico si es opcional; 3) los errores deben devolver 400 con { errors: [...] } legible por el frontend; 4) escribí tests de supertest para: crear paciente válido → 201, nombre vacío → 400, dni inválido → 400; 5) verificá run_tests/run_lint/run_build. Si hay tests de base de datos que requieran la DB, mockeá el repositorio o usá solo las rutas que no tocan DB (o la DB dev si está disponible).",
+      "criterio": [
+        {"label": "test backend", "cmd": "npm run test -w backend"}
+      ]
+    },
+    {
+      "id": "S3",
+      "nivel": "semi-senior",
+      "titulo": "Estados de carga/error consistentes en el frontend",
+      "prompt": "implementar: las páginas del frontend (DashboardPage, PacientesPage, PacienteDetailPage) manejan los errores de la API de forma inconsistente (algunas muestran 'Error al cargar...', otras crashean en silencio). Objetivo: errores claros y estados de carga consistentes. Pasos: 1) revisá los hooks (usePacientes, usePaciente, useRecentConsultas, useDashboard) y frontend/src/infrastructure/http/apiClient.ts para ver el manejo actual de errores; 2) hacé que apiClient distinga errores de red vs errores HTTP del backend (400/404/500) con mensajes entendibles en español; 3) en las 3 páginas principales, mostrá: estado de carga (spinner o 'Cargando...'), estado de error (mensaje + botón reintentar si es simple) y datos vacíos con mensaje amigable; 4) NO cambies el layout visual existente más allá de lo necesario; 5) verificá con run_build y run_tests.",
+      "criterio": [
+        {"label": "build frontend", "cmd": "npm run build -w frontend"}
+      ]
+    },
+    {
+      "id": "S4",
+      "nivel": "semi-senior",
+      "titulo": "Transacción Prisma: crear consulta y actualizar el paciente atómicamente",
+      "prompt": "implementar: crear una consulta (backend/src/application/consultas/CreateConsulta.ts + PrismaConsultaRepository) debe ser ATÓMICO con la actualización del paciente que corresponde (por ejemplo actualizar su última visita / contador de consultas). Pasos: 1) leé backend/prisma/schema.prisma (modelo Paciente y Consulta, relaciones) y PrismaConsultaRepository; 2) si el modelo tiene un campo de última visita o similar, actualizalo DENTRO de una transacción ($transaction) con la creación de la consulta; si no existe tal campo, evaluá si la relación ya cubre el caso y documentá por qué no hace falta — o agregá el campo con migración si tiene sentido; 3) el repositorio debe exponer el método transaccional desde la interfaz (IConsultaRepository) para que la capa application no dependa de Prisma; 4) escribí un test unitario del caso de fallo: si falla la creación, la actualización no debe persistir (mockeá prisma o usá un test de integración con la DB dev si está disponible); 5) verificá run_tests/run_lint/run_build. No rompas la API pública.",
+      "criterio": [
+        {"label": "build backend", "cmd": "npm run build -w backend"}
+      ]
+    },
+    {
+      "id": "S5",
+      "nivel": "semi-senior",
+      "titulo": "Debounce en la búsqueda de pacientes (frontend)",
+      "prompt": "implementar: el componente frontend/src/presentation/components/PacienteSearch.tsx dispara la búsqueda de pacientes. Objetivo: debounce de ~300ms + cancelación de requests en vuelo (AbortController) para no martillar la API con cada tecla. Pasos: 1) leé PacienteSearch.tsx, usePacientes.ts, apiClient.ts y cómo se llama la búsqueda (¿local o server?); 2) implementá debounce real (setTimeout + cleanup en useEffect o custom hook) y abort de fetch previo con AbortController en apiClient si no existe; 3) el estado de 'buscando...' debe mostrarse si la request tarda; 4) mantené el comportamiento actual de la lista (filtros, paginación si aplica); 5) verificá con run_build y run_tests.",
+      "criterio": [
+        {"label": "build frontend", "cmd": "npm run build -w frontend"}
+      ]
+    },
+    {
+      "id": "T1",
+      "nivel": "senior",
+      "titulo": "Rate limiting por ruta (express-rate-limit) sin romper la API",
+      "prompt": "implementar: express-rate-limit ya está en las dependencies del backend (backend/package.json) pero NO se usa. Objetivo: rate limiting por IP diferenciado: suave en GETs (lectura) y más estricto en writes (POST/PUT/DELETE), con mensaje de error claro (429) y headers estándar. Pasos: 1) leé backend/src/server.ts y las rutas (interfaces/http/routes); 2) aplicá un rate limiter global suave (ej: 300 req/15min por IP) y uno estricto para rutas de escritura (ej: 60 req/15min) aplicado en las rutas POST/PUT/DELETE de pacientes/consultas/migraciones; 3) NO limites /health ni rutas de migración internas de forma que rompan el flujo existente (revisá si MigracionController llama internamente — si usa fetch interno, excluí esas rutas del límite estricto); 4) los 429 deben devolver JSON { error: 'Too many requests...' } con Retry-After; 5) verificá con run_build y run_tests, y describí en el summary del turno qué rutas quedaron con qué límite.",
+      "criterio": [
+        {"label": "build backend", "cmd": "npm run build -w backend"}
+      ]
+    },
+    {
+      "id": "T2",
+      "nivel": "senior",
+      "titulo": "Middleware de errores centralizado + errores de dominio tipados con tests de integración",
+      "prompt": "implementar: el backend tiene backend/src/domain/errors/AppError.ts y un middleware backend/src/interfaces/http/middlewares/errorHandler.ts pero el manejo de errores es inconsistente entre controllers (try/catch repetidos, respuestas 500 genéricas). Objetivo: pipeline de errores limpio y tipado. Pasos: 1) leé AppError, errorHandler, todos los controllers y el routes/index.ts para mapear el estado actual; 2) definí un conjunto mínimo de errores de dominio tipados (NotFoundError, ValidationError, ConflictError) que extiendan AppError con statusCode propio; 3) el errorHandler debe: responder JSON { error: { code, message, details? } }, mapear errores de Prisma conocidos (P2025 not found → 404, P2002 unique → 409), y loggear el stack en dev; 4) refactorizá los controllers para que lancen errores de dominio en vez de try/catch ad-hoc (solo donde sea razonable, no toques migraciones de IA); 5) escribí tests de integración con supertest: ruta inexistente → 404 JSON, crear paciente duplicado (si aplica unique) → 409, y un error interno simulado → 500 JSON; 6) verificá run_tests/run_lint/run_build.",
+      "criterio": [
+        {"label": "test backend", "cmd": "npm run test -w backend"}
+      ]
+    },
+    {
+      "id": "T3",
+      "nivel": "senior",
+      "titulo": "Logging estructurado con request ID",
+      "prompt": "implementar: el backend no loguea requests (no hay middleware de logging). Objetivo: logging estructurado por request con request ID propagado. Pasos: 1) creá un middleware que asigne un request ID (crypto.randomUUID) a cada request, lo guarde en res.locals (o AsyncLocalStorage), loguee method, path, status, duración ms al finalizar (res.on('finish')) y el error al fallar; 2) formato legible en dev: `[REQ] <id> GET /api/pacientes 200 12ms`; 3) logueá también los errores del errorHandler con el request ID para correlacionar; 4) NO agregues dependencias nuevas (sin pino/morgan) salvo que sea estrictamente necesario; 5) verificá que el formato de respuestas JSON no cambie (los logs van a consola, no al body) con run_build y run_tests.",
+      "criterio": [
+        {"label": "build backend", "cmd": "npm run build -w backend"}
+      ]
+    },
+    {
+      "id": "T4",
+      "nivel": "senior",
+      "titulo": "TypeScript strict + noUncheckedIndexedAccess en el frontend",
+      "prompt": "implementar: el frontend compila con tsconfig por defecto. Objetivo: habilitar 'strict': true y 'noUncheckedIndexedAccess': true en frontend/tsconfig.json (y tsconfig.app.json si existe) y arreglar TODOS los errores de tipado que aparezcan, SIN cambiar comportamiento ni diseño. Pasos: 1) leé los tsconfig actuales; 2) activá las flags; 3) corré el build (tsc -b && vite build) y arreglá cada error: non-null assertions solo donde haya invariantes claras (con comentario de por qué), guards de undefined donde corresponda, acceso indexado con checks; 4) NO cambies la lógica de negocio ni los estilos; 5) verificá run_build y run_tests hasta que pasen. Si un error de tipo revela un bug real (acceso a undefined en runtime), corregilo de la forma correcta y mencionalo en el summary.",
+      "criterio": [
+        {"label": "build frontend", "cmd": "npm run build -w frontend"}
+      ]
+    },
+    {
+      "id": "T5",
+      "nivel": "senior",
+      "titulo": "Test de integración del ciclo de vida completo de un paciente (supertest + DB de test)",
+      "prompt": "implementar: el backend no tiene tests de integración que cubran el ciclo de vida real de un paciente con la base de datos. Objetivo: suite de integración con supertest que cubra: crear paciente → listar (aparece) → crear consulta → detalle del paciente (aparece la consulta) → actualizar paciente → borrar paciente (y sus consultas si la relación lo exige). Pasos: 1) leé backend/prisma/schema.prisma, los repositorios y el server.ts para entender el setup; 2) decidí la estrategia de DB: si hay dev.db disponible usala con cleanup (borrar los datos creados en afterEach), o creá una DB de test separada (DATABASE_URL de test) con prisma db push; 3) los tests deben ser independientes entre sí (cleanup real) y correr en serie (--runInBand); 4) documentá en el código del test cómo correrlos; 5) los tests existentes (jest) deben seguir pasando junto con los nuevos; 6) verificá run_tests/run_lint/run_build.",
+      "criterio": [
+        {"label": "test backend", "cmd": "npm run test -w backend"}
+      ]
+    }
+  ]
+}

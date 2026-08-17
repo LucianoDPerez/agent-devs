@@ -1,0 +1,9 @@
+[
+  {
+    "label": "test backend",
+    "cmd": "npm run test -w backend -- --passWithNoTests=false 2>&1 || npm run test -w backend",
+    "exit": 1,
+    "ok": false,
+    "tail": "npm error No workspaces found:\nnpm error   --workspace=backend\nnpm error A complete log of this run can be found in: /Users/luchop/.npm/_logs/2026-08-16T15_30_58_176Z-debug-0.log\nnpm error No workspaces found:\nnpm error   --workspace=backend\nnpm error A complete log of this run can be found in: /Users/luchop/.npm/_logs/2026-08-16T15_30_58_320Z-debug-0.log\n"
+  }
+]

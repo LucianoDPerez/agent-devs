@@ -1,0 +1,52 @@
+🤔 Analizando el repositorio... (puede tardar 1-2 min). Ctrl+C para cancelar.
+
+📄 Generando análisis...
+
+
+⏱️  Tiempo límite alcanzado; se usa lo generado hasta ahora.
+
+✅ Análisis guardado en el caché.
+🌐 Lenguaje: javascript
+🧰 Stack: concurrently + jest + ts-jest + @types/jest + supertest + eslint + @typescript-eslint/eslint-plugin + @typescript-eslint/parser
+
+Sistema de gestión médica para consultorios, enfocado en la separación de roles entre **médico** (atención clínica) y **secretario/administrativo** (gestión operativa). [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](./package.json) [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE) - [Visión del Producto](#visión-del-producto) - [Características](#características) - [Arquitectura](#arquitectura) - [Estructura del Proyecto](#estructura-del-proyecto) - [Instalación](#instalación) - [Variables de Entorno](#variables-de-entorno) - [Desarrollo](#desarroll
+
+╭───────────────────────────────── AgentDevs ──────────────────────────────────╮
+│ 🔌 LLM: http://localhost:8080/v1                                             │
+│ 📁 Repo: /Users/luchop/PROYECTOS IA/Medicos  🌿 new-frontend                 │
+│ ⚡ Modelo: gemma-4-e4b | Temp: 0.2 | Max: 3584                               │
+│ 🛠️  Tools: 21 locales + 14 graph (cm__*)                                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+📚 Análisis cacheado encontrado. No se re-explora.
+💡 Decime qué querés hacer (implementá, planificá, revisá, analizá…).
+
+› 
+[🛠️  Ejecución] Tools: 13 locales + 1 graph
+📎 Archivos de tareas pre-cargados + checklist AC · explore=acotado (hints).
+
+💭 Razonando…
+
+────────────────────────────────────────
+
+  🔧 delete_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/scripts/migrate.sh"}
+  🔧 run_lint{"path":"/Users/luchop/PROYECTOS IA/Medicos"}
+  🔧 run_tests{"path":"/Users/luchop/PROYECTOS IA/Medicos"}
+  🔧 run_build{"path":"/Users/luchop/PROYECTOS IA/Medicos"}
+↻ Modelo pensando sin producir output (91s). Reintentando…
+
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 234.8s | 5,636 tokens (in 5,370 + out 266, 4,961 reutilizados)  │
+│ 📊 Sesión: 234.8s | 5,636 tokens (in 5,370 + out 266)                        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› 
+👋 ¡Hasta luego!
+
+=== STDERR ===
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+[BUDGET] total=1 count=0 max=3 write_pressure=True name=delete_file
+[BUDGET] total=2 count=0 max=3 write_pressure=True name=run_lint
+[BUDGET] total=3 count=0 max=3 write_pressure=True name=run_tests
+[BUDGET] total=4 count=0 max=3 write_pressure=True name=run_build

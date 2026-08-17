@@ -1,0 +1,58 @@
+/Users/luchop/agent-lucho/orchestration/agent_builder.py:58: RuntimeWarning: coroutine 'load_mcp_tools' was never awaited
+  tools = await asyncio.wait_for(load_mcp_tools(), timeout=MCP_CONNECT_TIMEOUT)
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+⚠️  MCP no respondió — se continúa sin tools del knowledge graph.
+╭───────────────────────────────── AgentDevs ──────────────────────────────────╮
+│ 🔌 LLM: http://localhost:8080/v1                                             │
+│ 📁 Repo: /Users/luchop/PROYECTOS IA/Medicos  🌿 new-frontend                 │
+│ ⚡ Modelo: gemma-4-e4b | Temp: 0.2 | Max: 3584                               │
+│ 🛠️  Tools: 22 locales + 0 graph (cm__*)                                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+📚 Análisis cacheado encontrado. No se re-explora.
+💡 Decime qué querés hacer (implementá, planificá, revisá, analizá…).
+
+› 
+[🛠️  Ejecución] Tools: 14 locales + 0 graph
+📎 Archivos de tareas pre-cargados + checklist AC · explore=acotado (hints).
+
+
+⏱️  Sin actividad del modelo; se corta aquí.
+
+
+
+↻ El modelo terminó su turno sin escribir cambios. Reintentando con foco en 
+escritura…
+
+↻ Reintentando con lectura acotada + escritura…
+────────────────────────────────────────
+
+  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/jest.config.js"}[BUDGET] total=1 count=0 max=1 write_pressure=True name=read_file
+
+⏱️  Sin actividad del modelo; se corta aquí.
+
+
+
+↻ El modelo terminó su turno sin escribir cambios. Reintentando con foco en 
+escritura…
+
+↻ Reintentando con lectura acotada + escritura…
+
+⏱️  Sin actividad del modelo; se corta aquí.
+
+
+
+↻ El modelo terminó su turno sin escribir cambios. Reintentando con foco en 
+escritura…
+
+
+↻ El modelo no logró escribir el cambio. Reintentá con un prompt más específico (archivo o línea concreta) o pedí un análisis primero.
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 1375.2s | 3,787 tokens (in 3,745 + out 42, 2,838 reutilizados)  │
+│ 📊 Sesión: 1375.2s | 3,787 tokens (in 3,745 + out 42)                        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+↻ Turno fallido (sin verificación) — no se ofrece commit. Revisá los cambios 
+antes de commitearlos.
+› 
+👋 ¡Hasta luego!

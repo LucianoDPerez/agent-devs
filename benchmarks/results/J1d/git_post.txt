@@ -1,0 +1,23 @@
+M backend/package.json
+ M backend/src/server.ts
+ M backend/tsconfig.json
+ M frontend/package.json
+ M frontend/src/application/hooks/useRecentConsultas.ts
+ M frontend/src/application/services/api.ts
+ M frontend/src/presentation/pages/PacienteDetailPage.tsx
+ M package.json
+?? backend/jest.config.js
+?? backend/src/tests/
+?? frontend/src/tests/
+?? frontend/vitest.config.ts
+
+=== DIFF STAT ===
+backend/package.json                               |  8 +++-
+ backend/src/server.ts                              |  2 +-
+ backend/tsconfig.json                              |  2 +-
+ frontend/package.json                              | 13 +++++-
+ .../src/application/hooks/useRecentConsultas.ts    |  4 +-
+ frontend/src/application/services/api.ts           |  2 +-
+ .../src/presentation/pages/PacienteDetailPage.tsx  | 54 ++++++++++++++++++++--
+ package.json                                       | 21 ++++++++-
+ 8 files changed, 91 insertions(+), 15 deletions(-)

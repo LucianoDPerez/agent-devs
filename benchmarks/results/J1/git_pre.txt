@@ -1,0 +1,9 @@
+M backend/package.json
+ M frontend/package.json
+ M frontend/src/application/hooks/useRecentConsultas.ts
+ M frontend/src/application/services/api.ts
+ M frontend/src/presentation/pages/PacienteDetailPage.tsx
+ M package.json
+?? backend/src/tests/
+?? frontend/src/tests/
+?? frontend/vitest.config.ts

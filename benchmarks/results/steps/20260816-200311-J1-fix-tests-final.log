@@ -1,0 +1,135 @@
+╭───────────────────────────────── AgentDevs ──────────────────────────────────╮
+│ 🔌 LLM: http://localhost:8080/v1                                             │
+│ 📁 Repo: /Users/luchop/PROYECTOS IA/Medicos  🌿 new-frontend                 │
+│ ⚡ Modelo: gemma-4-e4b | Temp: 0.2 | Max: 3584                               │
+│ 🛠️  Tools: 22 locales + 14 graph (cm__*)                                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+📚 Análisis cacheado encontrado. No se re-explora.
+💡 Decime qué querés hacer (implementá, planificá, revisá, analizá…).
+
+› 
+[🛠️  Ejecución] Tools: 14 locales + 1 graph
+📎 Archivos de tareas pre-cargados + checklist AC · explore=acotado (hints).
+
+────────────────────────────────────────
+##
+
+
+
+❌ Error en la iteración: peer closed connection without sending complete message body (incomplete chunked read)
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 101.5s | 0 tokens (in 0 + out 0)                                │
+│ 📊 Sesión: 101.5s | 0 tokens (in 0 + out 0)                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+↻ Turno fallido (sin verificación) — no se ofrece commit. Revisá los cambios 
+antes de commitearlos.
+› 
+[🔍 Análisis] Tools: 10 locales + 14 graph
+
+
+
+
+❌ Error en la iteración: Connection error.
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 1.4s | 0 tokens (in 0 + out 0)                                  │
+│ 📊 Sesión: 103.0s | 0 tokens (in 0 + out 0)                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› 
+
+
+
+❌ Error en la iteración: Connection error.
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 1.3s | 0 tokens (in 0 + out 0)                                  │
+│ 📊 Sesión: 104.3s | 0 tokens (in 0 + out 0)                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› 
+
+
+
+❌ Error en la iteración: Connection error.
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 1.3s | 0 tokens (in 0 + out 0)                                  │
+│ 📊 Sesión: 105.5s | 0 tokens (in 0 + out 0)                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› 
+
+
+
+❌ Error en la iteración: Connection error.
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 1.4s | 0 tokens (in 0 + out 0)                                  │
+│ 📊 Sesión: 107.0s | 0 tokens (in 0 + out 0)                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› 
+
+
+
+❌ Error en la iteración: Connection error.
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 1.3s | 0 tokens (in 0 + out 0)                                  │
+│ 📊 Sesión: 108.3s | 0 tokens (in 0 + out 0)                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› 
+
+
+
+❌ Error en la iteración: Connection error.
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 1.4s | 0 tokens (in 0 + out 0)                                  │
+│ 📊 Sesión: 109.7s | 0 tokens (in 0 + out 0)                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› 
+
+
+
+❌ Error en la iteración: Connection error.
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 1.4s | 0 tokens (in 0 + out 0)                                  │
+│ 📊 Sesión: 111.0s | 0 tokens (in 0 + out 0)                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› 
+
+
+
+❌ Error en la iteración: Connection error.
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 1.3s | 0 tokens (in 0 + out 0)                                  │
+│ 📊 Sesión: 112.4s | 0 tokens (in 0 + out 0)                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› 
+
+
+
+❌ Error en la iteración: Connection error.
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 1.3s | 0 tokens (in 0 + out 0)                                  │
+│ 📊 Sesión: 113.7s | 0 tokens (in 0 + out 0)                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› 
+
+
+
+❌ Error en la iteración: Connection error.
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 1.4s | 0 tokens (in 0 + out 0)                                  │
+│ 📊 Sesión: 115.2s | 0 tokens (in 0 + out 0)                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› 
+👋 ¡Hasta luego!
+
+=== STDERR ===
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
