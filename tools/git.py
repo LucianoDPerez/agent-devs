@@ -117,7 +117,18 @@ def git_log(path: str, limit: int = 20) -> str:
 
 @tool
 def stage_files(path: str, files: str) -> str:
-    """Stage one or more files before commit. Pass '.' to stage everything."""
+    """Stage one or more files before commit.
+    - '.' or '-u'   → git add -u: only TRACKED changes (deletes/modifications); new files are IGNORED
+    - '-A'/'--all'  → git add -A: everything, including NEW (untracked) files and deletes
+    - otherwise     → git add <paths> for the given paths (space or comma separated)
+    To stage new files along with tracked changes, pass '-A' or list the paths explicitly."""
+    trimmed = files.strip()
+    if trimmed in {".", "-u"}:
+        _run(path, ["git", "add", "-u", "--", "."])
+        return "✅ staged all TRACKED changes (git add -u; new files ignored — use '-A' to include them)"
+    if trimmed in {"-A", "--all"}:
+        _run(path, ["git", "add", "-A", "--", "."])
+        return "✅ staged ALL changes including new files (git add -A)"
     paths = [f.strip() for f in files.replace(",", " ").split() if f.strip()]
     paths = paths or ["."]
     _run(path, ["git", "add", "--"] + paths)

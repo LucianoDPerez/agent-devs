@@ -38,6 +38,24 @@ class TestDetectStack:
             _write(root / "go.mod", "module example.com/foo\n\ngo 1.22\n")
             assert _detect_stack(root) == "go"
 
+    def test_java_gradle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "build.gradle", "plugins { id 'java' }\n")
+            assert _detect_stack(root) == "java"
+
+    def test_java_kotlin_dsl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "build.gradle.kts", "plugins { java }\n")
+            assert _detect_stack(root) == "java"
+
+    def test_java_maven(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "pom.xml", "<project/>")
+            assert _detect_stack(root) == "java"
+
     def test_unknown(self):
         with tempfile.TemporaryDirectory() as tmp:
             assert _detect_stack(Path(tmp)) is None
@@ -108,10 +126,34 @@ class TestResolveCommand:
     def test_go_commands(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            _write(root / "go.mod", "module example.com/foo\n\ngo 1.22\n")
+            _write(root / "go.mod", "module example.com/foo\n")
             assert _resolve_command(root, "lint") == ["go", "vet", "./..."]
             assert _resolve_command(root, "test") == ["go", "test", "./..."]
             assert _resolve_command(root, "build") == ["go", "build", "./..."]
+
+    def test_java_gradle_commands(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "build.gradle", "plugins { id 'java' }\n")
+            _write(root / "gradlew", "#!/bin/sh\n")
+            wrapper = str(root / "gradlew")
+            assert _resolve_command(root, "lint") == [wrapper, "compileJava", "--console=plain"]
+            assert _resolve_command(root, "test") == [wrapper, "test", "--console=plain"]
+            assert _resolve_command(root, "build") == [wrapper, "build", "-x", "test", "--console=plain"]
+
+    def test_java_gradle_no_wrapper(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "build.gradle", "plugins { id 'java' }\n")
+            assert _resolve_command(root, "lint") == ["gradle", "compileJava", "--console=plain"]
+
+    def test_java_maven_commands(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "pom.xml", "<project/>")
+            assert _resolve_command(root, "lint") == ["mvn", "compile", "-q"]
+            assert _resolve_command(root, "test") == ["mvn", "test", "-q"]
+            assert _resolve_command(root, "build") == ["mvn", "package", "-DskipTests", "-q"]
 
 
 class TestRunVerifyTools:
@@ -212,6 +254,7 @@ def test_workspace_symlink_detected_by_package_name(tmp_path):
 def test_needs_install_when_declared_dep_missing(tmp_path):
     """Dep declarada en package.json pero ausente de node_modules → stale."""
     import json
+
     from tools.verify import _needs_node_install
     (tmp_path / "package.json").write_text(json.dumps({
         "name": "root", "private": True,
@@ -227,6 +270,7 @@ def test_needs_install_when_declared_dep_missing(tmp_path):
 def test_needs_install_scoped_dep(tmp_path):
     """Dep scoped (@types/jest) resuelve contra node_modules/@types/jest."""
     import json
+
     from tools.verify import _needs_node_install
     (tmp_path / "package.json").write_text(json.dumps({
         "name": "root", "private": True,
@@ -245,6 +289,7 @@ def test_run_tests_auto_installs_when_deps_missing(tmp_path):
     LLM chicos ignoran el hint de run_install)."""
     import json
     from unittest.mock import patch
+
     from tools import verify as v
     (tmp_path / "package.json").write_text(json.dumps({
         "name": "t", "private": True,
@@ -273,6 +318,7 @@ def test_run_tests_auto_installs_when_deps_missing(tmp_path):
 def test_run_npm_script_runs_declared_script(tmp_path):
     import json
     from unittest.mock import patch
+
     from tools import verify as v
     (tmp_path / "package.json").write_text(json.dumps({
         "name": "t", "private": True, "scripts": {"db:generate": "prisma generate"},
@@ -285,6 +331,7 @@ def test_run_npm_script_runs_declared_script(tmp_path):
 
 def test_run_npm_script_rejects_undeclared_script(tmp_path):
     import json
+
     from tools import verify as v
     (tmp_path / "package.json").write_text(json.dumps({
         "name": "t", "private": True, "scripts": {"dev": "vite"},

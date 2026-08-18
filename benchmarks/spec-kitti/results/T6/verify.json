@@ -1,0 +1,16 @@
+[
+  {
+    "label": "build-darwin-arm64 funciona",
+    "cmd": "cd /Users/luciano.perez/itti/pr-coe-genai-spec-kitti/telemetry && make build-darwin-arm64 NR_API_KEY=test NR_ACCOUNT_ID=123 && ls dist/spec-kitti-telemetry-darwin-arm64 && echo BUILD_OK",
+    "exit": 0,
+    "ok": true,
+    "tail": "GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags=\"-s -w -X 'main.version=0.0.0' -X 'main.buildTime=2026-08-18T11:58:31Z' -X 'main.gitCommit=d8ac142' -X 'main.apiKey=test' -X 'main.accountID=123'\" \\\n\t\t-o dist/spec-kitti-telemetry-darwin-arm64 \\\n\t\t./cmd/spec-kitti-telemetry/\n✓ Darwin ARM64: dist/spec-kitti-telemetry-darwin-arm64\ndist/spec-kitti-telemetry-darwin-arm64\nBUILD_OK\n"
+  },
+  {
+    "label": "sin vars falla claro",
+    "cmd": "cd /Users/luciano.perez/itti/pr-coe-genai-spec-kitti/telemetry && make build-darwin-arm64 2>&1 | grep -iE 'NR_API_KEY|NR_ACCOUNT_ID|required|error' | head -2 && echo VARS_CHECKED",
+    "exit": 0,
+    "ok": true,
+    "tail": "Makefile:16: *** NR_API_KEY is not set. Export it before running make: export NR_API_KEY=your_key.  Stop.\nVARS_CHECKED\n"
+  }
+]

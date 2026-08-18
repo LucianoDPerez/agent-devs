@@ -1,7 +1,7 @@
 from pathlib import Path
 
 LLM_BASE_URL = "http://localhost:8080/v1"
-LLM_MODEL_NAME = "gemma-4-e4b"
+LLM_MODEL_NAME = "qwen3.6-35b-a3b"
 LLM_TEMPERATURE = 0.2
 # 600s: el 4B con razonamiento Qwen3 puede tardar 2-3 min antes de emitir la
 # respuesta final (razona 1500-2500 chars). 300s cortaba respuestas largas.

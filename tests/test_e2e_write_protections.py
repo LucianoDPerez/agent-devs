@@ -99,8 +99,8 @@ def test_e2e_write_file_allowed_for_tiny_config(tmp_path):
 def test_e2e_execute_prompt_steers_to_edit_file():
     """El prompt EXECUTE debe distinguir NUEVO vs EXISTENTE y forzar
     edit_file para archivos que ya existen."""
-    from orchestration.agent_builder import load_prompt
     from core.roles import Role
+    from orchestration.agent_builder import load_prompt
 
     prompt = load_prompt(Role.EXECUTE)
     assert "NUEVOS" in prompt, f"prompt must mention NUEVOS\n{prompt}"
@@ -125,32 +125,33 @@ def test_e2e_execute_prompt_steers_to_edit_file():
 
 
 def test_e2e_execute_prompt_has_bug_diagnostic_step():
-    """El prompt EXECUTE debe tener un paso de diagn\u00f3stico para bugs
-    que gu\u00ede al modelo a usar trace_component, leer hook, API call."""
-    from orchestration.agent_builder import load_prompt
+    """El prompt EXECUTE debe tener un paso de diagnóstico para bugs
+    que guíe al modelo a analizar antes de escribir."""
     from core.roles import Role
+    from orchestration.agent_builder import load_prompt
 
     prompt = load_prompt(Role.EXECUTE)
     assert "ANALIZAR" in prompt, "Missing bug diagnostic section"
-    assert "CAUSA RA\u00cdZ" in prompt, "Must mention root cause analysis"
-    assert "hook" in prompt.lower(), "Must mention reading data hooks"
-    assert "API" in prompt or "backend" in prompt.lower(), "Must mention API/backend"
-    assert "trace_component" in prompt, "Must guide toward trace_component for diagnosis"
+    assert "CAUSA RAÍZ" in prompt, "Must mention root cause analysis"
+    assert "DESGLOSAR" in prompt, "Must break the task into subtasks"
+    assert "leé el código que vas a tocar" in prompt or "leelo" in prompt.lower(), (
+        "Must read code before writing"
+    )
 
 
 def test_e2e_execute_prompt_has_mandatory_verification():
     """El prompt EXECUTE debe exigir run_lint/run_tests/run_build como
     OBLIGATORIO, no como opcional."""
-    from orchestration.agent_builder import load_prompt
     from core.roles import Role
+    from orchestration.agent_builder import load_prompt
 
     prompt = load_prompt(Role.EXECUTE)
     assert "VERIFICAR" in prompt, "Missing mandatory verification section"
     assert "run_lint" in prompt
     assert "run_tests" in prompt
     assert "run_build" in prompt
-    assert "sin excepci\u00f3n" in prompt, "Verification must be unconditional"
-    assert "Reci\u00e9n entonces respond\u00e9 LISTO" in prompt or "respond\u00e9 LISTO" in prompt, (
+    assert "Después de escribir CADA subtarea" in prompt, "Verify must run per-subtask"
+    assert "respondé LISTO" in prompt, (
         "Must block completion until verify is done"
     )
 
@@ -161,11 +162,11 @@ def test_e2e_execute_prompt_has_mandatory_verification():
 def test_e2e_gate_retry_includes_read_cache_snapshot():
     """Simula el flujo: read_file guarda en cache, write_file daña, gate
     falla → el mensaje de retry debe incluir el contenido original leído."""
-    from orchestration.session import Session
-
     # Verificamos que la lógica de snapshot de contenido original existe
     # en el código fuente de Session.
     import inspect
+
+    from orchestration.session import Session
     orig_src = inspect.getsource(Session.run_turn)
     gate_src = inspect.getsource(Session._rebuild_agent_gate_retry)
     assert "_read_cache" in orig_src, "Gate retry must snapshot _read_cache"
@@ -179,8 +180,9 @@ def test_e2e_gate_retry_includes_read_cache_snapshot():
 def test_e2e_verify_gate_exists_in_session():
     """Session debe tener el método _verify_tools_called y la compuerta
     de verificación en run_turn."""
-    from orchestration.session import Session
     import inspect
+
+    from orchestration.session import Session
 
     assert hasattr(Session, "_verify_tools_called"), (
         "Missing _verify_tools_called method"
@@ -258,11 +260,15 @@ def test_e2e_read_file_not_productive_in_execute():
     """El ExploreBudget de EXECUTE debe usar VERIFY_TOOL_NAMES como productivas,
     no PRODUCTIVE_TOOL_NAMES (que incluye read_file). read_file NO debe
     considerarse productivo — el modelo se escondía en lecturas infinitas."""
-    from orchestration.tool_dedupe import (
-        ExploreBudget, VERIFY_TOOL_NAMES, PRODUCTIVE_TOOL_NAMES, READISH_TOOL_NAMES,
-    )
-    from orchestration.session import Session
     import inspect
+
+    from orchestration.session import Session
+    from orchestration.tool_dedupe import (
+        PRODUCTIVE_TOOL_NAMES,
+        READISH_TOOL_NAMES,
+        VERIFY_TOOL_NAMES,
+        ExploreBudget,
+    )
 
     # Check that ExploreBudget.__init__ accepts productive_names
     src = inspect.getsource(ExploreBudget.__init__)

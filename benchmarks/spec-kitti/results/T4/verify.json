@@ -1,0 +1,9 @@
+[
+  {
+    "label": "build + start --help",
+    "cmd": "cd /Users/luciano.perez/itti/pr-coe-genai-spec-kitti/telemetry && go build -o /tmp/st-test ./cmd/spec-kitti-telemetry/ && /tmp/st-test start --help 2>&1 | head -5 && echo OK && rm -f /tmp/st-test",
+    "exit": 0,
+    "ok": true,
+    "tail": "Error: --template flag is required for start\nOK\n"
+  }
+]

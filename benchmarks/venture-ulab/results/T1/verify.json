@@ -1,0 +1,9 @@
+[
+  {
+    "label": "test correlation pasa",
+    "cmd": "./gradlew test --tests '*CorrelationId*' --console=plain -q 2>&1",
+    "exit": 1,
+    "ok": false,
+    "tail": "/Users/luciano.perez/itti/venture-api-ulab/src/test/java/py/com/itti/ms/base/common/config/CorrelationIdWebFilterTest.java:96: error: cannot find symbol\n            java.util.List<ILoggingEvent> logList = appender.getList();\n                                                            ^\n  symbol:   method getList()\n  location: variable appender of type ListAppender<ILoggingEvent>\nNote: Some input files use or override a deprecated API.\nNote: Recompile with -Xlint:deprecation for details.\nNote: Some input files use unchecked or unsafe operations.\nNote: Recompile with -Xlint:unchecked for details.\n1 error\n\nFAILURE: Build failed with an exception.\n\n* What went wrong:\nExecution failed for task ':compileTestJava'.\n> Compilation failed; see the compiler error output for details.\n\n* Try:\n> Run with --info option to get more log output.\n> Run with --scan to get full insights.\n\nBUILD FAILED in 27s\n"
+  }
+]

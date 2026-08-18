@@ -1,0 +1,9 @@
+[
+  {
+    "label": "test correlation pasa",
+    "cmd": "./gradlew test --tests '*CorrelationId*' --console=plain -q 2>&1",
+    "exit": 0,
+    "ok": true,
+    "tail": "OpenJDK 64-Bit Server VM warning: Sharing is only supported for boot loader classes because bootstrap classpath has been appended\n2026-08-17T16:46:28.260-03:00  INFO 46477 --- [ionShutdownHook] o.s.b.w.embedded.netty.GracefulShutdown  : Commencing graceful shutdown. Waiting for active requests to complete\n2026-08-17T16:46:28.471-03:00  INFO 46477 --- [ netty-shutdown] o.s.b.w.embedded.netty.GracefulShutdown  : Graceful shutdown complete\n2026-08-17T16:46:30.568-03:00  INFO 46477 --- [ionShutdownHook] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Shutdown initiated...\n2026-08-17T16:46:30.569-03:00  INFO 46477 --- [ionShutdownHook] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Shutdown completed.\n2026-08-17T16:46:30.579-03:00  INFO 46477 --- [ionShutdownHook] o.s.b.w.embedded.netty.GracefulShutdown  : Commencing graceful shutdown. Waiting for active requests to complete\n2026-08-17T16:46:30.580-03:00  INFO 46477 --- [ netty-shutdown] o.s.b.w.embedded.netty.GracefulShutdown  : Graceful shutdown complete\n2026-08-17T16:46:32.657-03:00  INFO 46477 --- [ionShutdownHook] com.zaxxer.hikari.HikariDataSource       : HikariPool-2 - Shutdown initiated...\n2026-08-17T16:46:32.657-03:00  INFO 46477 --- [ionShutdownHook] com.zaxxer.hikari.HikariDataSource       : HikariPool-2 - Shutdown completed.\n"
+  }
+]

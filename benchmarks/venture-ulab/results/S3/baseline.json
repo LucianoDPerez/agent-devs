@@ -1,0 +1,9 @@
+[
+  {
+    "label": "test nuevo pasa",
+    "cmd": "./gradlew test --tests '*RepositoryController*' --console=plain -q 2>&1",
+    "exit": 1,
+    "ok": false,
+    "tail": "\nFAILURE: Build failed with an exception.\n\n* What went wrong:\nExecution failed for task ':test'.\n> No tests found for given includes: [*RepositoryController*](--tests filter)\n\n* Try:\n> Run with --stacktrace option to get the stack trace.\n> Run with --info or --debug option to get more log output.\n> Run with --scan to get full insights.\n> Get more help at https://help.gradle.org.\n\nBUILD FAILED in 3s\n"
+  }
+]

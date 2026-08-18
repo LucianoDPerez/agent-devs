@@ -1,0 +1,23 @@
+[
+  {
+    "label": "bin/ con binarios",
+    "cmd": "cd /Users/luciano.perez/itti/pr-coe-genai-spec-kitti && ls src/spec_kitti_cli/bin/ | grep -c telemetry && echo BIN_OK",
+    "exit": 1,
+    "ok": false,
+    "tail": "0\nls: src/spec_kitti_cli/bin/: No such file or directory\n"
+  },
+  {
+    "label": "init importa/copia telemetry",
+    "cmd": "cd /Users/luciano.perez/itti/pr-coe-genai-spec-kitti && grep -lE 'spec-kitti-telemetry|spec_kitti_cli.bin|/bin' src/spec_kitti_cli/__init__.py && echo INIT_OK",
+    "exit": 0,
+    "ok": true,
+    "tail": "src/spec_kitti_cli/__init__.py\nINIT_OK\n"
+  },
+  {
+    "label": "tests python pasan",
+    "cmd": "cd /Users/luciano.perez/itti/pr-coe-genai-spec-kitti && uv run python -m pytest tests/ -q 2>&1 | tail -2",
+    "exit": 0,
+    "ok": true,
+    "tail": ".....                                                                    [100%]\n437 passed in 111.05s (0:01:51)\n"
+  }
+]

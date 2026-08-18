@@ -1,0 +1,146 @@
+M golden-rules
+ D src/spec_kitti_cli/rules_catalog/core/architecture/golden_rules/api-rest-conventions.mdc
+ M src/spec_kitti_cli/rules_catalog/core/architecture/golden_rules/hexagonal-architecture.mdc
+ M src/spec_kitti_cli/rules_catalog/core/architecture/golden_rules/layered-architecture.mdc
+ M src/spec_kitti_cli/rules_catalog/core/clean-code/golden_rules/clean-code.mdc
+ D src/spec_kitti_cli/rules_catalog/core/database/golden_rules/database-usage.mdc
+ M src/spec_kitti_cli/rules_catalog/core/design-patterns/golden_rules/adapter.mdc
+ M src/spec_kitti_cli/rules_catalog/core/design-patterns/golden_rules/builder.mdc
+ M src/spec_kitti_cli/rules_catalog/core/design-patterns/golden_rules/composite.mdc
+ M src/spec_kitti_cli/rules_catalog/core/design-patterns/golden_rules/facade.mdc
+ M src/spec_kitti_cli/rules_catalog/core/design-patterns/golden_rules/factory-method.mdc
+ M src/spec_kitti_cli/rules_catalog/core/design-patterns/golden_rules/mediator.mdc
+ M src/spec_kitti_cli/rules_catalog/core/design-patterns/golden_rules/observer.mdc
+ M src/spec_kitti_cli/rules_catalog/core/design-patterns/golden_rules/singleton.mdc
+ M src/spec_kitti_cli/rules_catalog/core/design-patterns/golden_rules/strategy.mdc
+ M src/spec_kitti_cli/rules_catalog/core/design-patterns/golden_rules/template-method.mdc
+ D src/spec_kitti_cli/rules_catalog/core/logging/golden_rules/logging.mdc
+ M src/spec_kitti_cli/rules_catalog/core/microservices/golden_rules/communication.mdc
+ M src/spec_kitti_cli/rules_catalog/core/microservices/golden_rules/design.mdc
+ M src/spec_kitti_cli/rules_catalog/core/microservices/golden_rules/distributed-coordination.mdc
+ M src/spec_kitti_cli/rules_catalog/core/microservices/golden_rules/distributed-transaction.mdc
+ M src/spec_kitti_cli/rules_catalog/core/microservices/golden_rules/domain-driven-design.mdc
+ M src/spec_kitti_cli/rules_catalog/core/refactoring/golden_rules/extract-method.mdc
+ M src/spec_kitti_cli/rules_catalog/core/refactoring/golden_rules/guard-clauses.mdc
+ M src/spec_kitti_cli/rules_catalog/core/refactoring/golden_rules/introduce-explaining-variable.mdc
+ M src/spec_kitti_cli/rules_catalog/core/refactoring/golden_rules/move-method.mdc
+ M src/spec_kitti_cli/rules_catalog/core/refactoring/golden_rules/overview.mdc
+ M src/spec_kitti_cli/rules_catalog/core/refactoring/golden_rules/rename-method.mdc
+ M src/spec_kitti_cli/rules_catalog/core/refactoring/golden_rules/replace-conditional-with-polymorphism.mdc
+ M src/spec_kitti_cli/rules_catalog/core/refactoring/golden_rules/replace-magic-number-with-constant.mdc
+ M src/spec_kitti_cli/rules_catalog/core/refactoring/golden_rules/replace-temp-with-query.mdc
+ D src/spec_kitti_cli/rules_catalog/implementation/design-system/mobile/golden_rules/accessibility.mdc
+ D src/spec_kitti_cli/rules_catalog/implementation/design-system/mobile/golden_rules/architecture_and_structure.mdc
+ D src/spec_kitti_cli/rules_catalog/implementation/design-system/mobile/golden_rules/multi_brand.mdc
+ D src/spec_kitti_cli/rules_catalog/implementation/design-system/mobile/golden_rules/tokens_and_theming.mdc
+ D src/spec_kitti_cli/rules_catalog/implementation/design-system/mobile/golden_rules/widgetbook_and_tooling.mdc
+ D src/spec_kitti_cli/rules_catalog/implementation/design-system/web/golden_rules/accessibility.mdc
+ D src/spec_kitti_cli/rules_catalog/implementation/design-system/web/golden_rules/architecture_and_structure.mdc
+ D src/spec_kitti_cli/rules_catalog/implementation/design-system/web/golden_rules/mcp_and_tooling.mdc
+ D src/spec_kitti_cli/rules_catalog/implementation/design-system/web/golden_rules/multi_brand.mdc
+ D src/spec_kitti_cli/rules_catalog/implementation/design-system/web/golden_rules/tokens_and_theming.mdc
+ M src/spec_kitti_cli/rules_catalog/implementation/flutter/golden_rules/ioc.mdc
+ D src/spec_kitti_cli/rules_catalog/implementation/go/golden_rules/go-general-rules.mdc
+ D src/spec_kitti_cli/rules_catalog/implementation/go/golden_rules/testing.mdc
+ M src/spec_kitti_cli/rules_catalog/implementation/java/golden_rules/architecture-best-practices.mdc
+ M src/spec_kitti_cli/rules_catalog/implementation/java/golden_rules/code-style.mdc
+ M src/spec_kitti_cli/rules_catalog/implementation/java/golden_rules/endpoint-patterns.mdc
+ M src/spec_kitti_cli/rules_catalog/implementation/java/golden_rules/error-handling.mdc
+ M src/spec_kitti_cli/rules_catalog/implementation/java/golden_rules/evals/datasets/code-style.eval.yaml
+ D src/spec_kitti_cli/rules_catalog/implementation/java/golden_rules/evals/reports/architecture-best-practices.20260706-composer-2.5.md
+ D src/spec_kitti_cli/rules_catalog/implementation/java/golden_rules/evals/reports/code-style.20260706-composer-2.5.md
+ D src/spec_kitti_cli/rules_catalog/implementation/java/golden_rules/evals/reports/endpoint-patterns.20260706-composer-2.5.md
+ D src/spec_kitti_cli/rules_catalog/implementation/java/golden_rules/evals/reports/error-handling.20260706-composer-2.5.md
+ D src/spec_kitti_cli/rules_catalog/implementation/java/golden_rules/evals/reports/testing.20260706-composer-2.5.md
+ M src/spec_kitti_cli/rules_catalog/implementation/java/golden_rules/testing.mdc
+ M src/spec_kitti_cli/rules_catalog/implementation/kotlin-backend/golden_rules/code-style-guide.mdc
+ M src/spec_kitti_cli/rules_catalog/implementation/kotlin-backend/golden_rules/endpoint-patterns-best-practices.mdc
+ M src/spec_kitti_cli/rules_catalog/implementation/kotlin-backend/golden_rules/error-handling.mdc
+ M src/spec_kitti_cli/rules_catalog/implementation/kotlin-backend/golden_rules/testing.mdc
+ D src/spec_kitti_cli/rules_catalog/implementation/plsql/golden_rules/code-style-guide.mdc
+ D src/spec_kitti_cli/rules_catalog/implementation/plsql/golden_rules/evals/.gitkeep
+ D src/spec_kitti_cli/rules_catalog/implementation/plsql/golden_rules/refactoring.mdc
+ D src/spec_kitti_cli/rules_catalog/security/evals/datasets/security-main.eval.yaml
+ D src/spec_kitti_cli/rules_catalog/security/evals/reports/comparison.20260528.md
+ D src/spec_kitti_cli/rules_catalog/security/golden_rules/security-main.mdc
+?? src/spec_kitti_cli/rules_catalog/implementation/go/golden_rules/go-general-rules.md
+?? src/spec_kitti_cli/rules_catalog/implementation/java/golden_rules/evals/datasets/logging.eval.yaml
+?? src/spec_kitti_cli/rules_catalog/implementation/java/golden_rules/evals/reports/logging.20260414.md
+?? src/spec_kitti_cli/rules_catalog/implementation/java/golden_rules/logging.md
+?? src/spec_kitti_cli/rules_catalog/security-main.md
+?? src/spec_kitti_cli/rules_catalog/security/golden_rules/kong-security.md
+?? src/spec_kitti_cli/rules_catalog/security/golden_rules/langchain-security.md
+?? src/spec_kitti_cli/rules_catalog/security/golden_rules/mcp-security.md
+?? src/spec_kitti_cli/rules_catalog/security/golden_rules/security-api.md
+?? src/spec_kitti_cli/rules_catalog/security/golden_rules/security-django.md
+?? src/spec_kitti_cli/rules_catalog/security/golden_rules/security-flask.md
+?? src/spec_kitti_cli/rules_catalog/security/golden_rules/security-react.md
+?? telemetry/
+
+=== DIFF STAT ===
+golden-rules                                       |   2 +-
+ .../golden_rules/api-rest-conventions.mdc          | 101 -----
+ .../golden_rules/hexagonal-architecture.mdc        |   5 +-
+ .../golden_rules/layered-architecture.mdc          |   3 +-
+ .../core/clean-code/golden_rules/clean-code.mdc    |   3 +-
+ .../core/database/golden_rules/database-usage.mdc  | 111 ------
+ .../core/design-patterns/golden_rules/adapter.mdc  |   3 +-
+ .../core/design-patterns/golden_rules/builder.mdc  |   3 +-
+ .../design-patterns/golden_rules/composite.mdc     |   3 +-
+ .../core/design-patterns/golden_rules/facade.mdc   |   3 +-
+ .../golden_rules/factory-method.mdc                |   3 +-
+ .../core/design-patterns/golden_rules/mediator.mdc |   3 +-
+ .../core/design-patterns/golden_rules/observer.mdc |   3 +-
+ .../design-patterns/golden_rules/singleton.mdc     |   3 +-
+ .../core/design-patterns/golden_rules/strategy.mdc |   3 +-
+ .../golden_rules/template-method.mdc               |   3 +-
+ .../core/logging/golden_rules/logging.mdc          |  75 ----
+ .../microservices/golden_rules/communication.mdc   |   3 +-
+ .../core/microservices/golden_rules/design.mdc     |   3 +-
+ .../golden_rules/distributed-coordination.mdc      |  96 ++---
+ .../golden_rules/distributed-transaction.mdc       |   3 +-
+ .../golden_rules/domain-driven-design.mdc          |   3 +-
+ .../refactoring/golden_rules/extract-method.mdc    |   3 +-
+ .../refactoring/golden_rules/guard-clauses.mdc     |   3 +-
+ .../golden_rules/introduce-explaining-variable.mdc |   3 +-
+ .../core/refactoring/golden_rules/move-method.mdc  |   3 +-
+ .../core/refactoring/golden_rules/overview.mdc     |   3 +-
+ .../refactoring/golden_rules/rename-method.mdc     |   3 +-
+ .../replace-conditional-with-polymorphism.mdc      |   3 +-
+ .../replace-magic-number-with-constant.mdc         |   3 +-
+ .../golden_rules/replace-temp-with-query.mdc       |   3 +-
+ .../mobile/golden_rules/accessibility.mdc          | 266 -------------
+ .../golden_rules/architecture_and_structure.mdc    | 177 ---------
+ .../mobile/golden_rules/multi_brand.mdc            | 225 -----------
+ .../mobile/golden_rules/tokens_and_theming.mdc     | 243 ------------
+ .../mobile/golden_rules/widgetbook_and_tooling.mdc | 412 ---------------------
+ .../web/golden_rules/accessibility.mdc             | 202 ----------
+ .../golden_rules/architecture_and_structure.mdc    | 153 --------
+ .../web/golden_rules/mcp_and_tooling.mdc           | 267 -------------
+ .../design-system/web/golden_rules/multi_brand.mdc | 204 ----------
+ .../web/golden_rules/tokens_and_theming.mdc        | 196 ----------
+ .../implementation/flutter/golden_rules/ioc.mdc    |  54 +--
+ .../go/golden_rules/go-general-rules.mdc           | 114 ------
+ .../implementation/go/golden_rules/testing.mdc     | 130 -------
+ .../golden_rules/architecture-best-practices.mdc   |  17 +-
+ .../java/golden_rules/code-style.mdc               |  17 +-
+ .../java/golden_rules/endpoint-patterns.mdc        |   9 +-
+ .../java/golden_rules/error-handling.mdc           |  11 +-
+ .../evals/datasets/code-style.eval.yaml            | 139 +------
+ ...tecture-best-practices.20260706-composer-2.5.md | 157 --------
+ .../reports/code-style.20260706-composer-2.5.md    | 128 -------
+ .../endpoint-patterns.20260706-composer-2.5.md     | 110 ------
+ .../error-handling.20260706-composer-2.5.md        | 116 ------
+ .../evals/reports/testing.20260706-composer-2.5.md | 126 -------
+ .../implementation/java/golden_rules/testing.mdc   |  19 +-
+ .../golden_rules/code-style-guide.mdc              |  25 +-
+ .../endpoint-patterns-best-practices.mdc           |  16 +-
+ .../kotlin-backend/golden_rules/error-handling.mdc |  20 +-
+ .../kotlin-backend/golden_rules/testing.mdc        |  20 +-
+ .../plsql/golden_rules/code-style-guide.mdc        | 189 ----------
+ .../plsql/golden_rules/evals/.gitkeep              |   0
+ .../plsql/golden_rules/refactoring.mdc             | 146 --------
+ .../evals/datasets/security-main.eval.yaml         | 245 ------------
+ .../security/evals/reports/comparison.20260528.md  |  40 --
+ .../security/golden_rules/security-main.mdc        |  75 ----
+ 65 files changed, 196 insertions(+), 4537 deletions(-)

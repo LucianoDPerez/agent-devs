@@ -1,0 +1,9 @@
+[
+  {
+    "label": "go vet + test config",
+    "cmd": "cd /Users/luciano.perez/itti/pr-coe-genai-spec-kitti/telemetry && go vet ./internal/config/ && go test ./internal/config/ && echo TESTS_OK",
+    "exit": 1,
+    "ok": false,
+    "tail": "no Go files in /Users/luciano.perez/itti/pr-coe-genai-spec-kitti/telemetry/internal/config\n"
+  }
+]

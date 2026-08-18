@@ -1,0 +1,9 @@
+[
+  {
+    "label": "suite router pasa",
+    "cmd": "./gradlew test --tests '*GenericWebhookRouterService*' --console=plain -q 2>&1",
+    "exit": 1,
+    "ok": false,
+    "tail": "lerTest\n/Users/luciano.perez/itti/venture-api-ulab/src/test/java/py/com/itti/ms/base/controller/GenericJiraWebhookControllerTest.java:55: error: cannot find symbol\n                        Set.of(), Set.of(), \"auth-guard-123\",\n                        ^\n  symbol:   variable Set\n  location: class GenericJiraWebhookControllerTest\n/Users/luciano.perez/itti/venture-api-ulab/src/test/java/py/com/itti/ms/base/controller/GenericJiraWebhookControllerTest.java:55: error: cannot find symbol\n                        Set.of(), Set.of(), \"auth-guard-123\",\n                                  ^\n  symbol:   variable Set\n  location: class GenericJiraWebhookControllerTest\n/Users/luciano.perez/itti/venture-api-ulab/src/test/java/py/com/itti/ms/base/controller/GenericJiraWebhookControllerTest.java:56: error: cannot find symbol\n                        Instant.now().plusSeconds(3600))));\n                        ^\n  symbol:   variable Instant\n  location: class GenericJiraWebhookControllerTest\nNote: Some input files use or override a deprecated API.\nNote: Recompile with -Xlint:deprecation for details.\nNote: Some input files use unchecked or unsafe operations.\nNote: Recompile with -Xlint:unchecked for details.\n4 errors\n\nFAILURE: Build failed with an exception.\n\n* What went wrong:\nExecution failed for task ':compileTestJava'.\n> Compilation failed; see the compiler error output for details.\n\n* Try:\n> Run with --info option to get more log output.\n> Run with --scan to get full insights.\n\nBUILD FAILED in 22s\n"
+  }
+]

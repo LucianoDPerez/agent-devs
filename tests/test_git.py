@@ -68,6 +68,28 @@ class TestStageFiles:
         result = stage_files.invoke({"path": repo, "files": "test.txt"})
         assert "staged" in result.lower() or "✅" in result
 
+    def test_stage_dot_stages_tracked_only(self):
+        repo = _init_repo()
+        (Path(repo) / "README.md").write_text("changed", encoding="utf-8")
+        (Path(repo) / "nuevo.txt").write_text("new", encoding="utf-8")
+        stage_files.invoke({"path": repo, "files": "."})
+        staged = subprocess.run(
+            ["git", "diff", "--cached", "--name-only"], cwd=repo, capture_output=True, text=True
+        ).stdout
+        assert "README.md" in staged
+        assert "nuevo.txt" not in staged
+
+    def test_stage_dash_A_includes_new_files(self):
+        repo = _init_repo()
+        (Path(repo) / "README.md").write_text("changed", encoding="utf-8")
+        (Path(repo) / "nuevo.txt").write_text("new", encoding="utf-8")
+        stage_files.invoke({"path": repo, "files": "-A"})
+        staged = subprocess.run(
+            ["git", "diff", "--cached", "--name-only"], cwd=repo, capture_output=True, text=True
+        ).stdout
+        assert "README.md" in staged
+        assert "nuevo.txt" in staged
+
 
 class TestCreateCommit:
     def test_commit_staged(self):
@@ -96,6 +118,7 @@ def test_git_restore_reverts_tracked_file(tmp_path):
 def test_git_restore_requires_files(tmp_path):
     import pytest
     from langchain_core.tools import ToolException
+
     from tools.git import git_restore
     with pytest.raises(ToolException):
         git_restore.invoke({"path": str(tmp_path), "files": ""})

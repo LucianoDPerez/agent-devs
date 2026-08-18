@@ -1,0 +1,143 @@
+🤔 Analizando el repositorio... (puede tardar 1-2 min). Ctrl+C para cancelar.
+
+📄 Generando análisis...
+ Constraints: `stack` must be technologies in 1 line. `summary` must be concrete description in Spanish (80-120 words). NO extra text.
+
+2. **Extract Key Info for Stack:**
+   - Language: Java 21
+   - Framework: Spring Boot 3 (WebFlux)
+   - Database/ORM: R2DBC, PostgreSQL
+   - Migration: Liquibase
+   - Security: Spring Security + JWT
+   - Cache: Redis (Spring Data Redis Reactive)
+   - Build: Gradle
+   - Infra: Docker, LocalStack
+   - Stack string: Java 21 + Spring Boot WebFlux + R2DBC PostgreSQL + Liquibase + Spring Security JWT + Redis
+
+3. **Extract Key Info for Summary:**
+   - Purpose: Venture API ULab - a reactive microservice for managing venture-related operations (likely startup/investment platform based on name).
+   - Modules/Structure: Organized with `src/` for source code, `scripts/` and `bin/` for automation, `docs/` for documentation, `localstack-init/` for local AWS-like services, `openspec/` and `refiner-new/` likely for spec-driven development or AI refactoring workflows.
+   - Architecture: Reactive (WebFlux), non-blocking DB access (R2DBC), Liquibase for schema migrations, JWT auth, Redis caching. Supports multi-profile configurations (local/dev). Built with Gradle, containerized via Docker Compose. Follows a modular, spec-driven approach with dedicated directories for automation and documentation.
+   - Draft Summary (Spanish): "Venture API ULab es un microservicio reactivo basado en Spring Boot WebFlux diseñado para gestionar operaciones relacionadas con startups o inversiones. Utiliza R2DBC con PostgreSQL para acceso no bloqueante a la base de datos, complementado por Liquibase para migraciones de esquema y JWT para autenticación segura. La caché se maneja mediante Redis Reactivo. El proyecto está estructurado con Gradle como herramienta de construcción, incluye perfiles de configuración para entornos locales y de desarrollo, y sigue un enfoque de desarrollo guiado por especificaciones (openspec) con scripts automatizados en bin/ y scripts/. Está containerizado con Docker Compose y listo para despliegues escalables."
+   - Word count check: ~78 words. Let's adjust to be strictly 80-120.
+   Refined Summary: "Venture API ULab es un microservicio reactivo basado en Spring Boot WebFlux diseñado para gestionar operaciones relacionadas con startups o inversiones. Utiliza R2DBC con PostgreSQL para acceso no bloqueante a la base de datos, complementado por Liquibase para migraciones de esquema y JWT para autenticación segura. La caché se maneja mediante Redis Reactivo. El proyecto está estructurado con Gradle como herramienta de construcción, incluye perfiles de configuración para entornos locales y de desarrollo, y sigue un enfoque de desarrollo guiado por especificaciones (openspec) con scripts automatizados en bin/ y scripts/. Está containerizado con Docker Compose y listo para despliegues escalables." -> 78 words. Let's add a bit more detail to hit ~90.
+   "Venture API ULab es un microservicio reactivo basado en Spring Boot WebFlux diseñado para gestionar operaciones relacionadas con startups o inversiones. Utiliza R2DBC con PostgreSQL para acceso no bloqueante a la base de datos, complementado por Liquibase para migraciones de esquema y JWT para autenticación segura. La caché se maneja mediante Redis Reactivo. El proyecto está estructurado con Gradle como
+
+✅ Análisis guardado en el caché.
+🌐 Lenguaje: java
+🧰 Stack: spring-boot-starter-parent + itti-ms-base + spring-boot-starter-validation + spring-boot-starter-web + lombok + spring-boot-starter-actuator + springdoc-openapi-starter-webmvc-ui + spring-boot-starter-test
+
+Spring Boot WebFlux reactive microservice with R2DBC PostgreSQL integration. - **Java 21** - **Spring Boot 3.2.4** - **Spring WebFlux** (Reactive) - **R2DBC** (Reactive Database Access) - **PostgreSQL 16** - **Liquibase** (Database Migrations) - **Spring Security** with JWT - **Gradle** (Build Tool) - **Docker & Docker Compose** This project supports multiple database configurations per profile: - **Database**: PostgreSQL in Docker (localhost:5434) - **Purpose**: Local development with full database - **SSL**: Disabled (no SSL for local development) - **Database**: Remote PostgreSQL (nullplatf
+
+⚠️  MCP no respondió — se continúa sin tools del knowledge graph.
+╭───────────────────────────────── AgentDevs ──────────────────────────────────╮
+│ 🔌 LLM: http://localhost:8080/v1                                             │
+│ 📁 Repo: /Users/luciano.perez/itti/venture-api-ulab  🌿                      │
+│ benchmark/venture-ulab-v1                                                    │
+│ ⚡ Modelo: agents-a1-4b-64k | Temp: 0.2 | Max: 3584                          │
+│ 🛠️  Tools: 22 locales + 0 graph (cm__*)                                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+📚 Análisis cacheado encontrado. No se re-explora.
+💡 Decime qué querés hacer (implementá, planificá, revisá, analizá…).
+
+› 
+[🛠️  Ejecución] Tools: 14 locales + 0 graph
+📎 Archivos de tareas pre-cargados + checklist AC · explore=acotado (hints).
+
+💭 Razonando…
+
+────────────────────────────────────────
+
+  🔧 read_file{"path":"/Users/luciano.perez/itti/venture-api-ulab/src/main/java/py/com/itti/ms/base/exception/GlobalExceptionHandler.java"}
+  🔧 read_file{"path":"/Users/luciano.perez/itti/venture-api-ulab/src/main/java/py/com/itti/ms/base/exception/BaseExceptionHandler.java"}
+  🔧 read_file{"path":"/Users/luciano.perez/itti/venture-api-ulab/src/main/java/py/com/itti/ms/base/exception/ApiErrorResponse.java"}
+  🔧 read_file{"path":"/Users/luciano.perez/itti/venture-api-ulab/src/main/java/py/com/itti/ms/base/exception/ApiErrorCode.java"}Now let me read the existing test example and check for any missing pieces:
+
+
+  🔧 read_file{"path":"/Users/luciano.perez/itti/venture-api-ulab/src/test/java/py/com/itti/ms/base/refiner/infrastructure/web/RefinerExceptionHandlerTest.java"}
+  🔧 read_file{"path":"/Users/luciano.perez/itti/venture-api-ulab/src/main/java/py/com/itti/ms/base/exception/ErrorDiagnosticMessages.java"}Now let me check for existing tests of the base exception handler and look at the DomainException class:
+
+
+  🔧 search_code{"path":"/Users/luciano.perez/itti/venture-api-ulab/src/test","pattern":"BaseExceptionHandlerTest|class.*ExceptionHandler.*Test"}
+  🔧 read_file{"path":"/Users/luciano.perez/itti/venture-api-ulab/src/test/java/py/com/itti/ms/base/exception/BaseExceptionHandlerTest.java"}
+
+
+
+❌ Error en la iteración: Compute error.
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 592.1s | 23,030 tokens (in 21,863 + out 1,167, 21,691           │
+│ reutilizados)                                                                │
+│ 📊 Sesión: 592.1s | 24,054 tokens (in 21,863 + out 2,191)                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+
+↻ Turno fallido (sin verificación) — no se ofrece commit. Revisá los cambios 
+antes de commitearlos.
+› › 
+[🔍 Análisis] Tools: 10 locales + 0 graph
+
+
+
+
+❌ Error en la iteración: Compute error.
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 0.2s | 0 tokens (in 0 + out 0)                                  │
+│ 📊 Sesión: 592.3s | 24,054 tokens (in 21,863 + out 2,191)                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› 
+
+
+
+❌ Error en la iteración: Compute error.
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 0.0s | 0 tokens (in 0 + out 0)                                  │
+│ 📊 Sesión: 592.3s | 24,054 tokens (in 21,863 + out 2,191)                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› › 
+
+
+
+❌ Error en la iteración: Compute error.
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 0.1s | 0 tokens (in 0 + out 0)                                  │
+│ 📊 Sesión: 592.4s | 24,054 tokens (in 21,863 + out 2,191)                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› 
+
+
+
+❌ Error en la iteración: Compute error.
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 0.1s | 0 tokens (in 0 + out 0)                                  │
+│ 📊 Sesión: 592.5s | 24,054 tokens (in 21,863 + out 2,191)                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› 
+
+
+
+❌ Error en la iteración: Compute error.
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 0.0s | 0 tokens (in 0 + out 0)                                  │
+│ 📊 Sesión: 592.5s | 24,054 tokens (in 21,863 + out 2,191)                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› 
+👋 ¡Hasta luego!
+
+=== STDERR ===
+/bin/sh: ./gradlew: No such file or directory
+/Users/luciano.perez/agent-devs/orchestration/agent_builder.py:58: RuntimeWarning: coroutine 'load_mcp_tools' was never awaited
+  tools = await asyncio.wait_for(load_mcp_tools(), timeout=MCP_CONNECT_TIMEOUT)
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+[BUDGET] total=1 count=0 max=3 write_pressure=True name=read_file
+[BUDGET] total=2 count=0 max=3 write_pressure=True name=read_file
+[BUDGET] total=3 count=0 max=3 write_pressure=True name=read_file
+[BUDGET] total=4 count=0 max=3 write_pressure=True name=read_file
+[BUDGET] total=5 count=0 max=3 write_pressure=True name=read_file
+[BUDGET] total=6 count=0 max=3 write_pressure=True name=read_file
+[BUDGET] total=7 count=0 max=3 write_pressure=True name=search_code
+[BUDGET] total=8 count=1 max=3 write_pressure=True name=read_file

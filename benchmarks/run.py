@@ -13,6 +13,7 @@ Uso:
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -26,9 +27,35 @@ SUMMARY = RESULTS_DIR / "summary.jsonl"
 
 VERIFY_TIMEOUT = 300
 
+DEFAULT_BANK = "medicos"
+BANKS_DIR = ROOT / "benchmarks"
+
 
 def load_tasks() -> list[dict]:
     return json.loads(TASKS_FILE.read_text(encoding="utf-8"))["tasks"]
+
+
+def resolve_bank(bank: str | None) -> tuple[Path, Path, str]:
+    """Resuelve tasks/results/repo para un banco.
+    Banco 'medicos' (default) → benchmarks/tasks.json + benchmarks/results.
+    Banco custom → benchmarks/<bank>/tasks.json + benchmarks/<bank>/results.
+    El repo se lee del campo 'repo' del tasks.json (override: env BENCH_REPO)."""
+    global TASKS_FILE, RESULTS_DIR, SUMMARY, REPO
+    import os
+    if bank is None or bank == DEFAULT_BANK:
+        TASKS_FILE = ROOT / "benchmarks" / "tasks.json"
+        RESULTS_DIR = ROOT / "benchmarks" / "results"
+    else:
+        bank_dir = BANKS_DIR / bank
+        TASKS_FILE = bank_dir / "tasks.json"
+        RESULTS_DIR = bank_dir / "results"
+    SUMMARY = RESULTS_DIR / "summary.jsonl"
+    try:
+        data = json.loads(TASKS_FILE.read_text(encoding="utf-8"))
+        REPO = os.environ.get("BENCH_REPO") or data.get("repo") or REPO
+    except (OSError, json.JSONDecodeError):
+        pass
+    return TASKS_FILE, RESULTS_DIR, REPO
 
 
 def git_capture(repo: str, *args: str) -> str:
@@ -40,6 +67,119 @@ def git_capture(repo: str, *args: str) -> str:
         return out.stdout.strip() + ("\n" + out.stderr.strip() if out.stderr.strip() else "")
     except Exception as e:
         return f"(git error: {e})"
+
+
+def run_criteria(repo: str, criterio: list[dict], timeout: int = VERIFY_TIMEOUT) -> list[dict]:
+    """Ejecuta los criterios de verificación y devuelve resultados detallados."""
+    results = []
+    for crit in criterio:
+        label = crit["label"]
+        cmd_v = crit["cmd"]
+        try:
+            vp = subprocess.run(cmd_v, shell=True, cwd=repo, capture_output=True, text=True, timeout=timeout)
+            results.append({
+                "label": label,
+                "cmd": cmd_v,
+                "exit": vp.returncode,
+                "ok": vp.returncode == 0,
+                "tail": (vp.stdout or "")[-1500:] + (vp.stderr or "")[-1500:],
+            })
+        except subprocess.TimeoutExpired:
+            results.append({"label": label, "cmd": cmd_v, "exit": "TIMEOUT", "ok": False, "tail": ""})
+    return results
+
+
+_ABSENCE_MARKERS = (
+    "no such file", "no tests found", "does not exist", "no such directory",
+    "command not found", "cannot access", "cannot find module", "no go files",
+    "directory not found",
+)
+_BUILD_MARKERS = ("build failed", "compilation failed", "cannot find symbol", "error:")
+
+
+def _failure_kind(tail: str) -> str:
+    """Clasifica un tail de fallo: 'absence' (el artefacto/test NO EXISTE),
+    'build' (compilación/lint), 'test' (tests que fallan) u 'other'."""
+    t = (tail or "").lower()
+    if any(m in t for m in _ABSENCE_MARKERS):
+        return "absence"
+    if any(m in t for m in _BUILD_MARKERS):
+        return "build"
+    if " failed" in t or "--- fail" in t:
+        return "test"
+    return "other"
+
+
+def _normalize_tail(tail: str) -> str:
+    """Normaliza un tail para comparar fallos: minúsculas, sin dígitos
+    (timestamps, líneas, duraciones varían) y whitespace colapsado."""
+    t = (tail or "").lower()
+    t = re.sub(r"\d+", "", t)
+    t = re.sub(r"\s+", " ", t)
+    return t.strip()
+
+
+def _failing_tests(tail: str) -> frozenset[str]:
+    """Extrae el set de tests fallidos del tail (gradle, pytest, go)."""
+    t = (tail or "").lower()
+    names = set()
+    for m in re.finditer(r"(?m)^\s*[^>\n]+ > [^>\n]+? failed\s*$", t):
+        names.add(m.group(0).strip())
+    for m in re.finditer(r"---\s*fail:\s*([\w./]+)", t):
+        names.add(m.group(1))
+    for m in re.finditer(r"^failed\s+([\w./:\[\]()-]+::[\w.\[\]()-]+)", t):
+        names.add(m.group(1))
+    return frozenset(names)
+
+
+def _same_failure(base: dict, now: dict) -> bool:
+    """True si el fallo actual es el MISMO que el baseline (heredado).
+
+    Nunca se hereda un fallo de tipo AUSENCIA ("no tests found", "no such
+    file"): si el artefacto no existía antes y sigue sin existir, el agente no
+    entregó → error del agente. Solo se heredan fallos CONDUCTUALES (build/test)
+    idénticos en exit, clase y —cuando es extraíble— set de tests fallidos.
+    Si no se puede clasificar, NO se hereda: el harness falla alto y el humano
+    decide."""
+    if base.get("exit") != now.get("exit"):
+        return False
+    b = base.get("tail") or ""
+    n = now.get("tail") or ""
+    bk = _failure_kind(b)
+    nk = _failure_kind(n)
+    if bk == "absence" or nk == "absence":
+        return False
+    if bk != nk:
+        return False
+    if bk in ("build", "test"):
+        bt = _failing_tests(b)
+        nt = _failing_tests(n)
+        if bt or nt:
+            return bool(bt) and bt == nt
+        return _normalize_tail(b) == _normalize_tail(n)
+    # "other": sin señales comparables (tails vacíos, greps de conteo...).
+    # NO se hereda — el harness falla alto y el humano decide.
+    return False
+
+
+def baseline_block(results: list[dict]) -> str:
+    if not results:
+        return ""
+    lines = ["BASELINE (estado del repo ANTES de que arranques — el sistema ya lo verificó):"]
+    for r in results:
+        state = "PASA" if r["ok"] else f"FALLA (exit={r['exit']})"
+        lines.append(f"- {r['label']}: {state}")
+    failed = [r for r in results if not r["ok"]]
+    if failed:
+        lines.append("")
+        lines.append("⚠️  El baseline YA fallaba en estos criterios. Dos casos DISTINTOS:")
+        lines.append("    - AUSENCIA (el tail dice 'No tests found', 'No such file', etc.): NO es heredado.")
+        lines.append("      Es EXACTAMENTE lo que tu tarea debe crear. Si al final sigue fallando igual,")
+        lines.append("      contará como error tuyo.")
+        lines.append("    - Error CONDUCTUAL (build/test falla en código existente): es HEREDADO si el")
+        lines.append("      verify final falla por lo MISMO y no tocaste el archivo del error. Documentalo")
+        lines.append("      (archivo/clase) y NO entres en loop intentando arreglarlo.")
+    return "\n".join(lines)
 
 
 def run_task(task: dict, force: bool = False) -> dict:
@@ -61,7 +201,18 @@ def run_task(task: dict, force: bool = False) -> dict:
 
     record["git_pre"] = git_capture(REPO, "status", "--short")
 
+    # BASELINE: verificación del estado inicial ANTES de que el agente toque nada.
+    # Permite distinguir fallos hereditarios (ya fallaban antes) de fallos del agente.
+    baseline = run_criteria(REPO, task.get("criterio", []))
+    record["baseline"] = baseline
+    (out_dir / "baseline.json").write_text(json.dumps(baseline, ensure_ascii=False, indent=2), encoding="utf-8")
+    baseline_ok = all(r["ok"] for r in baseline)
+    print(f"BASELINE: {'✅ verde' if baseline_ok else '❌ ya fallaba — ver baseline.json'}")
+
     prompt = task["prompt"]
+    base_block = baseline_block(baseline)
+    if base_block:
+        prompt = prompt + "\n\n" + base_block
     cmd = f'echo {json.dumps(prompt)} | {sys.executable} main.py "{REPO}"'
     started = time.monotonic()
     try:
@@ -85,27 +236,71 @@ def run_task(task: dict, force: bool = False) -> dict:
     (out_dir / "git_pre.txt").write_text(record["git_pre"], encoding="utf-8")
     (out_dir / "git_post.txt").write_text(record["git_post"] + "\n\n=== DIFF STAT ===\n" + diff_stat, encoding="utf-8")
 
-    # Verificación externa: criterios de éxito (solo ejecución, no modifica archivos)
-    verify_results = []
-    for crit in task.get("criterio", []):
-        label = crit["label"]
-        cmd_v = crit["cmd"]
-        try:
-            vp = subprocess.run(cmd_v, shell=True, cwd=REPO, capture_output=True, text=True, timeout=VERIFY_TIMEOUT)
-            verify_results.append({
-                "label": label,
-                "cmd": cmd_v,
-                "exit": vp.returncode,
-                "ok": vp.returncode == 0,
-                "tail": (vp.stdout or "")[-1500:] + (vp.stderr or "")[-1500:],
-            })
-        except subprocess.TimeoutExpired:
-            verify_results.append({"label": label, "cmd": cmd_v, "exit": "TIMEOUT", "ok": False, "tail": ""})
+    # Verificación externa POST-tarea
+    verify_results = run_criteria(REPO, task.get("criterio", []))
     record["verify"] = verify_results
     (out_dir / "verify.json").write_text(json.dumps(verify_results, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    passed = all(v["ok"] for v in verify_results) and "TIMEOUT" not in str(record.get("exit_code"))
+    # AUTO-RETRY: si el agente terminó pero el verify falló en un criterio que
+    # NO es un fallo heredado idéntico (regresión sobre baseline verde, o
+    # criterio de AUSENCIA sin entregar), re-lanzamos UN intento inyectándole
+    # el fallo exacto. Los heredados conductuales no se reintentan.
+    failed_now = [r for r in verify_results if not r["ok"]]
+    retriable = []
+    for r in failed_now:
+        base = next((b for b in baseline if b["label"] == r["label"] and not b["ok"]), None)
+        if not (base and _same_failure(base, r)):
+            retriable.append(r)
+    if retriable and not record.get("retried"):
+        print("🔄 Auto-retry: verify falló en criterios que el baseline tenía verde → re-lanzando con el fallo inyectado...")
+        feedback = "\n\n".join(
+            f"VERIFY FALLÓ (criterio: {r['label']}, exit={r['exit']}):\n{r['tail'][-1200:]}"
+            for r in retriable
+        )
+        retry_prompt = (
+            prompt
+            + "\n\n⛔ RETRY: la verificación externa falló en lo que acabás de hacer.\n"
+            + feedback
+            + "\n\nCorregí el problema concreto (edit_file del archivo que falla) y verificá de nuevo "
+            "con run_lint + run_tests + run_build. Si el error está en un archivo que NO tocaste, "
+            "reportalo como HEREDADO y detenete — no lo arregles."
+        )
+        retry_cmd = f'echo {json.dumps(retry_prompt)} | {sys.executable} main.py "{REPO}"'
+        try:
+            rp = subprocess.run(retry_cmd, shell=True, cwd=ROOT, capture_output=True, text=True, timeout=2400)
+            (out_dir / "retry.log").write_text(rp.stdout + "\n=== STDERR ===\n" + rp.stderr, encoding="utf-8")
+            record["retry_exit"] = rp.returncode
+        except subprocess.TimeoutExpired:
+            record["retry_exit"] = "TIMEOUT"
+            (out_dir / "retry.log").write_text("TIMEOUT en retry", encoding="utf-8")
+        verify_results = run_criteria(REPO, task.get("criterio", []))
+        record["verify"] = verify_results
+        (out_dir / "verify.json").write_text(json.dumps(verify_results, ensure_ascii=False, indent=2), encoding="utf-8")
+        record["retried"] = True
+
+    # passed: todos los criterios verdes, salvo los que YA fallaban en baseline
+    # con el MISMO error conductual (heredados → se documentan pero no cuentan
+    # como fallo). Un criterio de AUSENCIA (el artefacto no existía y sigue sin
+    # existir) NUNCA es heredado: es el entregable de la tarea → error del agente.
+    failed_now = []
+    for v in verify_results:
+        if v["ok"]:
+            continue
+        base = next((b for b in baseline if b["label"] == v["label"] and not b["ok"]), None)
+        if base and _same_failure(base, v):
+            continue  # heredado: mismo error conductual que en baseline
+        failed_now.append(v)
+    passed = not failed_now and "TIMEOUT" not in str(record.get("exit_code"))
     record["passed"] = passed
+    record["errores_heredados"] = [
+        b["label"] for b in baseline
+        if not b["ok"] and _failure_kind(b.get("tail") or "") in ("build", "test")
+    ]
+    record["criterios_sin_entregar"] = [
+        b["label"] for b in baseline
+        if not b["ok"] and _failure_kind(b.get("tail") or "") in ("absence", "other")
+    ]
+    record["errores_agente"] = [v["label"] for v in failed_now]
     record["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
 
     with SUMMARY.open("a", encoding="utf-8") as f:
@@ -114,7 +309,13 @@ def run_task(task: dict, force: bool = False) -> dict:
     status = "✅ PASÓ" if passed else "❌ FALLÓ"
     print(f"{status} — {record['duration_s']}s")
     for v in verify_results:
-        print(f"   verify[{v['label']}]: exit={v['exit']} {'✅' if v['ok'] else '❌'}")
+        if v["ok"]:
+            mark = "✅"
+        elif v["label"] in [x["label"] for x in failed_now]:
+            mark = "❌ (error del agente)"
+        else:
+            mark = "⏭️ heredado (mismo error que baseline)"
+        print(f"   verify[{v['label']}]: exit={v['exit']} {mark}")
     return record
 
 
@@ -124,10 +325,14 @@ def main():
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--bank", default=None,
+                    help="Banco de tareas: 'medicos' (default, compat) o subcarpeta de benchmarks/")
     ap.add_argument("--step", metavar="PROMPT", default=None,
                     help="Corre UN turno libre del agente con el prompt dado (micro-paso)")
     ap.add_argument("--step-label", default="step", help="Nombre del micro-paso")
     args = ap.parse_args()
+
+    resolve_bank(args.bank)
 
     if args.step:
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)

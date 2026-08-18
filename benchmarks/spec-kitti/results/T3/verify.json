@@ -1,0 +1,9 @@
+[
+  {
+    "label": "go vet + test gitconfig",
+    "cmd": "cd /Users/luciano.perez/itti/pr-coe-genai-spec-kitti/telemetry && go vet ./internal/gitconfig/ && go test ./internal/gitconfig/ && echo TESTS_OK",
+    "exit": 1,
+    "ok": false,
+    "tail": "# spec-kitti-telemetry/internal/gitconfig\n# [spec-kitti-telemetry/internal/gitconfig]\nvet: internal/gitconfig/resolver_test.go:60:13: undefined: extractUsernameFromEmail\n"
+  }
+]

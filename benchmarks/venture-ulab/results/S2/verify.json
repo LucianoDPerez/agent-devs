@@ -1,0 +1,9 @@
+[
+  {
+    "label": "tests nuevos pasan",
+    "cmd": "./gradlew test --tests '*PlanningController*' --tests '*UserController*' --console=plain -q 2>&1",
+    "exit": 1,
+    "ok": false,
+    "tail": "user/infrastructure/web/controller/UserControllerTest.java:322: error: constructor UserResponse in record UserResponse cannot be applied to given types;\n                    new py.com.itti.ms.base.user.infrastructure.web.dto.UserResponse(\n                    ^\n  required: UUID,String,Integer,String,String,String,String,Set<String>,boolean,Instant,Instant\n  found:    UUID,String,String,String,boolean,Instant,<null>,Set<Object>\n  reason: actual and formal argument lists differ in length\n/Users/luciano.perez/itti/venture-api-ulab/src/test/java/py/com/itti/ms/base/user/infrastructure/web/controller/UserControllerTest.java:361: error: constructor UpdateUserCommand in record UpdateUserCommand cannot be applied to given types;\n            UpdateUserCommand command = new UpdateUserCommand(\n                                        ^\n  required: UUID,String,Integer,String,String\n  found:    UUID,String,String,String\n  reason: actual and formal argument lists differ in length\nNote: Some input files use or override a deprecated API.\nNote: Recompile with -Xlint:deprecation for details.\nNote: Some input files use unchecked or unsafe operations.\nNote: Recompile with -Xlint:unchecked for details.\n12 errors\n\nFAILURE: Build failed with an exception.\n\n* What went wrong:\nExecution failed for task ':compileTestJava'.\n> Compilation failed; see the compiler error output for details.\n\n* Try:\n> Run with --info option to get more log output.\n> Run with --scan to get full insights.\n\nBUILD FAILED in 10s\n"
+  }
+]

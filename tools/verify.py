@@ -120,6 +120,15 @@ def _python_has_build_system(root: Path) -> bool:
     return "[build-system]" in text
 
 
+def _java_build_tool(root: Path) -> str | None:
+    """Detecta el build tool de un proyecto Java/Gradle/Maven."""
+    if (root / "build.gradle").is_file() or (root / "build.gradle.kts").is_file():
+        return "gradle"
+    if (root / "pom.xml").is_file():
+        return "maven"
+    return None
+
+
 def _detect_stack(root: Path) -> str | None:
     if (root / "package.json").is_file():
         return "node"
@@ -127,7 +136,19 @@ def _detect_stack(root: Path) -> str | None:
         return "go"
     if any((root / name).is_file() for name in ("pyproject.toml", "requirements.txt", "setup.py")):
         return "python"
+    if _java_build_tool(root):
+        return "java"
     return None
+
+
+def _gradle_cmd(root: Path, *args: str) -> list[str]:
+    """Comando gradle usando el wrapper si existe, sino gradle global."""
+    wrapper = root / "gradlew"
+    if wrapper.is_file():
+        return [str(wrapper), *args]
+    if (root / "gradlew.bat").is_file():
+        return ["cmd", "/c", "gradlew.bat", *args]
+    return ["gradle", *args]
 
 
 def _resolve_command(root: Path, action: str) -> list[str] | str:
@@ -149,6 +170,28 @@ def _resolve_command(root: Path, action: str) -> list[str] | str:
             "build": ["go", "build", "./..."],
         }
         return go_cmds[action]
+
+    if stack == "java":
+        tool = _java_build_tool(root)
+        if tool == "gradle":
+            gradle_cmds = {
+                # Gradle no tiene lint standard; compileJava valida compilación (tipos).
+                "lint": _gradle_cmd(root, "compileJava", "--console=plain"),
+                # test con --tests vacío? No: corre la suite completa. Usar test.
+                "test": _gradle_cmd(root, "test", "--console=plain"),
+                # build -x test: compila + empaqueta sin repetir la suite (la
+                # suite ya la corrió run_tests). --offline evita red si las deps
+                # están cacheadas; si falla, el auto-install/retry online la re-resuelve.
+                "build": _gradle_cmd(root, "build", "-x", "test", "--console=plain"),
+            }
+            return gradle_cmds[action]
+        if tool == "maven":
+            mvn_cmds = {
+                "lint": ["mvn", "compile", "-q"],
+                "test": ["mvn", "test", "-q"],
+                "build": ["mvn", "package", "-DskipTests", "-q"],
+            }
+            return mvn_cmds[action]
 
     # python
     if action == "lint":
