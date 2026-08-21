@@ -1,3 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-devs"
+version = "0.1.0"
+description = "AgentDevs — agente de desarrollo con LLM local (llama.cpp), multi-rol y knowledge graph MCP"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "langgraph>=1.0.0",
+    "langchain>=1.0.0",
+    "langchain-openai>=1.0.0",
+    "langchain-mcp-adapters>=0.3.1",
+    "mcp>=1.24.0,<2.0.0",
+    "prompt_toolkit>=3.0.0",
+    "rich>=13.0.0",
+    "textual>=1.0.0",
+    # readline de GNU solo tiene sentido/en compilación garantizada en macOS;
+    # en Linux sobra (readline nativo) y en Windows no compila.
+    "gnureadline>=8.1.2; sys_platform == 'darwin'",
+]
+
+[project.scripts]
+agent-devs = "main:main"
+
+[tool.setuptools]
+# Layout flat: módulos sueltos en la raíz del repo + paquetes explícitos.
+# Editable install (-e .): los prompts/*.md se leen por ruta relativa al
+# código fuente, así que NUNCA instalar sin -e.
+py-modules = [
+    "analyzer",
+    "bench_models",
+    "business_logic",
+    "cache",
+    "config",
+    "llm_wrapper",
+    "main",
+    "verify_gate",
+]
+packages = ["core", "display", "orchestration", "tools"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py310"

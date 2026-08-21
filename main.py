@@ -240,16 +240,213 @@ def run_fullscreen(session) -> None:
         _restore_streams()
 
 
+# ── Doctor: verificación de entorno + instalación de faltantes ──────────────
+
+# (requirement pip, módulo importable): el import es la prueba real de que se
+# puede usar; el requirement es lo que se instala si falta.
+_DOCTOR_DEPS = [
+    ("langgraph>=1.0.0", "langgraph"),
+    ("langchain>=1.0.0", "langchain"),
+    ("langchain-openai>=1.0.0", "langchain_openai"),
+    ("langchain-mcp-adapters>=0.3.1", "langchain_mcp_adapters"),
+    ("mcp>=1.24.0,<2.0.0", "mcp"),
+    ("prompt_toolkit>=3.0.0", "prompt_toolkit"),
+    ("rich>=13.0.0", "rich"),
+    ("textual>=1.0.0", "textual"),
+]
+# gnureadline solo aplica en macOS (en Linux sobra, en Windows no compila).
+if sys.platform == "darwin":
+    _DOCTOR_DEPS.append(("gnureadline>=8.1.2", "gnureadline"))
+
+_CMCP_INSTALL_CMD = (
+    "curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash"
+)
+
+
+def _doctor_ok(name, detail=""):
+    print(f"  ✅ {name}" + (f" — {detail}" if detail else ""))
+
+
+def _doctor_fixed(name, detail=""):
+    print(f"  🔧 {name} — INSTALADO AHORA" + (f" ({detail})" if detail else ""))
+
+
+def _doctor_fail(name, detail):
+    print(f"  ❌ {name} — {detail}")
+
+
+def _pip_install(requirement: str) -> bool:
+    import subprocess
+
+    print(f"     ⏳ Instalando {requirement}…")
+    proc = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "--quiet", requirement],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        print(f"     ⚠️  pip falló: {(proc.stderr or proc.stdout).strip()[-300:]}")
+        return False
+    return True
+
+
+def _llama_server_alive(timeout: float = 2.0) -> tuple[bool, str]:
+    """True si hay un llama-server respondiendo en LLM_BASE_URL."""
+    import urllib.request
+
+    base = LLM_BASE_URL.split("/v1")[0]
+    for path in ("/health", "/v1/models"):
+        try:
+            with urllib.request.urlopen(base + path, timeout=timeout) as resp:
+                if resp.status == 200:
+                    return True, base
+        except Exception:
+            continue
+    return False, base
+
+
+def run_doctor() -> int:
+    """Verifica el entorno completo e instala de a uno los faltantes.
+
+    Chequeos: Python, venv, git, deps Python (instalables), MCP
+    codebase-memory-mcp (instalable en mac/linux) y llama-server (binario +
+    server vivo en :8080 — solo detecta e instruye, no auto-instala).
+    Devuelve exit code: 0 = todo listo para usar agent-devs.
+    """
+    import importlib.util
+    import platform
+    import shutil
+    import subprocess as sp
+
+    print("🩺 AgentDevs doctor — verificando entorno…\n")
+    problems = 0
+
+    # 1) Python
+    v = sys.version_info
+    if (v.major, v.minor) >= (3, 10):
+        _doctor_ok(f"Python {v.major}.{v.minor}.{v.micro}")
+    else:
+        _doctor_fail("Python", f"se requiere 3.10+, tenés {v.major}.{v.minor}")
+        return 1
+
+    # 2) venv (aviso, no bloquea)
+    in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+    if in_venv:
+        _doctor_ok("Entorno virtual activo", sys.prefix)
+    else:
+        _doctor_fail(
+            "Entorno virtual",
+            "no estás en un venv — corré ./install.sh o creá uno "
+            "(python3 -m venv .venv && source .venv/bin/activate)",
+        )
+        problems += 1
+
+    # 3) git
+    if shutil.which("git"):
+        _doctor_ok("git")
+    else:
+        _doctor_fail("git", "instalalo con tu package manager (brew/apt/choco)")
+        problems += 1
+
+    # 4) Dependencias Python: instalar de a una las que falten
+    for requirement, module in _DOCTOR_DEPS:
+        spec = importlib.util.find_spec(module)
+        if spec is not None:
+            _doctor_ok(module)
+            continue
+        if _pip_install(requirement):
+            if importlib.util.find_spec(module) is not None:
+                _doctor_fixed(module, requirement)
+            else:
+                _doctor_fail(module, f"se instaló {requirement} pero el import sigue fallando")
+                problems += 1
+        else:
+            _doctor_fail(module, f"no se pudo instalar {requirement}")
+            problems += 1
+
+    # 5) codebase-memory-mcp (knowledge graph)
+    cm = shutil.which("codebase-memory-mcp")
+    if cm:
+        try:
+            out = sp.run(["codebase-memory-mcp", "--version"], capture_output=True, text=True, timeout=15)
+            ver = (out.stdout or out.stderr).strip().splitlines()[-1] if (out.stdout or out.stderr) else "?"
+            _doctor_ok("codebase-memory-mcp", ver)
+        except Exception:
+            _doctor_ok("codebase-memory-mcp", cm)
+    elif sys.platform == "win32":
+        _doctor_fail(
+            "codebase-memory-mcp",
+            "instalador automático no disponible en Windows — seguí "
+            "https://github.com/DeusData/codebase-memory-mcp",
+        )
+        problems += 1
+    else:
+        print(f"     ⏳ Instalando codebase-memory-mcp…\n     $ {_CMCP_INSTALL_CMD}")
+        r = sp.run(_CMCP_INSTALL_CMD, shell=True)
+        if r.returncode == 0 and shutil.which("codebase-memory-mcp"):
+            _doctor_fixed("codebase-memory-mcp")
+        else:
+            _doctor_fail(
+                "codebase-memory-mcp",
+                "el instalador falló — corrélo manualmente o seguí "
+                "https://github.com/DeusData/codebase-memory-mcp (el harness "
+                "funciona igual, solo sin knowledge graph)",
+            )
+            problems += 1
+
+    # 6) llama.cpp: binario + server vivo (solo detecta e instruye)
+    has_llama_bin = shutil.which("llama-server") or shutil.which("llama-server.exe")
+    alive, base = _llama_server_alive()
+    if has_llama_bin:
+        _doctor_ok("llama.cpp (llama-server)", shutil.which("llama-server"))
+    else:
+        hint = {
+            "darwin": "brew install llama.cpp",
+            "windows": "bajá el release de https://github.com/ggml-org/llama.cpp/releases y agregalo al PATH",
+        }.get(sys.platform, "compilá con cmake o bajá un release de https://github.com/ggml-org/llama.cpp/releases")
+        _doctor_fail("llama.cpp (llama-server)", hint)
+        problems += 1
+    if alive:
+        _doctor_ok("Modelo corriendo", base)
+    else:
+        _doctor_fail(
+            "Modelo corriendo",
+            f"nadie responde en {base}. Levantalo antes de usar agent-devs, ej.:\n"
+            f"       llama-server -hf unsloth/Qwen3-6B-GGUF --port 8080",
+        )
+        problems += 1
+
+    # Resumen
+    print()
+    if problems == 0:
+        print("🎉 Todo listo. Usalo desde cualquier repositorio:\n")
+    else:
+        print(f"⚠️  {problems} problema(s) pendiente(s). Después de resolverlos:\n")
+
+    shim = shutil.which("agent-devs")
+    if shim:
+        print(f"   cd /ruta/a/tu/proyecto && agent-devs .          # '.' = repo actual")
+        print(f"   agent-devs /ruta/a/otro/repo                   # o ruta explícita")
+    else:
+        print("   El comando global 'agent-devs' no está en tu PATH todavía:")
+        print("   • Desde este repo:   .venv/bin/agent-devs .   (mac/linux)")
+        print("   • O activá el venv:  source .venv/bin/activate && agent-devs .")
+    return 0 if problems == 0 else 1
+
+
 def main():
     parser = argparse.ArgumentParser(description="AgentDevs — agente de desarrollo con LLM local")
     parser.add_argument("repo", nargs="?", help="Ruta del repositorio (default: directorio actual)")
     parser.add_argument("--analyze", metavar="REPO", help="Genera y guarda el análisis del repo")
     parser.add_argument("--list", action="store_true", help="Lista los análisis guardados")
+    parser.add_argument("--doctor", action="store_true",
+                        help="Verifica el entorno (deps, git, MCP, llama-server) e instala lo que falte")
     parser.add_argument("--no-tui", action="store_true",
                         help="Desactiva el TUI full-screen (usa el input simple). "
                              "Por defecto el TUI se activa si el stdin es una terminal.")
     args = parser.parse_args()
 
+    if args.doctor:
+        return run_doctor()
     if args.list:
         do_list()
         return
