@@ -16,6 +16,7 @@ import argparse
 import os
 import sys
 import warnings
+from pathlib import Path
 
 from cache import list_repos, load_analysis, snapshot_hash, save_analysis
 from config import LLM_BASE_URL, LLM_MAX_TOKENS, LLM_MODEL_NAME, LLM_TEMPERATURE
