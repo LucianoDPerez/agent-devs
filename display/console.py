@@ -20,6 +20,20 @@ console = Console()
 # Text.from_ansi. En modo simple (sin --tui) se emiten igual: son ancho-cero.
 MD_BEGIN = "\u2063md-begin\u2063"
 MD_END = "\u2063md-end\u2063"
+# Los marcadores SOLO tienen sentido cuando el pane de la TUI los intercepta.
+# En modo simple son texto visible en la terminal ("md-begin") — por defecto
+# OFF; run_fullscreen (--tui) los activa al entrar.
+MD_MARKERS_ENABLED = False
+
+
+def _md_begin() -> None:
+    if MD_MARKERS_ENABLED:
+        console.print(MD_BEGIN, end="", highlight=False, soft_wrap=True)
+
+
+def _md_end() -> None:
+    if MD_MARKERS_ENABLED:
+        console.print(MD_END, end="", highlight=False, soft_wrap=True)
 
 
 class ReasoningOnlyResponse(Exception):
@@ -125,7 +139,7 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                 # Contenido→razonamiento cierra el segmento markdown abierto
                 # (el razonamiento va dim, fuera del render).
                 if md_open:
-                    console.print(MD_END, end="", highlight=False, soft_wrap=True)
+                    _md_end()
                     md_open = False
                 reasoning_text.append(chunk.additional_kwargs.get("reasoning_content") or "")
                 # Timeout POR BLOQUE de razonamiento: el timer arranca cuando
@@ -160,7 +174,7 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                     if last_emitted == "tool":
                         console.print("\n", end="", highlight=False)
                     if not md_open:
-                        console.print(MD_BEGIN, end="", highlight=False, soft_wrap=True)
+                        _md_begin()
                         md_open = True
                     console.print(escape(chunk.content), end="", highlight=False, soft_wrap=True)
                     last_emitted = "content"
@@ -171,7 +185,7 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                     if tc.get("name"):
                         # Contenido→tool cierra el segmento markdown abierto.
                         if md_open:
-                            console.print(MD_END, end="", highlight=False, soft_wrap=True)
+                            _md_end()
                             md_open = False
                         total_tool_calls += 1
                         if tc["name"] in WRITE_NAMES:
@@ -201,7 +215,7 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
     finally:
         # Cerrar segmento markdown si quedó abierto (fin de stream / break).
         if md_open:
-            console.print(MD_END, end="", highlight=False, soft_wrap=True)
+            _md_end()
         console.print("\n")
         with contextlib.suppress(Exception):
             await stream.aclose()

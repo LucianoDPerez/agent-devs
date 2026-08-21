@@ -142,9 +142,11 @@ def run_fullscreen(session) -> None:
     terminal) no se pueden capturar desde acá — lanzalos con salida a archivo.
     """
     from display.console import console
+    from display import console as _console_mod
     from display.fullscreen_tui import FullscreenTUI
 
     session._fullscreen = True  # sin EscWatcher ni prompts input() internos
+    _console_mod.MD_MARKERS_ENABLED = True  # el pane intercepta los marcadores
 
     tui = FullscreenTUI(
         status_provider=session.get_status,
@@ -185,6 +187,7 @@ def run_fullscreen(session) -> None:
     def _restore_streams():
         _sys.stdout, _sys.stderr = _old_stdout, _old_stderr
         console.file = old_file
+        _console_mod.MD_MARKERS_ENABLED = False
 
     def on_submit(text: str) -> None:
         stripped = text.strip().lower()
