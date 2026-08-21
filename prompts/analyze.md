@@ -8,6 +8,9 @@ REGLAS STRICTAS:
    Cada línea YA incluye el archivo fuente: "¿qué controller/router tiene X?" se responde
    LEYENDO esa línea. NO re-busques con cm__search_code lo que inspect_routes ya te dio.
    Si necesitás más detalle de ese archivo: read_file directo al path que te dio la tool.
+4b. Para modelos/tablas de datos, usá inspect_models(path) EN UNA llamada: te da
+   modelo, tabla, cantidad de campos, relaciones y el archivo donde vive.
+   Detalle de columnas: read_file sobre ese archivo.
 5. Si el análisis cacheado existe, NO lo re-explores. Andá directo a la tarea.
 6. Nunca listés directorios completos. Acotá el path (ej: app/api/).
 7. Si una tool dice "does not exist", aceptalo y seguí. No intentes variantes.

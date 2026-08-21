@@ -43,10 +43,10 @@ def main():
     for intent in Intent:
         role = role_for_intent(intent)
         check(f"{intent.value} → {role.value}", role is not None)
-    check("analyze: 10 tools", len(tools_for_role(Role.ANALYZE)) == 10)
-    check("plan: 11 tools", len(tools_for_role(Role.PLAN)) == 11)
-    check("execute: 12 tools", len(tools_for_role(Role.EXECUTE)) == 12)
-    check("review: 13 tools", len(tools_for_role(Role.REVIEW)) == 13)
+    check("analyze: 11 tools", len(tools_for_role(Role.ANALYZE)) == 11)
+    check("plan: 12 tools", len(tools_for_role(Role.PLAN)) == 12)
+    check("execute: 14 tools", len(tools_for_role(Role.EXECUTE)) == 14)
+    check("review: 15 tools", len(tools_for_role(Role.REVIEW)) == 15)
     check("chat: 0 tools", len(tools_for_role(Role.CHAT)) == 0)
     for role in Role:
         p = load_prompt(role)

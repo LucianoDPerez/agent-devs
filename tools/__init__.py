@@ -24,11 +24,13 @@ from .git import (
     stage_files,
 )
 from .routes import inspect_routes
+from .models import inspect_models
 from .search import search_code
 from .verify import run_build, run_install, run_lint, run_npm_script, run_tests
 
 ALL_TOOLS = [
     list_files, read_file, write_file, edit_file, delete_file, search_code, inspect_routes,
+    inspect_models,
     run_install, run_lint, run_tests, run_build, run_npm_script,
     current_branch, changed_files, git_status, git_log,
     stage_files, create_commit, push, create_pr, read_pr, list_prs,
@@ -39,8 +41,8 @@ _GIT_WRITE = [stage_files, create_commit, push, create_pr]
 _VERIFY = [run_install, run_lint, run_tests, run_build]
 
 # Subsets por rol de agente. Read-only evita que compile modificadores.
-ANALYZER_TOOLS = [list_files, read_file, search_code, inspect_routes, *_READONLY_GIT]
-PLANNER_TOOLS = [list_files, read_file, search_code, inspect_routes, write_file, *_READONLY_GIT]
+ANALYZER_TOOLS = [list_files, read_file, search_code, inspect_routes, inspect_models, *_READONLY_GIT]
+PLANNER_TOOLS = [list_files, read_file, search_code, inspect_routes, inspect_models, write_file, *_READONLY_GIT]
 # EXECUTE: SOLO las esenciales. 35 tools (21 locales + 14 MCP) diluía la
 # atención del modelo 4B — "olvidaba" que tenía edit_file y se escondía en
 # read_file infinitos. 12 tools + trace_component (compuesta, agrega agent_builder).
@@ -50,7 +52,7 @@ EXECUTOR_TOOLS = [
     run_lint, run_tests, run_build, run_npm_script,
     stage_files, create_commit, push, git_restore,
 ]
-REVIEWER_TOOLS = [list_files, read_file, search_code, inspect_routes, *_READONLY_GIT, *_VERIFY]
+REVIEWER_TOOLS = [list_files, read_file, search_code, inspect_routes, inspect_models, *_READONLY_GIT, *_VERIFY]
 
 # Retry de EXECUTE tras loop de lectura: SOLO escritura + git-write + verify.
 # TRULY write-only: SIN read_file (el modelo se escondía ahí) — el contenido
