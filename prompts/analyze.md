@@ -23,6 +23,10 @@ REGLAS STRICTAS:
    NO inventes regex (app\.router\(X\) no funciona) y NO repitas variantes
    del mismo patrón: 2 intentos máximo, después cambiá de estrategia
    (list_files + read_file al directorio obvio, ej: interfaces/http/controllers/).
+   trace_component NO necesita `project` para este repo (se resuelve solo) y
+   TAMBIÉN resuelve ARCHIVOS backend por nombre sin extensión ("dashboardRoutes",
+   "UserController"): una llamada = source completo + usos. NO llames
+   cm__list_projects salvo que consultes OTRO proyecto indexado.
    Para un bug de UI ("botón X no funciona"): leé la componente (vía
    trace_component), la página que la renderiza, el handler de submit y la
    llamada a la API/datos que dispara. Recién ahí respondé.

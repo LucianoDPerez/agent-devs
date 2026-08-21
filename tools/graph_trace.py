@@ -20,7 +20,7 @@ from typing import Any
 
 from langchain_core.tools import StructuredTool, tool
 
-from tools._helpers import _read_text
+from tools._helpers import _read_text, _is_excluded
 from tools.search import search_code
 
 # Output limits: el 4B no puede razonar sobre 16K chars de source. Reducido
@@ -104,10 +104,14 @@ def _parse_json(text: str) -> dict:
 def _pick_best_match(name: str, results: list[dict]) -> dict | None:
     """Elige el nodo que mejor matchea `name`.
 
-    Solo acepta match FUERTE: nombre exacto (con cualquier label) o un
-    Function/Component cuyo nombre contenga el término. Devuelve None si el
-    grafo no tiene un match confiable (ej. queries en lenguaje natural devuelven
-    Methods irrelevantes) → el caller cae al fallback de filesystem.
+    Acepta (en orden):
+    1. Match exacto de nombre (cualquier label).
+    2. Function/Component cuyo nombre contenga el término o sus palabras.
+    3. Module/File cuyo nombre de archivo (sin extensión) sea EXACTAMENTE el
+       término o termine en '/<término>' — targets tipo 'dashboardRoutes' que
+       apuntan al ROUTER/controller de backend, no a una componente de UI.
+    Devuelve None si no hay match confiable (queries en lenguaje natural
+    devuelven Methods irrelevantes) → el caller cae al fallback filesystem.
     """
     lower = name.lower()
     for r in results:
@@ -119,6 +123,23 @@ def _pick_best_match(name: str, results: list[dict]) -> dict | None:
             # el nombre de la componente debe relacionarse con el término
             if lower in rname or any(w in rname for w in re.split(r"\s+|_|/", lower) if len(w) >= 3):
                 return r
+    # Module/File: el término nombra un ARCHIVO (ej. 'dashboardRoutes').
+    # Match fuerte = basename sin extensión idéntico al término.
+    terms = [w for w in re.split(r"\s+|_|/", lower) if len(w) >= 3]
+    for r in results:
+        if r.get("label") not in ("Module", "File"):
+            continue
+        fname = (r.get("file_path") or r.get("name") or "").split("/")[-1]
+        stem = fname.lower()
+        for ext in (".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".java",
+                    ".kt", ".php", ".cs", ".rb", ".rs", ".vue", ".svelte"):
+            if stem.endswith(ext):
+                stem = stem[: -len(ext)]
+                break
+        if stem == lower or stem == lower.replace(".ts", ""):
+            return r
+        if terms and all(w in stem for w in terms):
+            return r
     return None
 
 
@@ -225,6 +246,29 @@ async def _find_page_for_term(
     return "\n".join(parts)
 
 
+def _find_file_named(name: str, repo_path: str) -> Path | None:
+    """Archivo cuyo basename (sin extensión conocida) == `name`.
+
+    Para targets tipo 'dashboardRoutes' — routers/controllers de backend — que
+    el grafo NO puede resolver: la búsqueda por texto de cm__search_graph
+    filtra los labels File/Module (y en MCP <0.9 name_pattern no está
+    soportado). El filesystem es la fuente confiable para este caso.
+    """
+    root = Path(repo_path)
+    if not root.exists() or not name:
+        return None
+    best: Path | None = None
+    try:
+        for p in root.rglob(f"{name}.*"):
+            if _is_excluded(p) or not p.is_file():
+                continue
+            if best is None or len(p.parts) < len(best.parts):
+                best = p
+    except OSError:
+        return None
+    return best
+
+
 def build_trace_component(mcp_tools: list[StructuredTool], repo_path: str) -> StructuredTool:
     """Crea la tool `trace_component` usando las tools MCP cargadas.
 
@@ -283,6 +327,32 @@ def build_trace_component(mcp_tools: list[StructuredTool], repo_path: str) -> St
                 sdata = _parse_json(_extract_text(sres2))
                 best = _pick_best_match(exported, sdata.get("results", []) or [])
                 resolved_name = exported
+        if best is None:
+            # Fallback FINAL: el término nombra un ARCHIVO del backend
+            # (router/controller/service, ej. 'dashboardRoutes'). El grafo no
+            # lo devuelve (search textual filtra File/Module) pero el
+            # filesystem lo resuelve en una pasada.
+            ffile = _find_file_named(component, repo_path)
+            if ffile is not None:
+                rel = ffile.relative_to(Path(repo_path)).as_posix()
+                src = _read_text(ffile)
+                parts = [f"🔎 RESOLUCIÓN (archivo): {ffile.name}\n   archivo: {rel}"]
+                if src:
+                    parts.append(f"\n📄 SOURCE DE '{ffile.name}':\n{_cap(src, _SNIPPET_MAX_CHARS)}")
+                usages = search_code.invoke({"path": repo_path, "pattern": re.escape(ffile.stem)})
+                if not str(usages).startswith(("No matches", "Path does not exist")):
+                    ulines = str(usages).splitlines()
+                    if len(ulines) > _USAGES_MAX + 1:
+                        ulines = ulines[: _USAGES_MAX + 1] + ["… (más coincidencias truncadas)"]
+                    parts.append(f"\n🔗 USOS DE '{ffile.stem}' EN EL REPO (archivo:línea: texto):")
+                    parts.append("\n".join(ulines[1:]))
+                parts.append(
+                    "\n→ Es un router/módulo del backend: sus endpoints delegan en "
+                    "handlers (controllers/services) visibles en el source de arriba. "
+                    "Cadena completa; no hace falta buscar más."
+                )
+                return "\n".join(parts)
+
         if best is None:
             return (
                 f"No se encontró '{component}' ni ninguna componente relacionada en "
