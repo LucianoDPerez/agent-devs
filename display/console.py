@@ -12,6 +12,15 @@ from rich.panel import Panel
 
 console = Console()
 
+# Marcadores de segmento markdown para la TUI full-screen: delimitan cada
+# tramo de contenido del LLM (los segmentos quedan interrumpidos por tool
+# calls) para que el pane reemplace el texto CRUDO por la versión renderizada
+# (rich Markdown) al cerrar el segmento. \u2063 = INVISIBLE SEPARATOR: no
+# colisiona con contenido real y sobrevive intacto a markup.escape() y a
+# Text.from_ansi. En modo simple (sin --tui) se emiten igual: son ancho-cero.
+MD_BEGIN = "\u2063md-begin\u2063"
+MD_END = "\u2063md-end\u2063"
+
 
 class ReasoningOnlyResponse(Exception):
     """Raised when the model produces ONLY reasoning_content with no actual output.
@@ -77,6 +86,12 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
     total_tool_calls = 0
     tool_call_limit_hit = False
     wrote_something = False
+    # Último tipo de output emitido (content | tool | None): gobierna los
+    # saltos de línea entre transiciones texto↔tool-call para que nada
+    # quede pegado en el pane.
+    last_emitted: str | None = None
+    # Segmento markdown ABIERTO (marcadores MD_BEGIN/MD_END para la TUI).
+    md_open = False
 
     WRITE_NAMES = frozenset({"write_file", "edit_file", "delete_file", "stage_files", "create_commit"})
 
@@ -107,6 +122,11 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
             is_reasoning = bool(chunk.additional_kwargs.get("is_reasoning"))
 
             if is_reasoning:
+                # Contenido→razonamiento cierra el segmento markdown abierto
+                # (el razonamiento va dim, fuera del render).
+                if md_open:
+                    console.print(MD_END, end="", highlight=False, soft_wrap=True)
+                    md_open = False
                 reasoning_text.append(chunk.additional_kwargs.get("reasoning_content") or "")
                 # Timeout POR BLOQUE de razonamiento: el timer arranca cuando
                 # empieza el bloque y se resetea al emitir output (content o
@@ -134,16 +154,35 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                         console.print("\n", end="")
                     console.print("─" * 40, style="dim")
                 if chunk.content:
+                    # Transición tool→texto: cerrar la línea del eco del tool
+                    # call ANTES del contenido. Sin esto la respuesta arrancaba
+                    # PEGADA al JSON de args (🔧 inspect_routes{...}**Texto).
+                    if last_emitted == "tool":
+                        console.print("\n", end="", highlight=False)
+                    if not md_open:
+                        console.print(MD_BEGIN, end="", highlight=False, soft_wrap=True)
+                        md_open = True
                     console.print(escape(chunk.content), end="", highlight=False, soft_wrap=True)
+                    last_emitted = "content"
                     response_parts.append(str(chunk.content))
                     produced_output = True
 
                 for tc in chunk.tool_call_chunks or []:
                     if tc.get("name"):
+                        # Contenido→tool cierra el segmento markdown abierto.
+                        if md_open:
+                            console.print(MD_END, end="", highlight=False, soft_wrap=True)
+                            md_open = False
                         total_tool_calls += 1
                         if tc["name"] in WRITE_NAMES:
                             wrote_something = True
+                        # Cada tool call va en SU PROPIA línea (el \n acá cubre
+                        # texto→tool y tool→tool). El cierre a fin de args lo
+                        # hace la transición tool→texto / el final del stream.
+                        if last_emitted == "content":
+                            console.print("\n", end="", highlight=False)
                         console.print(f"\n  [bold blue]🔧 {tc['name']}[/bold blue]", end="", highlight=False)
+                        last_emitted = "tool"
                         if max_tool_calls is not None and total_tool_calls > max_tool_calls:
                             tool_call_limit_hit = True
                             break
@@ -160,6 +199,9 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
     except StopAsyncIteration:
         pass
     finally:
+        # Cerrar segmento markdown si quedó abierto (fin de stream / break).
+        if md_open:
+            console.print(MD_END, end="", highlight=False, soft_wrap=True)
         console.print("\n")
         with contextlib.suppress(Exception):
             await stream.aclose()

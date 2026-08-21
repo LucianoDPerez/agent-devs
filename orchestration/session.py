@@ -514,6 +514,12 @@ class Session:
         # el turno exitoso y el marcado de fallos.
         self._bulk_task_hash: str = ""
         self._bulk_current_seq: int = -1
+        # Modo full-screen (--tui): stdin lo dueña la TUI de prompt_toolkit →
+        # sin EscWatcher (ESC vía request_cancel) y sin prompts interactivos
+        # de input() a mitad del turno (commit/credenciales).
+        self._fullscreen: bool = False
+        # Cancel del turno EN CURSO: lo setea run_turn; lo llama la TUI con ESC.
+        self._turn_cancel = None
 
     def start(self) -> str:
         loop = asyncio.new_event_loop()
@@ -1036,7 +1042,13 @@ class Session:
         usuario quiere control). Si stdin no es tty (tests/scripts) o el repo
         no es git, se omite silenciosamente. Fail-open: nunca rompe el flujo.
         """
-        if not EXECUTE_ASK_COMMIT or not sys.stdin.isatty():
+        if not EXECUTE_ASK_COMMIT or not sys.stdin.isatty() or self._fullscreen:
+            if self._fullscreen and EXECUTE_ASK_COMMIT:
+                console.print(
+                    "[dim]ℹ️  Modo --tui: commit manual al terminar el turno "
+                    "(git add + git commit). El prompt interactivo está "
+                    "deshabilitado.[/dim]"
+                )
             return
         try:
             import subprocess
@@ -1399,10 +1411,16 @@ class Session:
             )
 
             # Watcher de ESC: permite interrumpir el streaming y volver al prompt.
-            watcher = EscWatcher(
-                cancel_cb=lambda: loop.call_soon_threadsafe(task.cancel)
-            )
-            watcher.start()
+            # En full-screen stdin lo dueña la TUI → ESC llega por key binding
+            # (request_cancel) y el watcher NO debe arrancar (competería por
+            # los bytes del teclado con prompt_toolkit).
+            watcher = None
+            if not self._fullscreen:
+                watcher = EscWatcher(
+                    cancel_cb=lambda: loop.call_soon_threadsafe(task.cancel)
+                )
+                watcher.start()
+            self._turn_cancel = lambda: loop.call_soon_threadsafe(task.cancel)
 
             try:
                 loop.run_until_complete(task)
@@ -1514,7 +1532,12 @@ class Session:
                 break
             except asyncio.CancelledError:
                 interrupted = True
-                interrupted_by_esc = watcher.interrupted.is_set()
+                # Full-screen: el watcher es None (stdin lo dueña la TUI) y
+                # TODO cancel acá viene de ESC vía request_cancel. En modo
+                # simple el EscWatcher es quien marca interrupted.
+                interrupted_by_esc = (
+                    True if watcher is None else watcher.interrupted.is_set()
+                )
                 break
             except VerifyRequired as e:
                 # El modelo escribió N veces sin verificar: inyectar la
@@ -1736,7 +1759,8 @@ class Session:
                     print(f"\n\n❌ Error en la iteración: {e}", flush=True)
                 break
             finally:
-                watcher.stop()
+                if watcher is not None:
+                    watcher.stop()
                 loop.close()
 
         elapsed = time.monotonic() - start
@@ -1764,15 +1788,27 @@ class Session:
         except Exception:
             pass
 
-        print_turn_summary(
-            elapsed,
-            interrupted,
-            self._session_time,
-            interrupt_source=(
-                "ESC" if interrupted_by_esc
-                else ("auto — límite de intentos" if auto_stopped else None)
-            ),
-        )
+        # Summary del turno: en modo --tui (full-screen) se omite — el panel
+        # queda limpio solo con "vos ›" + respuesta del LLM; el summary era
+        # ruido sin aporte (el toolbar ya muestra tokens en vivo).
+        if not self._fullscreen:
+            print_turn_summary(
+                elapsed,
+                interrupted,
+                self._session_time,
+                interrupt_source=(
+                    "ESC" if interrupted_by_esc
+                    else ("auto — límite de intentos" if auto_stopped else None)
+                ),
+            )
+        elif interrupted_by_esc:
+            # En full-screen el summary se omite, pero el cancelo hay que
+            # informarlo: si no, la respuesta queda cortada a mitad sin
+            # explicación y parece un bug del streaming.
+            console.print(
+                "\n[yellow]⏹️  Turno cancelado (ESC). Podés seguir con otro "
+                "prompt.[/yellow]\n"
+            )
 
         # Bulk: contabilidad del batch ANTES del commit-ask (el estado en la
         # cola decide si este es el último batch → recién ahí se ofrece commit)
@@ -1829,7 +1865,8 @@ class Session:
             # porque la tarea requiere una credencial/entorno que el agente no
             # tiene), invitar al usuario a proveerla o pedir los pasos manuales.
             # Solo en modo interactivo (TTY); fail-open si no hay stdin.
-            if sys.stdin.isatty():
+            # En full-screen lo saltea: stdin pertenece a la TUI.
+            if sys.stdin.isatty() and not self._fullscreen:
                 try:
                     console.print(
                         "\n[bold cyan]🔑 Si la tarea requiere una credencial o entorno "
@@ -1991,6 +2028,19 @@ class Session:
     def get_recent_history(self, limit: int = 5) -> list[dict]:
         """Devuelve los últimos N turnos del repo (de cualquier sesión)."""
         return load_recent_turns(self.repo_path, limit=limit)
+
+    def request_cancel(self) -> None:
+        """Cancela el turno en curso (lo llama la TUI full-screen con ESC).
+
+        El callback usa call_soon_threadsafe, así que es seguro invocarlo
+        desde el hilo de la UI mientras run_turn corre en otro thread.
+        """
+        cb = self._turn_cancel
+        if cb is not None:
+            try:
+                cb()
+            except Exception:
+                pass
 
     def get_status(self) -> dict:
         usage = get_usage()

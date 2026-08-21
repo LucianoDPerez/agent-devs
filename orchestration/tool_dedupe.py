@@ -236,9 +236,13 @@ class ExploreBudget:
         """Devuelve mensaje STOP si la llamada no debe ejecutarse."""
         kwargs = kwargs or {}
         self._total += 1
-        import sys
-        print(f"[BUDGET] total={self._total} count={self._count} max={self.max_calls} "
-              f"write_pressure={self.write_pressure} name={name}", file=sys.stderr, flush=True)
+        # Debug print SOLO con AGENTDEVS_DEBUG=1: iba por stderr y en modo
+        # --tui pisaba la UI (stderr no pasa por el panel capturado).
+        import os
+        if os.environ.get("AGENTDEVS_DEBUG"):
+            import sys
+            print(f"[BUDGET] total={self._total} count={self._count} max={self.max_calls} "
+                  f"write_pressure={self.write_pressure} name={name}", file=sys.stderr, flush=True)
 
         # max_calls puede cambiar post-reset (hints_on → 0 en session.py)
         if self.max_calls <= 0:

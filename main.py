@@ -133,11 +133,121 @@ def _warn_dirty_repo(repo_path: str) -> None:
         pass
 
 
+def run_fullscreen(session) -> None:
+    """Modo --tui (Textual): panel de mensajes con scroll + input/toolbar fijos.
+
+    Captura console.file y sys.stdout/sys.stderr a nivel PYTHON (Textual
+    renderiza vía sys.__stderr__, por eso NO se tocan los file descriptors).
+    Los logs nativos de procesos EXTERNOS (p. ej. llama-server compartiendo la
+    terminal) no se pueden capturar desde acá — lanzalos con salida a archivo.
+    """
+    from display.console import console
+    from display.fullscreen_tui import FullscreenTUI
+
+    session._fullscreen = True  # sin EscWatcher ni prompts input() internos
+
+    tui = FullscreenTUI(
+        status_provider=session.get_status,
+        on_submit=lambda text: None,  # se setea abajo (closure completa)
+    )
+
+    old_file = console.file
+    console.file = tui.pane_writer
+    # El writer es isatty()=True y tiene fileno → rich detecta el ancho real.
+    # Además forzamos un ancho MUY grande para que rich NUNCA envuelva (si
+    # envolviera a 80/otro, las respuestas llegarían al panel ya cortadas en
+    # una columna angosta). El RichLog (wrap=True) es quien envuelve al ancho
+    # REAL del panel.
+    console._color_system = console._detect_color_system()
+    console._width = 1000
+    console._height = 1000
+
+    # Capturar stdout/stderr PYTHON (print de libs, warnings, traces): Textual
+    # escribe por sys.__stderr__, así que el swap no afecta su render.
+    import sys as _sys
+
+    class _StreamToPane:
+        def __init__(self, pane):
+            self._pane = pane
+        def write(self, text):
+            if text:
+                self._pane.write(text)
+            return len(text) if text else 0
+        def flush(self):
+            pass
+        def isatty(self):
+            return True
+
+    _old_stdout, _old_stderr = _sys.stdout, _sys.stderr
+    _sys.stdout = _StreamToPane(tui.pane_writer)
+    _sys.stderr = _StreamToPane(tui.pane_writer)
+
+    def _restore_streams():
+        _sys.stdout, _sys.stderr = _old_stdout, _old_stderr
+        console.file = old_file
+
+    def on_submit(text: str) -> None:
+        stripped = text.strip().lower()
+        if stripped in ("exit", "quit", "salir", "q"):
+            console.print("[dim]👋 ¡Hasta luego![/dim]")
+            tui.exit()
+            return
+        if not text.strip():
+            return
+        if stripped == "/new":
+            session.reset()
+            session._fullscreen = True  # reset() no debe apagar el modo
+            console.print(f"[green]✅ Nueva sesión iniciada ({session.session_id}).[/green]")
+            return
+        if stripped == "/history":
+            turns = session.get_recent_history(limit=10)
+            if not turns:
+                console.print("[dim]Sin turnos previos.[/dim]")
+                return
+            for t in turns:
+                user = (t.get("user_message") or "")[:80]
+                console.print(
+                    f"[bold]Usuario[/bold] [{t.get('role', '-')}] "
+                    f"({t.get('tokens_used', 0)} tokens): {user}"
+                )
+            return
+
+        # ECO del prompt ANTES de llamar al LLM (en full-screen el input se
+        # limpia al enviar y sin esto la pregunta no aparece en el panel).
+        # Color destacado para distinguir preguntas (cian brillante) de
+        # respuestas del agente (blanco default).
+        from rich.markup import escape
+        console.print()
+        console.print("[bold bright_magenta]🧑 vos ›[/bold bright_magenta]")
+        console.print(f"[bright_magenta]{escape(text)}[/bright_magenta]")
+        console.print()
+        session.run_turn(text)
+
+    tui.on_submit = on_submit
+    tui.on_cancel = session.request_cancel
+
+    # El header FIJO de la TUI ya muestra LLM/repo/modelo/tools — no duplicar
+    # el panel de welcome en el scrollable. Solo el hint inicial.
+    console.print("💡 Escribí qué querés hacer. [dim](ESC cancela turno · "
+                  "rueda/scroll en el panel · commit manual al terminar)[/dim]\n")
+    _warn_dirty_repo(session.repo_path)
+
+    try:
+        tui.run()
+    except KeyboardInterrupt:
+        console.print("\n[dim]👋 ¡Hasta luego![/dim]")
+    finally:
+        _restore_streams()
+
+
 def main():
     parser = argparse.ArgumentParser(description="AgentDevs — agente de desarrollo con LLM local")
     parser.add_argument("repo", nargs="?", help="Ruta del repositorio (default: directorio actual)")
     parser.add_argument("--analyze", metavar="REPO", help="Genera y guarda el análisis del repo")
     parser.add_argument("--list", action="store_true", help="Lista los análisis guardados")
+    parser.add_argument("--no-tui", action="store_true",
+                        help="Desactiva el TUI full-screen (usa el input simple). "
+                             "Por defecto el TUI se activa si el stdin es una terminal.")
     args = parser.parse_args()
 
     if args.list:
@@ -158,6 +268,15 @@ def main():
 
     session = Session(_make_llm(), repo_path, cached_analysis=_format_cached_context(cached))
     session.start()
+
+    # TUI por defecto cuando hay terminal interactiva (--no-tui para el
+    # flujo simple, que es el que usan scripts/CI sin tty).
+    use_tui = not args.no_tui and sys.stdin.isatty()
+
+    if use_tui:
+        run_fullscreen(session)
+        return
+
     print_welcome(
         repo_path, LLM_MODEL_NAME, LLM_BASE_URL, LLM_TEMPERATURE,
         (len(ALL_TOOLS), session._mcp_count),
