@@ -527,6 +527,12 @@ class Session:
         # El config hardcodeado quedaba viejo (asumía -c 62000, había 36608) y
         # el summary automático nunca alcanzaba a disparar antes del overflow.
         self._ctx_limit: int = _CONTEXT_LIMIT
+        # Razonamiento parcial del intento fallido (tail): el retry debe
+        # CONTINUAR el diagnóstico, no reiniciarlo desde cero. E2E real: el
+        # modelo encontró la causa raíz (route GET / sin query param), el
+        # budget cortó, y el retry —sin sus conclusiones— re-derivó otra
+        # hipótesis equivocada desde cero.
+        self._partial_reasoning: str = ""
 
     def start(self) -> str:
         loop = asyncio.new_event_loop()
@@ -750,6 +756,26 @@ class Session:
         self.force_summarize()
         console.print("[green]✅ Resumen generado. Historial comprimido.[/green]\n")
 
+    def _findings_block(self) -> str:
+        """Bloque con el razonamiento parcial del intento fallido (tail).
+
+        El diagnóstico que el modelo ya hizo es el activo más valioso del
+        retry: sin él, re-deriva hipótesis desde cero y a veces llega a una
+        DISTINTA (E2E real: había encontrado la causa raíz correcta en el
+        backend y el retry fue a 'arreglar' el frontend).
+        """
+        tail = (self._partial_reasoning or "").strip()
+        if not tail:
+            return ""
+        if len(tail) > 4000:
+            tail = "…(recortado: lo más reciente al final)…\n" + tail[-4000:]
+        self._partial_reasoning = ""
+        return (
+            "\n\nHALLAZGOS DE TU ANÁLISIS EN CURSO (continuá EXACTAMENTE desde "
+            "acá — NO reinicies el diagnóstico ni cambies de hipótesis):\n"
+            + tail + "\n"
+        )
+
     def _retry_with_read_anchor(self) -> str:
         """Construye el mensaje de retry: contenido de archivos ya leídos
         (ancla) + instrucción de escribir YA con el old_str literal del ancla.
@@ -798,7 +824,7 @@ class Session:
                 "la verificación la inyecta el sistema. "
                 "NO hagas write_file de archivos que ya modificaste." + anchor
             )
-        return _EXECUTE_FORCE_WRITE_MSG + anchor
+        return _EXECUTE_FORCE_WRITE_MSG + self._findings_block() + anchor
 
     def _enter_budget_retry(self, retry_msg: str) -> list:
         """Prepara el retry de EXECUTE tras un turno que no convergió (budget
@@ -968,6 +994,14 @@ class Session:
         retry_body = f"Reanalizá la pregunta: \"{user_msg}\""
         if anchor:
             retry_body += anchor
+        findings = self._findings_block()
+        if findings:
+            retry_body += (
+                findings
+                + "\nRESPONDÉ AHORA el diagnóstico final en texto — ya no tenés "
+                "tools de búsqueda y no las necesitás: todo lo que relevaste "
+                "está arriba."
+            )
         self._messages = self._messages[-3:] if len(self._messages) > 3 else self._messages
         self._messages.append(HumanMessage(retry_body))
         self._rebuild_agent(new_role, no_explore=True)
@@ -1618,6 +1652,9 @@ class Session:
                 )
                 continue
             except ReasoningOnlyResponse as e:
+                # Rescatar el razonamiento parcial ANTES de cualquier retry:
+                # es la materia prima del bloque HALLAZGOS.
+                self._partial_reasoning = (e.reasoning_text or "").strip()[-4500:]
                 if attempt + 1 >= max_attempts:
                     turn_failed = True
                     auto_stopped = True

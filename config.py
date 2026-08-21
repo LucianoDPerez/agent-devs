@@ -43,7 +43,11 @@ REASONING_RETRY_ENABLED = True
 # (necesita --reasoning-budget global), así que el único control es este timeout.
 # 300s da margen al razonamiento real; si el modelo se traba de verdad, igual
 # lo corta TURN_IDLE_TIMEOUT.
-MAX_REASONING_SECONDS = 300
+# Cortar razonamiento sin output. 300 era demasiado: dos E2E reales quemaron
+# 300s y 90s pensando en espiral sin emitir nada. Con el rescate de
+# _partial_reasoning (session.py) el corte ya no pierde el diagnóstico — se
+# recicla en el retry — así que cortar antes es barato.
+MAX_REASONING_SECONDS = 180
 TURN_IDLE_TIMEOUT = 360  # 6 min — el modelo 4B tarda en razonar análisis complejos
 
 # Archivos de PLANIFICACIÓN PROTEGIDOS: el agente NUNCA debe escribir/editar/
