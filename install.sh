@@ -1,19 +1,43 @@
 #!/usr/bin/env bash
 # AgentDevs installer — macOS / Linux
-# Crea el venv, instala el paquete editable (+ deps) y deja el comando global
-# `agent-devs` disponible desde cualquier carpeta. Al final corre el doctor.
+#
+# Dos modos:
+#   1) Dentro del repo (clonado):  ./install.sh
+#   2) One-liner remoto:           curl -fsSL https://raw.githubusercontent.com/LucianoDPerez/agent-devs/main/install.sh | bash
+#      → clona el repo en ~/.agent-devs (o $AGENTDEVS_HOME) y sigue igual.
+#
+# En ambos casos: venv + paquete editable + comando global `agent-devs`
+# + codebase-memory-mcp si falta + doctor final.
 set -euo pipefail
-cd "$(dirname "$0")"
+
+REPO_URL="${AGENTDEVS_REPO_URL:-https://github.com/LucianoDPerez/agent-devs.git}"
 
 echo "🚀 AgentDevs installer (macOS/Linux)"
 echo "===================================="
+
+# ── ¿De dónde instalamos? repo actual vs clonar ────────────────────────────
+if [ -f "./pyproject.toml" ] && grep -q 'name = "agent-devs"' ./pyproject.toml 2>/dev/null; then
+    REPO_DIR="$(pwd)"
+    echo "📁 Instalando desde checkout existente: $REPO_DIR"
+else
+    INSTALL_DIR="${AGENTDEVS_HOME:-$HOME/.agent-devs}"
+    if [ -d "$INSTALL_DIR/.git" ]; then
+        echo "Actualizando checkout existente en $INSTALL_DIR..."
+        git -C "$INSTALL_DIR" pull --ff-only -q
+    else
+        echo "Clonando AgentDevs en $INSTALL_DIR..."
+        git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+    fi
+    REPO_DIR="$INSTALL_DIR"
+fi
+cd "$REPO_DIR"
 
 # ── Python 3.10+ ────────────────────────────────────────────────────────────
 PY=${PYTHON:-python3}
 if ! "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
     echo "❌ Se requiere Python 3.10+ y '$PY' no lo es."
     echo "   Instalá una versión reciente (brew install python / apt install python3) o:"
-    echo "   PYTHON=/ruta/a/python3 ./install.sh"
+    echo "   PYTHON=/ruta/a/python3 curl -fsSL .../install.sh | bash"
     exit 1
 fi
 echo "✅ Python OK ($($PY --version))"

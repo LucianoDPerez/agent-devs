@@ -1,8 +1,30 @@
 # AgentDevs installer — Windows (PowerShell)
-# Crea el venv, instala el paquete editable (+ deps) y deja el comando global
-# `agent-devs` disponible desde cualquier carpeta. Al final corre el doctor.
+#
+# Dos modos:
+#   1) Dentro del repo (clonado):   .\install.ps1
+#   2) One-liner remoto:
+#      irm https://raw.githubusercontent.com/LucianoDPerez/agent-devs/main/install.ps1 | iex
+#      → clona el repo en %USERPROFILE%\.agent-devs y sigue igual.
+#
+# En ambos casos: venv + paquete editable + comando global `agent-devs`
+# + doctor final.
 $ErrorActionPreference = "Stop"
-Set-Location $PSScriptRoot
+
+$repoUrl = if ($env:AGENTDEVS_REPO_URL) { $env:AGENTDEVS_REPO_URL } else { "https://github.com/LucianoDPerez/agent-devs.git" }
+
+if ((Test-Path "./pyproject.toml") -and (Select-String -Path ./pyproject.toml -Pattern 'name = "agent-devs"' -Quiet)) {
+    Write-Host "📁 Instalando desde checkout existente: $(Get-Location)"
+} else {
+    $installDir = if ($env:AGENTDEVS_HOME) { $env:AGENTDEVS_HOME } else { Join-Path $env:USERPROFILE ".agent-devs" }
+    if (Test-Path (Join-Path $installDir ".git")) {
+        Write-Host "📁 Actualizando checkout existente en $installDir…"
+        git -C $installDir pull --ff-only -q
+    } else {
+        Write-Host "📁 Clonando AgentDevs en $installDir…"
+        git clone --depth 1 $repoUrl $installDir
+    }
+    Set-Location $installDir
+}
 
 Write-Host "🚀 AgentDevs installer (Windows)"
 Write-Host "================================"

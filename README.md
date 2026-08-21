@@ -5,26 +5,9 @@
 
 AgentDevs es un agente de desarrollo que **analiza, planifica, implementa y revisa código** en tus repositorios usando un LLM local (llama.cpp). Le decís qué querés en lenguaje común y él explora el proyecto, propone un plan, escribe los cambios y —antes de darte por servido— corre lint, tests y build para verificar que lo que entregó compila.
 
-```
-┌──────────────────────────────────────────────────────────┐
-│  AgentDevs                                               │
-│  🔌 LLM: http://localhost:8080/v1   📁 Medicos  🌿 main  │
-├──────────────────────────────────────────────────────────┤
-│  🧑 vos ›                                                │
-│  agregar endpoint REST de pacientes con validación       │
-│                                                          │
-│  💭 Razonando…                                           │
-│  ────────────────                                        │
-│  🔧 cm__get_architecture{"project":"Medicos"}            │
-│  🔧 read_file{"path":"backend/src/..."}                  │
-│                                                          │
-│  ## Plan                                                 │
-│  1. Crear schema Prisma ...                              │
-│  ✅ Verificación: ruff ✓ pytest 12 passed ✓ build ✓      │
-├──────────────────────────────────────────────────────────┤
-│ 🌿 main · ⚡ 12,540 tokens · 💬 Charla · Enter=envía     │
-└──────────────────────────────────────────────────────────┘
-```
+![AgentDevs TUI en acción](docs/assets/tui.png)
+
+*Sesión real: el usuario pide los endpoints expuestos; `inspect_routes` los devuelve en una llamada y la tabla sale renderizada en la TUI.*
 
 ## ¿Por qué AgentDevs y no otra cosa?
 
@@ -37,18 +20,25 @@ AgentDevs es un agente de desarrollo que **analiza, planifica, implementa y revi
 
 ## Instalación
 
-### macOS / Linux
+### One-liner (macOS / Linux)
 
 ```bash
-git clone <este-repo> agent-devs && cd agent-devs
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/LucianoDPerez/agent-devs/main/install.sh | bash
 ```
+
+Clona el proyecto en `~/.agent-devs`, crea el entorno, deja el comando global **`agent-devs`** en tu PATH y corre la verificación completa. Re-ejecutarlo actualiza el checkout (`git pull`).
 
 ### Windows (PowerShell)
 
 ```powershell
-git clone <este-repo> agent-devs; cd agent-devs
-.\install.ps1
+irm https://raw.githubusercontent.com/LucianoDPerez/agent-devs/main/install.ps1 | iex
+```
+
+### Desde un clone (si preferís tener el código a mano)
+
+```bash
+git clone https://github.com/LucianoDPerez/agent-devs.git && cd agent-devs
+./install.sh        # o .\install.ps1 en Windows
 ```
 
 El instalador se encarga de todo:
@@ -87,6 +77,20 @@ El `.` le dice que trabaje sobre el directorio actual (también acepta una ruta 
 | Cambios masivos | *"renombrá la entidad Consulta a Appointment en todos los archivos"* |
 
 Cuando termina un cambio te ofrece commitearlo; nunca pushea sin que lo pidas.
+
+## Tools pensadas para modelos chicos
+
+AgentDevs no le tira un grep al LLM y que se arregle: las herramientas de exploración son **de alta densidad** — una sola llamada devuelve lo que a mano serían 5-10 lecturas. Menos pasos de razonamiento, menos tokens, menos lugares donde equivocarse. Los presupuestos por turno están calibrados exactamente alrededor de esto.
+
+| Tool | Qué devuelve en una llamada |
+|---|---|
+| `inspect_routes` | Todos los endpoints HTTP del proyecto: método, ruta y propósito. Escanea Next.js, Express, FastAPI, Flask, Go (chi/gin), Spring, PHP y .NET |
+| `trace_component` | Un componente completo: su código fuente + quién lo usa + la página que lo renderiza |
+| `search_code` | Búsqueda semántica sobre el knowledge graph del código (MCP) |
+| `run_install / run_lint / run_tests / run_build` | Verificación real según el stack detectado (npm, uv, gradle, maven…) |
+| `stage_files / create_commit / git_restore` | Git seguro y acotado, sin comandos crudos |
+
+Además, cada rol recibe **solo el subset de tools que necesita**: el rol `analyze` no puede escribir, y el retry de `execute` pierde hasta la búsqueda para forzarlo a concretar.
 
 ## Comandos
 
