@@ -2,6 +2,8 @@
 
 - Enter = enviar (usa validate_and_handle)
 - ⌥+Enter (Option+Enter) = salto de línea
+- CLICK en cualquier parte del texto = mover el cursor ahí (editar/insertar/
+  borrar desde esa posición, como opencode)
 - Fondo gris oscuro en el área de input
 - Mínimo 2 líneas visibles
 - Word wrap automático para líneas largas
@@ -64,7 +66,7 @@ def _make_toolbar(status: dict) -> FormattedText:
         ("class:toolbar", "  "),
         ("class:repo", f"📁 {_short_repo(status.get('repo', ''))}"),
         ("class:toolbar", "  "),
-        ("class:hint", "Enter=envía · ⌥+Enter=salto · ESC=cancela el turno · Ctrl+C=sale · exit=sale"),
+        ("class:hint", "Enter=envía · ⌥+Enter=salto · Click=posiciona cursor · ESC=cancela el turno · Ctrl+C=sale · exit=sale"),
     ])
 
 
@@ -79,23 +81,9 @@ def _continuation(width: int, line_number: int, soft: bool) -> str:
 
 
 def get_user_input(status: dict) -> str:
-    """Muestra el prompt con fondo gris, multilinea, word wrap y status bar."""
-    global _session
-    if not sys.stdin.isatty():
-        return input("› ")
+    """Caja pintada con fondo, alto dinámico y click-to-edit (display/input_box).
 
-    if _session is None:
-        _session = PromptSession(
-            key_bindings=_make_keybindings(),
-            multiline=True,
-            wrap_lines=True,
-            mouse_support=False,
-            history=_history,
-            style=_STYLE,
-            prompt_continuation=_continuation,
-        )
-
-    return _session.prompt(
-        _prompt_text(),
-        bottom_toolbar=lambda: _make_toolbar(status),
-    )
+    Fallback a input() plano si stdin no es TTY (tests/scripts).
+    """
+    from display.input_box import get_user_input_boxed
+    return get_user_input_boxed(status)

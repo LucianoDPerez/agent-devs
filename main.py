@@ -102,6 +102,37 @@ def do_list():
         print(f"{r['path']:<48} {(r['language'] or '-'):<13} {(r['tech_stack'] or '-')[:32]:<32} {r['updated_at']}")
 
 
+def _warn_dirty_repo(repo_path: str) -> None:
+    """Advierte si el repo target tiene cambios sin commitear al ARRANCAR.
+
+    Un repo sucio contamina la verificación: lint/tests fallan por daño
+    pre-existente (ajeno a la tarea) y el modelo gasta el presupuesto
+    arreglando lo de otros — E2E real: 4537 líneas borradas en rules_catalog
+    sin restaurar entre corridas. Es solo un aviso de consola: no toca el
+    contexto del modelo."""
+    try:
+        import subprocess
+        proc = subprocess.run(
+            ["git", "-C", repo_path, "status", "--porcelain"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if proc.returncode != 0:
+            return
+        entries = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+        if not entries:
+            return
+        untracked = sum(1 for ln in entries if ln.startswith("??"))
+        changed = len(entries) - untracked
+        console.print(
+            f"\n[yellow]⚠️  El repo tiene {changed} archivo(s) modificado(s) y "
+            f"{untracked} sin trackear SIN COMMITEAR. Los lint/tests pueden "
+            f"fallar por daño pre-existente (ajeno a tu tarea); si es así, "
+            f"el agente puede gastar pasos de más.[/yellow]\n"
+        )
+    except Exception:
+        pass
+
+
 def main():
     parser = argparse.ArgumentParser(description="AgentDevs — agente de desarrollo con LLM local")
     parser.add_argument("repo", nargs="?", help="Ruta del repositorio (default: directorio actual)")
@@ -132,6 +163,7 @@ def main():
         (len(ALL_TOOLS), session._mcp_count),
         branch=session.get_status().get("branch", ""),
     )
+    _warn_dirty_repo(repo_path)
 
     if cached.get("analysis"):
         print("📚 Análisis cacheado encontrado. No se re-explora.")
@@ -176,7 +208,8 @@ def main():
                         console.print()
                     console.print()
                 continue
-            session.run_turn(user_input)
+            from display.status_bar import run_turn_with_sticky_bar
+            run_turn_with_sticky_bar(session, user_input)
     finally:
         session.close()
 
