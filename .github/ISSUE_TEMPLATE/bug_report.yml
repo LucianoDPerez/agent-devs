@@ -1,0 +1,61 @@
+name: 🐞 Reporte de bug
+description: Algo no funciona como debería
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ¡Gracias por reportar! Completá lo que puedas — cuánto más contexto, más rápido el fix.
+        Si el problema es de **seguridad**, NO publiques acá: usá [SECURITY.md](../blob/main/SECURITY.md).
+  - type: textarea
+    id: descripcion
+    attributes:
+      label: ¿Qué pasó?
+      description: Descripción clara del problema.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Pasos para reproducir
+      placeholder: |
+        1. cd /mi/proyecto
+        2. agent-devs .
+        3. Le pedí "..."
+        4. Error / comportamiento raro
+    validations:
+      required: true
+  - type: textarea
+    id: esperado
+    attributes:
+      label: ¿Qué esperabas que pasara?
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Sistema operativo
+      placeholder: macOS 15.5 / Ubuntu 24.04 / Windows 11
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Versión de Python
+      placeholder: "3.14"
+  - type: input
+    id: modelo
+    attributes:
+      label: Modelo y versión de llama-server
+      placeholder: qwen3.6-35b-a3b, llama-server b6200
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Salida de `agent-devs --doctor`
+      description: Pegá la salida si está relacionada con instalación/entorno.
+      render: shell
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs relevantes
+      render: shell

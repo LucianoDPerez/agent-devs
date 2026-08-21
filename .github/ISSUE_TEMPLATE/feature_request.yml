@@ -1,0 +1,30 @@
+name: ✨ Idea / feature request
+description: Proponé una mejora o funcionalidad nueva
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problema
+    attributes:
+      label: ¿Qué problema querés resolver?
+      description: El caso de uso o dolor, no la solución técnica todavía.
+      placeholder: "Siempre tengo que pedirle X dos veces porque…"
+    validations:
+      required: true
+  - type: textarea
+    id: propuesta
+    attributes:
+      label: Solución propuesta
+      description: Cómo te imaginás que funcionaría.
+    validations:
+      required: true
+  - type: textarea
+    id: alternativas
+    attributes:
+      label: Alternativas consideradas
+  - type: checkboxes
+    id: contribucion
+    attributes:
+      label: ¿Te interesa contribuir el cambio?
+      options:
+        - label: Sí, puedo trabajar en un PR (con guía del maintainer)
+        - label: Solo puedo testearlo

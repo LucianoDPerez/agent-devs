@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentación técnica (arquitectura)
+    url: https://github.com/LucianoDPerez/agent-devs/blob/main/docs/ARCHITECTURE.md
+    about: Cómo funciona por dentro antes de proponer cambios grandes
+  - name: Guía de contribución
+    url: https://github.com/LucianoDPerez/agent-devs/blob/main/CONTRIBUTING.md
+    about: Setup, tests y estilo de commits
