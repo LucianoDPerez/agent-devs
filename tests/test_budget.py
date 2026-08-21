@@ -1,10 +1,39 @@
 """Unit tests for tool budget and dedupe logic."""
 import pytest
+from config import EXECUTE_BULK_MAX_ATTEMPTS
+from orchestration.session import _bulk_budget, _CONTEXT_LIMIT
 from orchestration.tool_dedupe import (
     ExploreBudget,
     ToolBudgetExceeded,
     VerifyRequired,
 )
+
+
+class TestBulkBudget:
+    """Tareas bulk (14 archivos): budgets escalados para no cortar las lecturas."""
+
+    def test_bulk_14_files_scales_budgets(self):
+        bb = _bulk_budget(14)
+        assert bb["max_reads_after_explore"] >= 18  # 14 + 4
+        assert bb["max_tools_before_write"] >= 36  # 2*14 + 8
+        assert bb["max_writes_before_verify"] >= 14
+        assert bb["tool_calls_per_turn"] >= 46  # 4*14 + 8 (capped 55)
+
+    def test_bulk_tool_cap_respects_ceiling(self):
+        assert _bulk_budget(30)["tool_calls_per_turn"] <= 55
+        assert _bulk_budget(30)["max_reads_after_explore"] <= 24
+
+    def test_bulk_small_keeps_defaults(self):
+        bb = _bulk_budget(1)
+        assert bb["tool_calls_per_turn"] >= 30
+        assert bb["max_reads_after_explore"] >= 5
+
+    def test_context_limit_matches_62000_window(self):
+        assert _CONTEXT_LIMIT == 55800  # 90% de n_ctx=62000
+
+    def test_bulk_max_attempts_covers_full_flow(self):
+        # Exploración → escritura → compuerta verify → completar faltantes
+        assert EXECUTE_BULK_MAX_ATTEMPTS >= 6
 
 
 class TestExploreBudgetReview:

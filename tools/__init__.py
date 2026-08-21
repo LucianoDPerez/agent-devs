@@ -62,16 +62,29 @@ WRITE_ONLY_TOOLS = [
     run_lint, run_tests, run_build,
 ]
 
+# LEGACY — ya NO se usa en el retry de budget (ver BUDGET_RETRY_TOOLS).
 # Retry de EXECUTE tras NO escribir (budget/reasoning/no-write): read + edit +
 # write + search_code. SIN verify tools: el modelo las usaba como "acción
 # gratis" para esquivar la write pressure (corría run_lint/tests/build ANTES de
 # escribir, quemaba el presupuesto y nunca escribía — visto en E2E real).
-# search_code SÍ está: el modelo inventa paths de archivos (did-you-mean no
-# siempre alcanza) y sin búsqueda queda en dead end. El explore budget lo capa.
-# Después de escribir, la compuerta de verificación (sistema) inyecta verify.
+# Mantenido por compatibilidad; el 4B se escondía en read_file/search_code y
+# nunca escribía (E2E T7: __init__.py leído en chunks hasta quemar 3 intentos).
 WRITE_RETRY_TOOLS = [
     read_file, edit_file, write_file, delete_file,
     search_code,
+]
+
+# Retry de EXECUTE tras agotar el presupuesto de exploración: escritura con
+# lectura ACOTADA. read_file SÍ está (limitado por limit_reads_now +
+# max_reads_after_explore): sin lecturas el 35B alucina o destruye (E2E real:
+# escribía tmp_read.sh/tmp_read.py para intentar leer el archivo). SIN
+# delete_file: borrar + recrear bypassa el guard anti-sobrescritura (E2E real:
+# el 35B borró __init__.py de 1851 líneas y escribió un stub de 40). SIN verify
+# tools (el modelo las usaba como "acción gratis" para esquivar la write
+# pressure). El contenido de lo ya leído va inyectado en el ancla; la compuerta
+# de verificación (sistema) inyecta verify después.
+BUDGET_RETRY_TOOLS = [
+    read_file, edit_file, write_file,
 ]
 
 # Retry de la compuerta post-escritura (error de compilación): corregir un

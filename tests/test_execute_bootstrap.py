@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 
 from orchestration.execute_bootstrap import (
+    detect_bulk_file_count,
     detect_repo_stacks,
     inject_repo_hints,
     suggest_minimal_files,
@@ -237,6 +238,97 @@ class TestRepoHints:
         assert "python" in hints
         assert "main.py" in hints
         assert "def main" in hints
+
+    def test_inject_lists_asset_bin_dir(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='pkg'\n", encoding="utf-8")
+        src = tmp_path / "src" / "spec_kitti_cli"
+        src.mkdir(parents=True)
+        (src / "__init__.py").write_text("VERSION = '1.0'\n", encoding="utf-8")
+        bin_dir = src / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "spec-kitti-telemetry").write_bytes(b"\x7fELF not really")
+        (bin_dir / "spec-kitti-agent").write_bytes(b"\x7fELF not really")
+        hints = inject_repo_hints(str(tmp_path))
+        assert "listing assets" in hints
+        assert "spec-kitti-telemetry" in hints
+        assert "spec-kitti-agent" in hints
+
+    def test_inject_no_asset_dir_yields_no_error(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='pkg'\n", encoding="utf-8")
+        src = tmp_path / "src"
+        src.mkdir(parents=True)
+        (src / "module.py").write_text("X = 1\n", encoding="utf-8")
+        hints = inject_repo_hints(str(tmp_path))
+        assert "listing assets" not in hints
+        assert "src" in hints
+
+    def test_inject_lists_nested_asset_subdir_files(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='pkg'\n", encoding="utf-8")
+        src = tmp_path / "src" / "spec_kitti_cli"
+        (src / "templates" / "commands").mkdir(parents=True)
+        (src / "templates" / "vscode-settings.json").write_text("{}", encoding="utf-8")
+        for name in ("spec-kitti.clarify.md", "spec-kitti.implement.md", "spec-kitti.plan.md"):
+            (src / "templates" / "commands" / name).write_text("# cmd\n", encoding="utf-8")
+        (src / "__init__.py").write_text("VERSION = '1.0'\n", encoding="utf-8")
+        hints = inject_repo_hints(str(tmp_path))
+        assert "listing assets src/spec_kitti_cli/templates" in hints
+        assert "commands/" in hints
+        assert "commands/spec-kitti.clarify.md" in hints
+        assert "commands/spec-kitti.implement.md" in hints
+        assert "commands/spec-kitti.plan.md" in hints
+
+    def test_detect_bulk_file_count_from_task8_prompt(self):
+        task8 = (
+            "implementar Task 8: Agregar hooks de telemetría en los 14 templates de commands\n"
+            "Resumen: Modificar cada archivo .md de command para que incluya las llamadas start y end\n"
+            "Notas técnicas:\n"
+            "- Lista completa de commands: implement, clarify, tasks, constitution, swagger, "
+            "changelog, specify, refactor, discovery, sync-status, tasks.shape, sync, amend, plan\n"
+        )
+        assert detect_bulk_file_count(task8) == 14
+
+    def test_detect_bulk_file_count_small_task_yields_zero(self):
+        assert detect_bulk_file_count("modifica src/spec_kitti_cli/__init__.py") == 0
+        assert detect_bulk_file_count("implementa la Tarea 1 de tasks.md") == 0
+
+    def test_detect_bulk_file_count_explicit_count(self):
+        assert detect_bulk_file_count("hay que modificar los 8 archivos de plantillas") == 8
+
+    def test_missing_resources_notice(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='pkg'\n", encoding="utf-8")
+        src = tmp_path / "src" / "spec_kitti_cli"
+        src.mkdir(parents=True)
+        (src / "__init__.py").write_text("def init():\n    pass\n", encoding="utf-8")
+        tasks = tmp_path / "tasks.md"
+        tasks.write_text(
+            "## Tarea 1\n"
+            "- [ ] copia desde src/spec_kitti_cli/bin/\n"
+            "- [ ] si no hay binario no rompe el init\n",
+            encoding="utf-8",
+        )
+        out = preload_cited_files(
+            f"implementar Tarea 1 de {tasks}",
+            repo_path=str(tmp_path),
+        )
+        assert "RECURSOS CITADOS QUE NO EXISTEN" in out
+        assert "src/spec_kitti_cli/bin/" in out
+        assert "no rompe el init" in out
+
+    def test_missing_resources_no_false_positive_for_existing(self, tmp_path):
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='pkg'\n", encoding="utf-8")
+        src = tmp_path / "src" / "spec_kitti_cli"
+        src.mkdir(parents=True)
+        (src / "__init__.py").write_text("def init():\n    pass\n", encoding="utf-8")
+        tasks = tmp_path / "tasks.md"
+        tasks.write_text(
+            "## Tarea 1\n- [ ] modifica src/spec_kitti_cli/__init__.py\n",
+            encoding="utf-8",
+        )
+        out = preload_cited_files(
+            f"implementar Tarea 1 de {tasks}",
+            repo_path=str(tmp_path),
+        )
+        assert "RECURSOS CITADOS QUE NO EXISTEN" not in out
 
     def test_inject_go_cmd(self, tmp_path):
         (tmp_path / "go.mod").write_text("module example.com/svc\n\ngo 1.22\n", encoding="utf-8")

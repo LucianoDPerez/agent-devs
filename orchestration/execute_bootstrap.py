@@ -46,6 +46,47 @@ _FINDING_LINE_RE = re.compile(
 )
 
 
+# Tareas "bulk": modificar N archivos (ej. Task 8 spec-kitti: 14 templates de
+# commands). El budget default de EXECUTE está calibrado para diagnóstico de
+# 1-5 archivos; una tarea que toca N archivos necesita ~N lecturas + ~2N edits
+# + verify. Detectar el N para que session.py escale los budgets.
+_BULK_COUNT_RE = re.compile(
+    r"\b(?:los|todos(?: los)?)\s+(\d+)\s+(?:archivos?|templates?|ficheros?)\b"
+    r"|\b(\d+)\s+(?:archivos?|templates?)\s+(?:en|de)\b",
+    re.IGNORECASE,
+)
+# "Lista completa de commands: a, b, c, ..." / "Commands:" — contar ítems
+# separados por coma (≥6 implica bulk).
+_BULK_LIST_RE = re.compile(
+    r"(?:lista\s+(?:completa|de\s+commands)|commands?\s*:)\s*([^\n]{10,400})",
+    re.IGNORECASE,
+)
+
+
+def detect_bulk_file_count(task_text: str) -> int:
+    """Estima cuántos archivos toca la tarea (0 si no es bulk).
+
+    Fuentes: "los N archivos" / "N templates" y listas separadas por coma con
+    ≥6 ítems tipo file/command (ej. "Lista completa de commands: implement,
+    clarify, tasks, ..."). Devuelve el máximo de ambos; ≥6 habilita el perfil
+    bulk en EXECUTE.
+    """
+    n = 0
+    for match in _BULK_COUNT_RE.finditer(task_text):
+        val = int(match.group(1) or match.group(2) or 0)
+        if val > n:
+            n = val
+    for match in _BULK_LIST_RE.finditer(task_text):
+        items = [
+            t.strip()
+            for t in re.split(r"[,;\n]", match.group(1))
+            if re.fullmatch(r"[a-z0-9][a-z0-9._-]*", t.strip(), re.IGNORECASE)
+        ]
+        if len(items) >= 6 and len(items) > n:
+            n = len(items)
+    return n
+
+
 def extract_requested_task_numbers(user_input: str) -> list[int]:
     """Números de tarea que el usuario pidió explícitamente (orden de aparición)."""
     seen: set[int] = set()
@@ -363,6 +404,159 @@ _HINT_PROFILES: dict[str, dict[str, tuple[str, ...]]] = {
 }
 
 
+# Directorios de ASSETS dentro de los dirs del stack (bin/templates/assets).
+# Tareas tipo "copiar el binario del package" necesitan saber QUÉ archivos hay
+# en bin/ SIN gastar exploraciones. E2E real: el modelo hackeaba run_npm_script
+# con `ls` porque EXECUTOR_TOOLS no tiene list_files y el preload no listaba bin/.
+_ASSET_DIR_NAMES: tuple[str, ...] = ("bin", "assets", "templates", "fixtures", "scripts")
+
+# Tokens de path relativos con al menos un "/" (dirs o archivos sin extensión
+# obligatoria) para detectar recursos citados en la tarea que NO existen en el repo.
+# E2E real spec-kitti T7: el 35B stall-eó 90s porque no podía confirmar
+# src/spec_kitti_cli/bin/ y el AC solo exigía un branch defensivo.
+_MISSING_PATH_RE = re.compile(
+    r"(?:^|[\s`\"'(=])((?:[\w.@+-]+/)+[\w.@+-]+/?)(?:$|[\s`\"'),.:;=])"
+)
+
+# Segmentos iniciales que nunca son recursos del repo (ruido de textos).
+_NOISE_PATH_FIRST: frozenset[str] = frozenset({
+    "node_modules", "venv", ".venv", ".git", "__pycache__",
+    "dist", "build", "target", "out",
+})
+
+
+def detect_missing_resources(user_input: str, repo_path: str | None) -> str:
+    """Aviso si la tarea cita paths relativos que NO existen en el repo.
+
+    El modelo local se traba cuando el AC referencia un recurso ausente (ej.
+    "los binarios van en src/spec_kitti_cli/bin/") y no puede confirmarlo:
+    no sabe si debe generarlo, copiarlo de otro lado, o implementar el branch
+    defensivo. Este aviso le da la regla de decisión sin gastar exploraciones.
+    """
+    if not repo_path:
+        return ""
+    root = Path(repo_path)
+    if not root.is_dir():
+        return ""
+
+    missing: list[str] = []
+    seen: set[str] = set()
+    for match in _MISSING_PATH_RE.finditer(user_input):
+        token = match.group(1).rstrip("/")
+        if not token or "/" not in token or token.startswith("/"):
+            continue
+        if token.split("/", 1)[0] in _NOISE_PATH_FIRST:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        if (root / token).exists():
+            continue
+        missing.append(token)
+        if len(missing) >= 4:
+            break
+
+    if not missing:
+        return ""
+
+    listed = "\n".join(f"- {t}" for t in missing)
+    return (
+        "\n\n⚠️  RECURSOS CITADOS QUE NO EXISTEN EN EL REPO (verificá antes de asumir):\n"
+        f"{listed}\n\n"
+        "Regla de decisión: si el recurso es INPUT esperado por el AC, implementá el "
+        "manejo de su ausencia (p. ej. 'si no hay binario, no rompe el init' → warning "
+        "y seguir). Si es OUTPUT de la tarea, crealo. NO inventes paths intermedios ni "
+        "asumas estructura que no verificaste. NO generes ni commitees artifacts "
+        "binarios con credenciales embebidas: el repo puede tenerlos gitignored a "
+        "propósito (SECURITY)."
+    )
+
+
+def _collect_asset_dirs(root: Path, stack_dirs: list[str], limit: int = 2) -> list[Path]:
+    """Directorios de assets (bin/assets/templates/...) dentro de los dirs del stack.
+
+    Cubre el caso directo (`src/bin`) y un nivel más abajo (`src/<pkg>/bin`).
+    Solo devuelve dirs con al menos un archivo, ordenados y acotados.
+    """
+    found: list[Path] = []
+    seen: set[Path] = set()
+    candidates: list[Path] = []
+
+    for rel in stack_dirs:
+        base = root / rel
+        if not base.is_dir():
+            continue
+        for name in _ASSET_DIR_NAMES:
+            p = base / name
+            if p.is_dir():
+                candidates.append(p)
+        try:
+            for sub in base.iterdir():
+                if not sub.is_dir() or _is_excluded(sub):
+                    continue
+                for name in _ASSET_DIR_NAMES:
+                    p = sub / name
+                    if p.is_dir():
+                        candidates.append(p)
+        except OSError:
+            continue
+
+    for p in sorted(candidates):
+        try:
+            key = p.resolve()
+        except OSError:
+            key = p
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            if any(f.is_file() for f in p.iterdir()):
+                found.append(p)
+        except OSError:
+            continue
+        if len(found) >= limit:
+            break
+    return found
+
+
+def _nested_asset_listing(d: Path, max_entries: int = 80) -> list[str]:
+    """Listado de un asset dir incluyendo UN nivel más dentro de sus subdirs.
+
+    Caso real Task 8 spec-kitti: el modelo necesitaba los 14 filenames de
+    templates/commands/*.md pero el listing plano de `templates/` solo mostraba
+    el nombre del subdir `commands`. Bajar un nivel le da los nombres exactos
+    para editar sin `list_files` (que no existe en EXECUTE).
+    """
+    names: list[str] = []
+    try:
+        entries = sorted(d.iterdir(), key=lambda p: (p.is_file(), p.name))
+    except OSError:
+        return names
+    for p in entries:
+        if _is_excluded(p):
+            continue
+        if p.is_file():
+            names.append(p.name)
+            continue
+        if not p.is_dir():
+            continue
+        names.append(p.name + "/")
+        try:
+            sub_files = sorted(
+                q.name for q in p.iterdir()
+                if q.is_file() and not _is_excluded(q)
+            )
+        except OSError:
+            sub_files = []
+        for sf in sub_files[:20]:
+            names.append(f"{p.name}/{sf}")
+        if len(names) >= max_entries:
+            names = names[:max_entries]
+            names.append("… (truncated)")
+            break
+    return names
+
+
 def detect_repo_stacks(root: Path) -> list[str]:
     """Detecta stacks presentes por marcadores de raíz (orden estable)."""
     found: list[str] = []
@@ -582,6 +776,15 @@ def inject_repo_hints(repo_path: str | None, *, max_chars: int = 8_000) -> str:
         _take(f"listing {rel}", "\n".join(names))
         listed += 1
 
+    # Assets (bin/templates/assets) dentro de los dirs del stack: el modelo
+    # necesita saber QUÉ archivos hay disponibles para copiar (ej. binarios
+    # pre-compilados) sin gastar exploraciones ni leer binarios completos.
+    for d in _collect_asset_dirs(root, list_dirs):
+        if budget <= 0:
+            break
+        rel = d.relative_to(root)
+        _take(f"listing assets {rel}", "\n".join(_nested_asset_listing(d)))
+
     # Repo map estilo aider: firmas de funciones/clases de los dirs clave.
     # Le da al modelo el "dónde está cada cosa" sin gastar exploraciones.
     if budget > 500:
@@ -728,12 +931,15 @@ def _build_preload_parts(
     parts = [user_input, ""]
     budget = EXECUTE_PRELOAD_MAX_CHARS
     all_checklist: list[str] = []
+    task_text = user_input
 
     for p in cited:
         try:
             raw = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+
+        task_text += "\n" + raw
 
         if p.suffix.lower() == ".md" and task_nums:
             raw = filter_task_sections(raw, task_nums)
@@ -769,6 +975,10 @@ def _build_preload_parts(
     if mode == "execute" and checklist:
         stacks = detect_repo_stacks(Path(repo_path)) if repo_path else []
         parts.append(suggest_minimal_files(checklist, stacks))
+
+    missing_notice = detect_missing_resources(task_text, repo_path)
+    if missing_notice:
+        parts.append(missing_notice)
 
     if mode == "review":
         scope_rule = ""

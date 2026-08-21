@@ -192,6 +192,35 @@ def test_reads_limited_after_explore(tmp_path):
     assert "Demasiados read_file" in stop
 
 
+def test_reads_same_path_with_different_ranges_blocked(tmp_path):
+    """Leer el MISMO archivo con rangos DECRECIENTES (esquiva el dedupe por
+    args) debe cortarse: es un loop que quema el recursion limit (E2E real:
+    __init__.py leído 7+ veces en 1450-1550 → 1450-1530 → 1450-1510…)."""
+    f = tmp_path / "big.py"
+    f.write_text("\n".join(f"line_{i}" for i in range(1000)), encoding="utf-8")
+    dedupe = ToolCallDedupe(max_repeats=20)
+    budget = ExploreBudget(
+        max_calls=0,
+        max_tools_before_write=50,
+        max_reads_per_path=2,
+    )
+    tools = wrap_tools_with_dedupe([read_file], dedupe, budget)
+    by_name = {t.name: t for t in tools}
+    assert "line_1" in by_name["read_file"].invoke(
+        {"path": str(f), "start_line": 1, "end_line": 50}
+    )
+    assert "line_60" in by_name["read_file"].invoke(
+        {"path": str(f), "start_line": 60, "end_line": 100}
+    )
+    # 3ra lectura del MISMO path (con rango distinto) → cortado como loop
+    import pytest
+    from orchestration.tool_dedupe import ToolBudgetExceeded
+    with pytest.raises(ToolBudgetExceeded):
+        by_name["read_file"].invoke(
+            {"path": str(f), "start_line": 100, "end_line": 150}
+        )
+
+
 def test_write_resets_pressure(tmp_path):
     """After write_file, _wrote=True so force-write check is satisfied."""
     f = tmp_path / "a.ts"
@@ -264,3 +293,116 @@ def test_command_prefix_review_only():
     prefix = _extract_command_prefix(msg)
     assert "review" in prefix
     assert classify_intent(None, msg) == Intent.REVIEW
+
+
+def test_adaptive_read_limit_for_big_files(tmp_path):
+    """Archivos > MAX_FILE_READ_BYTES: leer por rangos es LEGÍTIMO y no debe
+    cortarse como loop (E2E real: __init__.py de 60KB leído en 6 rangos →
+    ToolBudgetExceeded → retry sin lecturas → alucinación)."""
+    from orchestration.tool_dedupe import VerifyRequired
+
+    f = tmp_path / "big.py"
+    f.write_text("\n".join(f"line_{i}" for i in range(12000)), encoding="utf-8")
+    assert f.stat().st_size > 50_000
+
+    dedupe = ToolCallDedupe(max_repeats=20)
+    budget = ExploreBudget(
+        max_calls=0,
+        max_reads_after_explore=20,
+        max_tools_before_write=50,
+        max_reads_per_path=5,
+    )
+    tools = wrap_tools_with_dedupe([read_file], dedupe, budget)
+    by_name = {t.name: t for t in tools}
+    # 8 lecturas por rangos del MISMO path: permitidas por el límite adaptativo
+    for i in range(8):
+        r = by_name["read_file"].invoke(
+            {"path": str(f), "start_line": i * 400 + 1, "end_line": i * 400 + 400}
+        )
+        assert f"line_{i * 400 + 1}" in r
+
+
+def test_small_files_still_capped_by_reads_per_path(tmp_path):
+    """El límite adaptativo NO relaja archivos chicos: leer el mismo path con
+    rangos distintos sigue cortándose como loop."""
+    from orchestration.tool_dedupe import ToolBudgetExceeded as TBE
+
+    f = tmp_path / "small.py"
+    f.write_text("\n".join(f"line_{i}" for i in range(200)), encoding="utf-8")
+    assert f.stat().st_size <= 50_000
+
+    dedupe = ToolCallDedupe(max_repeats=20)
+    budget = ExploreBudget(max_calls=0, max_tools_before_write=50, max_reads_per_path=2)
+    tools = wrap_tools_with_dedupe([read_file], dedupe, budget)
+    by_name = {t.name: t for t in tools}
+    by_name["read_file"].invoke({"path": str(f), "start_line": 1, "end_line": 50})
+    by_name["read_file"].invoke({"path": str(f), "start_line": 60, "end_line": 100})
+    with pytest.raises(TBE):
+        by_name["read_file"].invoke({"path": str(f), "start_line": 100, "end_line": 150})
+
+
+def test_verify_resets_read_counter_per_path(tmp_path):
+    """Un verify (run_lint/tests/build) en el medio resetea el contador de
+    lecturas por path: lecturas legítimas ESPACIADAS para arreglar el propio
+    código no deben acumularse hasta el retry write-only (E2E real spec-kitti
+    T7: 9 reads de __init__.py + 6 verifies → TBE → fix cortado a mitad)."""
+    from orchestration.tool_dedupe import ToolBudgetExceeded as TBE
+    from tools.verify import run_lint
+
+    f = tmp_path / "app.py"
+    f.write_text("\n".join(f"line_{i}" for i in range(200)), encoding="utf-8")
+
+    dedupe = ToolCallDedupe(max_repeats=20)
+    budget = ExploreBudget(max_calls=0, max_tools_before_write=50, max_reads_per_path=2)
+    tools = wrap_tools_with_dedupe([read_file, run_lint], dedupe, budget)
+    by_name = {t.name: t for t in tools}
+
+    # 2 lecturas permitidas (tope 2)...
+    by_name["read_file"].invoke({"path": str(f), "start_line": 1, "end_line": 50})
+    by_name["read_file"].invoke({"path": str(f), "start_line": 60, "end_line": 100})
+    with pytest.raises(TBE):
+        by_name["read_file"].invoke({"path": str(f), "start_line": 100, "end_line": 150})
+
+    # ...verify resetea el contador → vuelve a permitir 2 lecturas
+    by_name["run_lint"].invoke({"path": str(tmp_path)})
+    by_name["read_file"].invoke({"path": str(f), "start_line": 1, "end_line": 50})
+    by_name["read_file"].invoke({"path": str(f), "start_line": 60, "end_line": 100})
+    with pytest.raises(TBE):
+        by_name["read_file"].invoke({"path": str(f), "start_line": 100, "end_line": 150})
+
+
+def test_failed_writes_do_not_count_toward_verify_cap(tmp_path):
+    """Intentos de escritura FALLIDOS (old_str no encontrado, write bloqueado)
+    NO cuentan en _writes_since_verify: no deben disparar VerifyRequired falsos
+    (E2E real: 6-7 edits rechazados → compuerta de verify sin una línea escrita)."""
+    from orchestration.tool_dedupe import VerifyRequired
+    from tools.filesystem import edit_file, delete_file
+
+    files = []
+    for i in range(6):
+        p = tmp_path / f"f{i}.py"
+        p.write_text("def x():\n    return 1\n", encoding="utf-8")
+        files.append(p)
+
+    dedupe = ToolCallDedupe(max_repeats=20)
+    budget = ExploreBudget(
+        max_calls=5,
+        max_tools_before_write=50,
+        max_writes_before_verify=3,
+    )
+    tools = wrap_tools_with_dedupe([edit_file, write_file, delete_file], dedupe, budget)
+    by_name = {t.name: t for t in tools}
+    # 6 edits FALLIDOS (old_str inventado, archivos distintos) → nunca VerifyRequired
+    for i, p in enumerate(files):
+        r = by_name["edit_file"].invoke(
+            {"path": str(p), "old_str": f"no existe esto {i}", "new_str": "x"}
+        )
+        assert "not found" in r
+    assert budget._writes_since_verify == 0
+
+    # 3 writes EFECTIVOS (archivos nuevos) pasan; el 4to dispara VerifyRequired
+    for i in range(3):
+        r = by_name["write_file"].invoke({"path": str(tmp_path / f"n{i}.py"), "content": "x"})
+        assert r.startswith("✅")
+    with pytest.raises(VerifyRequired):
+        by_name["write_file"].invoke({"path": str(tmp_path / "n3.py"), "content": "x"})

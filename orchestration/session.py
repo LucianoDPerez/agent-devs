@@ -11,6 +11,13 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from cache import load_recent_turns, save_turn
+from cache import (
+    bulk_progress,
+    ensure_bulk_plan,
+    fail_or_keep_batch,
+    mark_batch,
+    next_pending_batch,
+)
 from config import (
     AGENT_RECURSION_LIMIT,
     ANALYZE_EXPLORE_BUDGET,
@@ -24,12 +31,17 @@ from config import (
     EXECUTE_RECURSION_LIMIT,
     EXECUTE_MAX_REASONING_SECONDS,
     EXECUTE_REQUIRE_WRITE,
+    EXECUTE_BULK_MIN_FILES,
     JUDGE_BASE_URL,
     PLAN_EXPLORE_BUDGET,
     PLAN_MAX_READS_AFTER_EXPLORE,
     REVIEW_EXPLORE_BUDGET,
     REVIEW_MAX_READS_AFTER_EXPLORE,
     REVIEW_MAX_TOOLS_BEFORE_WRITE,
+    EXECUTE_BULK_MAX_ATTEMPTS,
+    BULK_BATCH_SIZE,
+    BULK_MAX_BATCH_ATTEMPTS,
+    BULK_SESSION_ROTATION_CTX,
     JUDGE_ENABLED,
     JUDGE_MAX_TOKENS,
     JUDGE_MODEL_NAME,
@@ -45,13 +57,21 @@ from config import (
 from core.intents import Intent
 from core.roles import Role, role_for_intent
 from display.console import console, print_role_switch, print_turn_summary, stream_agent_turn, ReasoningOnlyResponse, ToolCallLimitExceeded
-from tools import GATE_RETRY_TOOLS, WRITE_RETRY_TOOLS, WRITE_ONLY_TOOLS
+from tools import BUDGET_RETRY_TOOLS, GATE_RETRY_TOOLS
 from display.esc_watcher import EscWatcher
 from llm_wrapper import LocalLLM, get_usage, reset_turn_usage
 from orchestration.agent_builder import build_agent, init_mcp
+from orchestration.bulk_planner import (
+    bulk_task_hash,
+    build_batch_scope,
+    canonical_task_text,
+    detect_bulk_targets,
+    split_into_batches,
+)
 from orchestration.execute_bootstrap import (
     _collect_cited_paths,
     build_paste_correction_suffix,
+    detect_bulk_file_count,
     extract_requested_task_numbers,
     inject_repo_hints,
     preload_cited_files,
@@ -76,26 +96,50 @@ _ROLE_LABELS = {
     Role.CHAT: "💬 Charla",
 }
 
-# Context window: llama-server -c 32000. 90% = 28800 tokens.
-_CONTEXT_LIMIT = 28800
+# Context window: llama-server -c 62000 (configurado por el usuario).
+# 90% = 55800 tokens.
+_CONTEXT_LIMIT = 55800
 _SUMMARY_THRESHOLD = 0.90
 _WARNING_THRESHOLD = 0.85
 
-# Mensaje para el retry EXECUTE: read_file DISPONIBLE pero LIMITADO (el modelo
-# 4B se cuelga razonando sin emitir tools si no puede completar su diagnóstico).
-# El write pressure (max_tools_before_write) corta las lecturas que sobren.
+# Mensaje para el retry EXECUTE: el agente se reconstruye con BUDGET_RETRY_TOOLS
+# (read_file ACOTADO + edit_file + write_file; sin delete_file, sin verify, sin
+# búsqueda). El mensaje DEBE ser coherente con esas tools — antes pedía
+# search_code/run_lint (inexistentes en el retry) y el modelo entraba en
+# espiral intentando acciones imposibles.
 _EXECUTE_FORCE_WRITE_MSG = (
     "\n\n⛔ RETRY: ya leíste/analizaste bastante. El turno anterior terminó sin "
     "escribir nada y eso NO es válido para este rol.\n"
     "PROCEDÉ ASÍ:\n"
-    "1) Si te falta información, leé MÁXIMO 2 archivos más con read_file "
-    "(solo los que vas a modificar).\n"
-    "2) LUEGO aplicá el fix con edit_file (copiá el bloque LITERAL + 2-5 "
-    "líneas de contexto; el matcher es tolerante a espacios).\n"
-    "3) write_file SOLO para archivos NUEVOS.\n"
-    "4) Verificá con run_lint, run_tests, run_build.\n"
-    "NO leas más de 2 archivos. NO respondas con texto: ejecutá tools AHORA."
+    "1) Tenés read_file (LIMITADO: el sistema corta si abusás), edit_file y "
+    "write_file. delete_file NO está disponible en este retry.\n"
+    "2) El CONTENIDO EXACTO de lo ya leído está inyectado abajo (ancla): "
+    "copiá el old_str LITERAL de ahí. Si te falta un bloque, leé el archivo "
+    "UNA vez con read_file.\n"
+    "3) write_file SOLO para archivos NUEVOS (está BLOQUEADO para archivos "
+    "existentes).\n"
+    "4) Si un bloque es muy grande, partí el cambio en bloques MÁS CHICOS "
+    "(≤20 líneas).\n"
+    "NO respondas con texto: ejecutá write_file/edit_file AHORA."
 )
+
+
+def _bulk_budget(bulk: int) -> dict:
+    """Budgets escalados para tareas que tocan N archivos (ej. 14 templates).
+
+    El budget default de EXECUTE está calibrado para diagnóstico de 1-5
+    archivos. Una tarea bulk necesita ~N lecturas + ~2N edits + verify:
+    - reads: N + 4 (margen), tope 24
+    - tools-before-write: 2N + 8 (no forzar write antes de leer los N archivos)
+    - writes-before-verify: N (verificar al cerrar una pasada completa, no cada 6)
+    - tool calls por turno: 4N + 8, tope 55 (14+28+verify ≈ 46)
+    """
+    return {
+        "max_reads_after_explore": max(EXECUTE_MAX_READS_AFTER_EXPLORE, min(bulk + 4, 24)),
+        "max_tools_before_write": max(EXECUTE_MAX_TOOLS_BEFORE_WRITE, 2 * bulk + 8),
+        "max_writes_before_verify": max(EXECUTE_MAX_WRITES_BEFORE_VERIFY, bulk),
+        "tool_calls_per_turn": max(MAX_TOOL_CALLS_PER_TURN, min(4 * bulk + 8, 55)),
+    }
 
 def _load_judge_prompt() -> str:
     """Carga el prompt del judge."""
@@ -350,11 +394,19 @@ def _git_branch(repo_path: str) -> str:
 
 
 def _estimate_tokens(messages: list) -> int:
-    """Estimación rápida: ~4 chars por token."""
+    """Estimación del tamaño del contexto en tokens.
+
+    OJO: el código/JSON tokeniza denso (~1.3-1.6 chars/token con Qwen), NO a
+    4 chars/token. El factor antiguo (//4) SUBESTIMABA ~2.5-3x: E2E real, la
+    request llegó a 63,022 tokens reales (superando n_ctx=62208 del servidor)
+    cuando la estimación no superaba el umbral de summary → falló con error 400
+    del LLM. Con //2 la estimación es conservadora y el summary (90% del límite)
+    dispara ANTES de llenar el contexto físico, evitando el 400.
+    """
     total = 0
     for m in messages:
         content = m.content if hasattr(m, "content") else str(m)
-        total += len(str(content)) // 4
+        total += len(str(content)) // 2
     return total
 
 
@@ -453,6 +505,15 @@ class Session:
         # write-only lo inyecta como anclaje para reescribir sin leer.
         self._read_cache: dict[str, str] = {}
         self._no_explore_retry = False
+        # Tarea bulk detectada (≥ EXECUTE_BULK_MIN_FILES archivos): escala
+        # budgets de EXECUTE y permite lecturas en el retry (0) para releer
+        # los archivos que faltan.
+        self._bulk_scope: int = 0
+        # Cola bulk persistida (cache.db): hash de la tarea + seq del batch
+        # que ESTE turno está ejecutando. Lo usa el auto-chaining al cerrar
+        # el turno exitoso y el marcado de fallos.
+        self._bulk_task_hash: str = ""
+        self._bulk_current_seq: int = -1
 
     def start(self) -> str:
         loop = asyncio.new_event_loop()
@@ -551,13 +612,18 @@ class Session:
         )
 
     def _rebuild_agent_write_only(self):
-        """Reconstruye el agente EXECUTE para el retry: WRITE_RETRY_TOOLS.
+        """Reconstruye el agente EXECUTE para el retry: BUDGET_RETRY_TOOLS.
 
-        read_file + edit_file + write_file + delete_file SOLO (sin verify):
-        el modelo usaba run_lint/run_tests/run_build como "acción gratis" para
-        esquivar la write pressure (corría verify ANTES de escribir y nunca
-        escribía — E2E real). La compuerta de verificación (sistema) inyecta
-        verify después de escribir.
+        read_file (ACOTADO por el budget) + edit_file + write_file. Sin
+        delete_file (borrar+recrear bypassa el guard anti-sobrescritura — el
+        35B borró __init__.py de 1851 líneas y escribió un stub), sin
+        search_code (nada que explorar) y sin verify tools (el modelo las
+        usaba como "acción gratis" para esquivar la write pressure). El
+        contenido de los archivos ya leídos va inyectado en el mensaje
+        (read_cache → anchor). La compuerta de verificación (sistema) inyecta
+        verify después. El escalamiento a write_file completo queda
+        DESHABILITADO en este retry (allow_overwrite_escalation=False):
+        sobrescribir de memoria destruye aunque haya lecturas acotadas.
         """
         self.current_role = Role.EXECUTE
         loop = asyncio.new_event_loop()
@@ -568,10 +634,11 @@ class Session:
                     self.llm, Role.EXECUTE, self.repo_path,
                     self.cached_analysis, self._tools, self._dedupe,
                     self._explore_budget, self._analyze_budget,
-                    tools_override=WRITE_RETRY_TOOLS,
+                    tools_override=BUDGET_RETRY_TOOLS,
                     force_tool_calls=True,
                     read_cache=self._read_cache,
                     tool_call_logger=self._called_tools,
+                    allow_overwrite_escalation=False,
                 )
             )
         finally:
@@ -660,21 +727,30 @@ class Session:
 
     def _retry_with_read_anchor(self) -> str:
         """Construye el mensaje de retry: contenido de archivos ya leídos
-        (ancla) + instrucción de leer MÁXIMO 2 archivos más y escribir YA.
+        (ancla) + instrucción de escribir YA con el old_str literal del ancla.
 
-        El retry usa GATE_RETRY_TOOLS (read_file + edit_file): el modelo 4B se
-        cuelga razonando sin emitir tools si no tiene read_file (no converge en
-        qué escribir). El ancla minimiza las lecturas; el write pressure corta
-        las que sobren."""
+        El retry usa BUDGET_RETRY_TOOLS (read_file ACOTADO + edit_file +
+        write_file; sin delete_file): el ancla es la fuente principal de
+        contenido, por eso va priorizada por tamaño (los helpers chicos
+        primero; los monolitos no tapan al archivo del fix). read_file del
+        retry permite releer bloques exactos si el ancla quedó corto."""
         anchor = ""
         already_committed = self._repo_has_recent_commit()
         if self._read_cache:
             blocks = []
             total = 0
-            for path, content in list(self._read_cache.items()):
-                if total >= 12000:
+            # Priorizar los archivos MÁS PEQUEÑOS: suelen ser los helpers de
+            # implementación (donde vive el fix). Los monolitos (p. ej.
+            # __init__.py con 2000+ líneas) consumían todo el presupuesto del
+            # ancla y dejaban fuera al archivo que el modelo necesita editar.
+            entries = sorted(
+                self._read_cache.items(),
+                key=lambda kv: (len(kv[1]), kv[0]),
+            )
+            for path, content in entries:
+                if total >= 18000:
                     break
-                take = min(len(content), 6000)
+                take = min(len(content), 8000)
                 if take <= 30:
                     continue
                 blocks.append(
@@ -693,11 +769,38 @@ class Session:
                 "\n\n⛔ RETRY: el intento anterior YA escribió y commiteó código "
                 "(se detectó un commit reciente). NO reescribas los mismos archivos "
                 "ni dupliques commits. "
-                "Corré run_lint, run_tests y run_build para confirmar que todo "
-                "está verde, y si ya lo están, terminá con un resumen breve. "
+                "Si todo quedó aplicado, terminá con un resumen breve; "
+                "la verificación la inyecta el sistema. "
                 "NO hagas write_file de archivos que ya modificaste." + anchor
             )
         return _EXECUTE_FORCE_WRITE_MSG + anchor
+
+    def _enter_budget_retry(self, retry_msg: str) -> list:
+        """Prepara el retry de EXECUTE tras un turno que no convergió (budget
+        agotado, recursion limit o reasoning-only): acota las lecturas, resetea
+        dedupe/budget, reconstruye el agente con BUDGET_RETRY_TOOLS
+        (read_file acotado + edit_file + write_file; sin delete_file) y
+        devuelve messages_for_agent para el siguiente intento.
+
+        _called_tools.clear(): la compuerta final debe exigir verify en ESTE
+        intento — no dejar pasar verify stale del intento anterior."""
+        self._messages = self._messages[-3:] if len(self._messages) > 3 else self._messages
+        self._messages.append(HumanMessage(self._retry_with_read_anchor()))
+        messages_for_agent = list(self._messages)
+        self._called_tools.clear()
+        self._dedupe.reset()
+        self._dedupe.max_repeats = 2
+        self._explore_budget.max_calls = 0
+        self._explore_budget.max_reads_after_explore = (
+            _bulk_budget(self._bulk_scope)["max_reads_after_explore"]
+            if self._bulk_scope >= EXECUTE_BULK_MIN_FILES
+            else EXECUTE_MAX_READS_AFTER_EXPLORE
+        )
+        self._explore_budget.reset()
+        self._explore_budget.limit_reads_now()
+        self._rebuild_agent_write_only()
+        console.print(f"\n[dim]↻ {retry_msg}[/dim]")
+        return messages_for_agent
 
     def _system_trace_for(self, user_msg: str) -> str:
         """El SISTEMA (no el 4B) resuelve el término del usuario con
@@ -956,19 +1059,41 @@ class Session:
             return
 
         try:
-            subprocess.run(
-                ["git", "add", "-A"],
-                cwd=self.repo_path, capture_output=True, text=True, timeout=10,
-            )
-            message = _build_commit_message(user_input)
-            result = subprocess.run(
-                ["git", "commit", "-m", message],
-                cwd=self.repo_path, capture_output=True, text=True, timeout=10,
-            )
-            if result.returncode == 0:
-                console.print(f"[green]✅ Commit creado: {message}[/green]")
-            else:
-                console.print(f"[dim]Commit falló: {(result.stderr or '').strip()[:200]}[/dim]")
+                # git add -u: SOLO cambios en archivos TRACKED. Los untracked
+                # quedan fuera A PROPÓSITO: E2E real Task 7 — 'git add -A'
+                # stageó rules_catalog/.cursor/mcp.json con el CLIENT_ID de
+                # New Relic (credencial) y casi se commitea. Sobre archivos
+                # nuevos decide siempre el usuario, explícitamente.
+                subprocess.run(
+                    ["git", "add", "-u"],
+                    cwd=self.repo_path, capture_output=True, text=True, timeout=10,
+                )
+                message = _build_commit_message(user_input)
+                result = subprocess.run(
+                    ["git", "commit", "-m", message],
+                    cwd=self.repo_path, capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode == 0:
+                    console.print(f"[green]✅ Commit creado: {message}[/green]")
+                    try:
+                        left = subprocess.run(
+                            ["git", "status", "--porcelain"],
+                            cwd=self.repo_path, capture_output=True, text=True, timeout=5,
+                        ).stdout
+                        untracked = [
+                            ln[3:] for ln in left.splitlines() if ln.startswith("??")
+                        ]
+                        if untracked:
+                            console.print(
+                                "[yellow]⚠️  Quedaron SIN commitear (untracked — "
+                                "revisá antes de agregarlos a mano):[/yellow]"
+                            )
+                            for u in untracked:
+                                console.print(f"   · {u}")
+                    except Exception:
+                        pass
+                else:
+                    console.print(f"[dim]Commit falló: {(result.stderr or '').strip()[:200]}[/dim]")
         except Exception as e:
             console.print(f"[dim]Commit falló: {e}[/dim]")
 
@@ -1098,8 +1223,8 @@ class Session:
                     # escribía de memoria — el guard lo bloqueó, pero alucinó
                     # clases CSS inexistentes (ConsultaTable sin estilos).
                     self._explore_budget.max_calls = 3
-                    self._explore_budget.max_reads_after_explore = 5
-                    self._explore_budget.max_tools_before_write = 8
+                    self._explore_budget.max_reads_after_explore = 8
+                    self._explore_budget.max_tools_before_write = 12
                     self._dedupe.max_repeats = 1
                 extra = " · explore=acotado (hints)" if hints_on else ""
                 console.print(
@@ -1146,6 +1271,48 @@ class Session:
                     f"[dim]📎 Checklist AC pre-cargado para review{scope}.[/dim]\n"
                 )
 
+        # Tareas bulk: escalar budgets de EXECUTE + dividir en batches con
+        # cola persistida. El budget default corta una tarea de 14 templates a
+        # mitad de las lecturas (max_tools_before_write=12 < 14 reads) → loop
+        # de retries sin escribir (E2E real Task 8 spec-kitti). DEBE correr
+        # ANTES del append: inyecta el alcance del batch en agent_input.
+        if new_role == Role.EXECUTE:
+            canonical = canonical_task_text(user_input)
+            bulk = detect_bulk_file_count(canonical)
+            if bulk >= EXECUTE_BULK_MIN_FILES:
+                self._bulk_scope = bulk
+                bb = _bulk_budget(bulk)
+                self._explore_budget.max_reads_after_explore = bb["max_reads_after_explore"]
+                self._explore_budget.max_tools_before_write = bb["max_tools_before_write"]
+                self._explore_budget.max_writes_before_verify = bb["max_writes_before_verify"]
+                targets = detect_bulk_targets(canonical, self.repo_path)
+                if len(targets) >= EXECUTE_BULK_MIN_FILES:
+                    th = bulk_task_hash(canonical, self.repo_path)
+                    created = ensure_bulk_plan(th, split_into_batches(targets))
+                    progress = bulk_progress(th)
+                    cur = next_pending_batch(th)
+                    total_b = progress["total"]
+                    if cur:
+                        self._bulk_task_hash = th
+                        self._bulk_current_seq = cur["seq"]
+                        mark_batch(th, cur["seq"], "in_progress")
+                        agent_input += build_batch_scope(
+                            cur["seq"], total_b, cur["files"]
+                        )
+                        console.print(
+                            f"[dim]📦 Tarea bulk (~{bulk} archivos) dividida en "
+                            f"{total_b} batches — batch {cur['seq'] + 1}: "
+                            f"{len(cur['files'])} archivo(s). Progreso: "
+                            f"{progress['done']} done · {progress['failed']} failed · "
+                            f"{progress['pending']} pendientes.[/dim]\n"
+                        )
+                    elif created or progress["pending"] == 0:
+                        console.print(
+                            f"[dim]📦 Tarea bulk ya COMPLETA según la cola "
+                            f"({progress['done']}/{total_b} batches done). Si "
+                            f"querés re-ejecutarla, cambiá el texto del prompt.[/dim]\n"
+                        )
+
         self._messages.append(HumanMessage(agent_input))
 
         reset_turn_usage()
@@ -1153,6 +1320,8 @@ class Session:
         recursion = (
             EXECUTE_RECURSION_LIMIT if new_role == Role.EXECUTE else AGENT_RECURSION_LIMIT
         )
+        if self._bulk_scope >= EXECUTE_BULK_MIN_FILES:
+            recursion = max(recursion, 2 * _bulk_budget(self._bulk_scope)["tool_calls_per_turn"] + 2)
         config = {
             "configurable": {"thread_id": f"session-{id(self)}"},
             "recursion_limit": recursion,
@@ -1164,11 +1333,14 @@ class Session:
         # 1 intento normal + hasta 2 retries write-only (si el primero tampoco
         # escribe, el 2do con instrucción aún más estricta)
         max_attempts = 1 + (2 if REASONING_RETRY_ENABLED else 0)
+        if new_role == Role.EXECUTE and self._bulk_scope >= EXECUTE_BULK_MIN_FILES:
+            max_attempts = max(max_attempts, EXECUTE_BULK_MAX_ATTEMPTS)
         attempt = 0
         gate_retries = 0
         verify_injections = 0
         interrupted = False
         interrupted_by_esc = False
+        auto_stopped = False
         # Turno terminó en FALLO (loop, recursion, error): los cambios pueden
         # estar incompletos/rotos sin pasar la compuerta de verificación →
         # NO se ofrece commit (E2E: recursion limit + commit de JSX corrupto).
@@ -1183,10 +1355,14 @@ class Session:
             # write-only. Antes solo aplicaba a retries y el 4B "escapaba"
             # respondiendo un análisis sin tocar el repo.
             # REVIEW y ANALYZE/PLAN NUNCA se fuerzan a escribir.
+            # EXCEPCIÓN BULK: en batches ya completos el cierre correcto es
+            # "verifico (lint/tests) + resumen SIN edits" — exigir escritura
+            # empuja al modelo a no-op edits en loop (E2E real Task 8 batch 1).
             require_write = (
                 new_role == Role.EXECUTE
                 and EXECUTE_REQUIRE_WRITE
                 and REASONING_RETRY_ENABLED
+                and not self._bulk_task_hash
             ) or (
                 attempt > 0
                 and REASONING_RETRY_ENABLED
@@ -1213,7 +1389,11 @@ class Session:
                             else MAX_REASONING_SECONDS
                         )
                     ),
-                    max_tool_calls=MAX_TOOL_CALLS_PER_TURN,
+                    max_tool_calls=(
+                        _bulk_budget(self._bulk_scope)["tool_calls_per_turn"]
+                        if new_role == Role.EXECUTE and self._bulk_scope >= EXECUTE_BULK_MIN_FILES
+                        else MAX_TOOL_CALLS_PER_TURN
+                    ),
                     require_write=require_write,
                 )
             )
@@ -1227,6 +1407,21 @@ class Session:
             try:
                 loop.run_until_complete(task)
                 self._last_response = task.result() if not task.cancelled() else ""
+                # BULK sin escrituras: válido SOLO si verificó (lint/tests/
+                # build). "Leí los 5 archivos, ya cumplen, tests verdes" es un
+                # cierre legítimo del batch (E2E Task 8 batch 1 ya-completo).
+                # Sin escritura Y sin verificación = modelo vago → mismo
+                # tratamiento que no-write (retry / fallo al agotar intentos).
+                if (
+                    new_role == Role.EXECUTE
+                    and self._bulk_task_hash
+                    and not (self._called_tools & WRITE_TOOL_NAMES)
+                    and not self._verify_tools_called()
+                ):
+                    raise ReasoningOnlyResponse(
+                        self._last_response or "",
+                        reason="no-write",
+                    )
                 # Compuerta post-escritura (EXECUTE): si el código escrito no
                 # compila y el error apunta a un archivo que tocamos, reintentar
                 # UNA vez inyectando el error exacto. Red de seguridad para LLM
@@ -1329,6 +1524,7 @@ class Session:
                 if new_role != Role.EXECUTE or verify_injections >= VERIFY_GATE_MAX_INJECTIONS:
                     turn_failed = True
                     interrupted = True
+                    auto_stopped = True
                     print(
                         self._closing_message(
                             "\n\n↻ El modelo escribió demasiado sin verificar "
@@ -1353,6 +1549,7 @@ class Session:
                 if attempt + 1 >= max_attempts:
                     turn_failed = True
                     interrupted = True
+                    auto_stopped = True
                     print(
                         self._closing_message(
                             "\n\n↻ Este turno no logró escribir el fix. "
@@ -1373,35 +1570,15 @@ class Session:
                     )
                     messages_for_agent = list(self._messages)
                     continue
-                self._messages = self._messages[-3:] if len(self._messages) > 3 else self._messages
-                self._messages.append(HumanMessage(self._retry_with_read_anchor()))
-                messages_for_agent = list(self._messages)
-                # Reset dedupe + budget para el retry: el modelo necesita margen
-                # para read_file -> edit_file con el old_str correcto.
-                # "Lectura ACOTADA" real: max_calls=1 (una búsqueda por retry)
-                # + tope de lecturas activo DESDE EL INICIO (limit_reads_now).
-                # El estado previo no frenaba nada: _explore_exhausted recién
-                # se activaba tras explorar, y el retry casi nunca exploraba →
-                # reads ilimitados hasta el corte por recursion (iteración
-                # Medicos: 15 tool calls ciegas, 0 verificación).
-                # _called_tools.clear(): la compuerta final debe exigir verify
-                # en ESTE intento — no dejar pasar verify stale del intento 1.
-                self._called_tools.clear()
-                self._dedupe.reset()
-                self._dedupe.max_repeats = 2
-                self._explore_budget.max_calls = 1
-                self._explore_budget.max_reads_after_explore = EXECUTE_MAX_READS_AFTER_EXPLORE
-                self._explore_budget.reset()
-                self._explore_budget.limit_reads_now()
-                self._rebuild_agent_write_only()
-                console.print(
-                    "\n[dim]↻ Presupuesto de exploración agotado. Reintentando "
-                    "con lectura acotada + escritura…[/dim]"
+                messages_for_agent = self._enter_budget_retry(
+                    "Presupuesto de exploración agotado. Reintentando "
+                    "con lectura acotada + escritura…"
                 )
                 continue
             except ReasoningOnlyResponse as e:
                 if attempt + 1 >= max_attempts:
                     turn_failed = True
+                    auto_stopped = True
                     if isinstance(e, ToolCallLimitExceeded):
                         print(
                             f"\n\n⚠️  El modelo hizo {e.total_calls} tool calls (límite {e.limit}) "
@@ -1436,35 +1613,19 @@ class Session:
                     self._retry_analyze_no_explore(new_role, reason)
                     messages_for_agent = list(self._messages)
                     continue
-                self._messages = self._messages[-3:] if len(self._messages) > 3 else self._messages
-                self._messages.append(HumanMessage(self._retry_with_read_anchor()))
-                messages_for_agent = list(self._messages)
-                # Reset dedupe + budget: el intento anterior dejó el contador
-                # alto (total=5) y la primera tool no-productiva del retry
-                # cortaba al instante (bug detectado en E2E).
-                # "Lectura ACOTADA" real + verify limpio (ver retry de budget).
-                self._called_tools.clear()
-                self._dedupe.reset()
-                self._dedupe.max_repeats = 2
-                self._explore_budget.max_calls = 1
-                self._explore_budget.max_reads_after_explore = EXECUTE_MAX_READS_AFTER_EXPLORE
-                self._explore_budget.reset()
-                self._explore_budget.limit_reads_now()
-                self._rebuild_agent_write_only()
                 if isinstance(e, ToolCallLimitExceeded):
-                    console.print(
-                        f"\n[dim]↻ Muchas tool calls seguidas ({e.total_calls}). "
-                        "Reintentando con lectura acotada + escritura…[/dim]"
+                    retry_msg = (
+                        f"Muchas tool calls seguidas ({e.total_calls}). "
+                        "Reintentando con lectura acotada + escritura…"
                     )
                 elif getattr(e, "reason", "") == "no-write":
-                    console.print(
-                        "\n[dim]↻ Reintentando con lectura acotada + escritura…[/dim]"
-                    )
+                    retry_msg = "Reintentando con lectura acotada + escritura…"
                 else:
-                    console.print(
-                        "\n[dim]↻ El modelo no produjo acción. Reintentando con "
-                        "lectura acotada + escritura…[/dim]"
+                    retry_msg = (
+                        f"El modelo gastó {len(e.reasoning_text)} chars razonando. "
+                        "Reintentando con lectura acotada + escritura…"
                     )
+                messages_for_agent = self._enter_budget_retry(retry_msg)
                 continue
             except Exception as e:
                 name = type(e).__name__
@@ -1515,12 +1676,13 @@ class Session:
                     self._messages.append(HumanMessage(
                         "⚠️ Tu último output no fue válido (el parser de tool calls "
                         "lo rechazó). Respondé con UNA tool call VÁLIDA: "
-                        "edit_file/write_file/read_file/search_code, o un texto breve."
+                        "write_file/edit_file/read_file (retry de budget; "
+                        "delete_file NO está disponible)."
                     ))
                     messages_for_agent = list(self._messages)
                     self._called_tools.clear()
                     self._dedupe.reset()
-                    self._explore_budget.max_calls = 1
+                    self._explore_budget.max_calls = 0
                     self._explore_budget.max_reads_after_explore = EXECUTE_MAX_READS_AFTER_EXPLORE
                     self._explore_budget.reset()
                     self._explore_budget.limit_reads_now()
@@ -1530,20 +1692,45 @@ class Session:
                     )
                     continue
                 if "Recursion" in name or "recursion" in err_text.lower():
-                    turn_failed = True
                     lim = (
                         EXECUTE_RECURSION_LIMIT
                         if new_role == Role.EXECUTE
                         else AGENT_RECURSION_LIMIT
                     )
-                    print(
-                        self._closing_message(
-                            f"\n\n↻ El turno se alargó demasiado ({lim} pasos) sin "
-                            "completar. Reintentá con un prompt más específico "
-                            "(archivo o endpoint concreto)."
-                        ),
-                        flush=True,
-                    )
+                    if attempt + 1 >= max_attempts:
+                        turn_failed = True
+                        print(
+                            self._closing_message(
+                                f"\n\n↻ El turno se alargó demasiado ({lim} pasos) sin "
+                                "completar. Reintentá con un prompt más específico "
+                                "(archivo o endpoint concreto)."
+                            ),
+                            flush=True,
+                        )
+                    elif new_role == Role.EXECUTE:
+                        # El modelo suele quedar a 1-2 pasos de terminar (E2E
+                        # real: murió en la tool #15 = run_tests, justo antes
+                        # de ver el resultado). En vez de fallar el turno,
+                        # reintentar con el agente de budget (read acotado +
+                        # edit + write). Los cambios ya aplicados siguen en
+                        # disco; el ancla inyecta el contenido leído.
+                        attempt += 1
+                        messages_for_agent = self._enter_budget_retry(
+                            f"El turno se alargó demasiado ({lim} pasos de "
+                            "langgraph). Reintentando con lectura acotada + "
+                            "escritura…"
+                        )
+                        continue
+                    else:
+                        turn_failed = True
+                        print(
+                            self._closing_message(
+                                f"\n\n↻ El turno se alargó demasiado ({lim} pasos) sin "
+                                "completar. Reintentá con un prompt más específico "
+                                "(archivo o endpoint concreto)."
+                            ),
+                            flush=True,
+                        )
                 else:
                     turn_failed = True
                     print(f"\n\n❌ Error en la iteración: {e}", flush=True)
@@ -1581,21 +1768,126 @@ class Session:
             elapsed,
             interrupted,
             self._session_time,
-            interrupt_source="ESC" if interrupted_by_esc else None,
+            interrupt_source=(
+                "ESC" if interrupted_by_esc
+                else ("auto — límite de intentos" if auto_stopped else None)
+            ),
         )
+
+        # Bulk: contabilidad del batch ANTES del commit-ask (el estado en la
+        # cola decide si este es el último batch → recién ahí se ofrece commit)
+        _bulk_chain: tuple[str, int] | None = None
+        if new_role == Role.EXECUTE and self._bulk_task_hash:
+            th = self._bulk_task_hash
+            seq = self._bulk_current_seq
+            if not interrupted and not turn_failed:
+                mark_batch(th, seq, "done")
+                _bulk_chain = (th, seq)
+            elif turn_failed:
+                status = fail_or_keep_batch(th, seq, BULK_MAX_BATCH_ATTEMPTS)
+                if status == "failed":
+                    console.print(
+                        f"\n[bold red]⛔ Batch {seq + 1} marcado FAILED tras "
+                        f"{BULK_MAX_BATCH_ATTEMPTS} intentos. Revisá esos "
+                        "archivos; la cola sigue en cache.db para reanudar.[/bold red]\n"
+                    )
+                    self._bulk_task_hash = ""
 
         # Commit preguntado: tras un turno EXECUTE EXITOSO, si hay cambios
         # sin commitear y el usuario no interrumpió, ofrecer commitear.
         # Turnos FALLIDOS (loop/recursion/error) pueden dejar el árbol roto
         # sin pasar la compuerta de verificación → NO se ofrece commit
         # (E2E: JSX corrupto commiteado tras recursion limit).
+        # En tareas bulk se pregunta SOLO al cerrar el último batch.
+        _bulk_more_pending = (
+            _bulk_chain is not None
+            and next_pending_batch(_bulk_chain[0]) is not None
+        )
         if new_role == Role.EXECUTE and not interrupted and not turn_failed:
-            self._maybe_ask_commit(user_input)
+            if not _bulk_more_pending:
+                self._maybe_ask_commit(user_input)
         elif new_role == Role.EXECUTE and turn_failed and not interrupted:
-            console.print(
-                "\n[dim]↻ Turno fallido (sin verificación) — no se ofrece "
-                "commit. Revisá los cambios antes de commitearlos.[/dim]"
-            )
+            # Turno fallido: además de no ofrecer commit, verificar si el árbol
+            # quedó con código ROTO (archivo truncado/sintaxis inválida). El
+            # write_file ahora avisa INTEGRIDAD/SINTAXIS, pero si el modelo igual
+            # cerró, esta compuerta detecta y REPORTE el archivo exacto para que
+            # el usuario no commitee código roto a ciegas (E2E real: e2e_verify.sh
+            # truncado sin que nadie lo notara).
+            gate_ok, gate_err = self._post_write_gate()
+            if not gate_ok:
+                console.print(
+                    "\n[bold red]⛔ El turno falló y además el código quedó ROTO.[/bold red]\n"
+                    f"{gate_err}\n"
+                    "[dim]Revisá y corregí el archivo señalado ANTES de commitear.[/dim]\n"
+                )
+            else:
+                console.print(
+                    "\n[dim]↻ Turno fallido (sin verificación) — no se ofrece "
+                    "commit. Revisá los cambios antes de commitearlos.[/dim]"
+                )
+            # CREDENCIALES / ENTORNO EXTERNO: si el turno falló (probablemente
+            # porque la tarea requiere una credencial/entorno que el agente no
+            # tiene), invitar al usuario a proveerla o pedir los pasos manuales.
+            # Solo en modo interactivo (TTY); fail-open si no hay stdin.
+            if sys.stdin.isatty():
+                try:
+                    console.print(
+                        "\n[bold cyan]🔑 Si la tarea requiere una credencial o entorno "
+                        "externo (API key, servicio cloud, VM, cuenta, etc.) que el "
+                        "agente no tiene:[/bold cyan]"
+                        "\n  · pegala acá (p. ej. NEW_RELIC_API_KEY=... y reintentá), o"
+                        "\n  · pedile al agente que te explique los pasos manuales."
+                    )
+                    answer = input("› ").strip()
+                    if answer:
+                        # Reintento el turno con la credencial como nuevo input
+                        # (el usuario pegó algo, p. ej. una variable de entorno).
+                        console.print(
+                            f"[dim]Credencial recibida — reintentando con tu input…[/dim]\n"
+                        )
+                        # Procesar el input como un nuevo turno
+                        self.run_turn(answer)
+                except (EOFError, KeyboardInterrupt):
+                    console.print()
+
+        # ── Bulk: auto-chaining del próximo batch ───────────────────────────
+        # El batch exitoso ya quedó 'done' arriba; si quedan pendientes,
+        # rotar contexto (si >75%) y ejecutar el siguiente AHORA. La recursión
+        # está acotada por la cantidad de batches (cada llamada consume uno).
+        # Interrupción (ESC/Ctrl+C) → el batch queda reanudable en la cola.
+        if _bulk_chain is not None:
+            th = _bulk_chain[0]
+            nxt = next_pending_batch(th)
+            if nxt is None:
+                p = bulk_progress(th)
+                # Solo el ÚLTIMO batch ejecutado anuncia el cierre (los marcos
+                # externos de la recursión se desenrollan sin repetirlo).
+                if (
+                    p["done"] == p["total"] and p["total"] > 0
+                    and seq == p["total"] - 1
+                ):
+                    console.print(
+                        f"\n[bold green]✅ Tarea bulk COMPLETA: "
+                        f"{p['done']}/{p['total']} batches.[/bold green]\n"
+                    )
+            else:
+                if (
+                    _estimate_tokens(self._messages) / _CONTEXT_LIMIT
+                    >= BULK_SESSION_ROTATION_CTX
+                ):
+                    console.print(
+                        "\n[yellow]🔄 Contexto alto entre batches — "
+                        "rotando sesión (la cola persiste en SQLite)…[/yellow]\n"
+                    )
+                    self.reset()
+                nxt_input = canonical_task_text(user_input) + build_batch_scope(
+                    nxt["seq"], bulk_progress(th)["total"], nxt["files"]
+                )
+                console.print(
+                    f"[dim]📦 Batch {nxt['seq'] + 1}/"
+                    f"{bulk_progress(th)['total']} — continuando automáticamente…[/dim]\n"
+                )
+                self.run_turn(nxt_input)
 
         ctx_status = self._check_context()
         if ctx_status == "warning":

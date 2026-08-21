@@ -5,6 +5,7 @@ El `snapshot_hash` permite detectar si el repo cambió y requiere re-análisis.
 """
 
 import hashlib
+import json
 import sqlite3
 import subprocess
 from datetime import datetime, timezone
@@ -36,6 +37,22 @@ CREATE TABLE IF NOT EXISTS session_history (
 );
 CREATE INDEX IF NOT EXISTS idx_session_history_sid ON session_history(session_id);
 CREATE INDEX IF NOT EXISTS idx_session_history_repo ON session_history(repo_path);
+
+-- Cola de subtareas bulk: una tarea que toca N archivos se divide en batches
+-- de 4-5 y su progreso sobrevive sesiones (E2E Task 8: 14 templates, corte a
+-- mitad sin saber qué faltaba).
+CREATE TABLE IF NOT EXISTS bulk_subtasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_hash TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    files_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(task_hash, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_bulk_subtasks_hash ON bulk_subtasks(task_hash);
 """
 
 
@@ -218,3 +235,122 @@ def load_session_turns(session_id: str) -> list[dict]:
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ── Bulk subtasks (cola de batches para tareas de N archivos) ───────────────
+
+
+def ensure_bulk_plan(task_hash: str, batches: list[list[str]]) -> bool:
+    """Crea el plan si no existe; si existe y coincide, conserva el progreso.
+
+    Devuelve True si se creó un plan nuevo. Si el plan existente difiere
+    (misma tarea re-planificada con archivos distintos), se reemplaza.
+    """
+    conn = _connect()
+    now = _now()
+    existing = conn.execute(
+        "SELECT seq, files_json FROM bulk_subtasks WHERE task_hash = ? ORDER BY seq",
+        (task_hash,),
+    ).fetchall()
+    same = (
+        len(existing) == len(batches)
+        and all(
+            row["files_json"] == json.dumps(b, ensure_ascii=False)
+            for row, b in zip(existing, batches)
+        )
+    )
+    if not same and existing:
+        conn.execute("DELETE FROM bulk_subtasks WHERE task_hash = ?", (task_hash,))
+        existing = []
+    if not existing:
+        conn.executemany(
+            """INSERT INTO bulk_subtasks
+               (task_hash, seq, files_json, status, attempts, created_at, updated_at)
+               VALUES (?, ?, ?, 'pending', 0, ?, ?)""",
+            [
+                (task_hash, i, json.dumps(b, ensure_ascii=False), now, now)
+                for i, b in enumerate(batches)
+            ],
+        )
+        conn.commit()
+        conn.close()
+        return True
+    conn.close()
+    return False
+
+
+def next_pending_batch(task_hash: str) -> dict | None:
+    """Primer batch pendiente (o reanudable). {seq, files, attempts} o None."""
+    conn = _connect()
+    row = conn.execute(
+        """SELECT seq, files_json, status, attempts FROM bulk_subtasks
+           WHERE task_hash = ? AND status IN ('pending', 'in_progress')
+           ORDER BY seq LIMIT 1""",
+        (task_hash,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "seq": row["seq"],
+        "files": json.loads(row["files_json"]),
+        "status": row["status"],
+        "attempts": row["attempts"],
+    }
+
+
+def mark_batch(task_hash: str, seq: int, status: str, *, bump_attempt: bool = False) -> None:
+    conn = _connect()
+    if bump_attempt:
+        conn.execute(
+            """UPDATE bulk_subtasks
+               SET status = ?, attempts = attempts + 1, updated_at = ?
+               WHERE task_hash = ? AND seq = ?""",
+            (status, _now(), task_hash, seq),
+        )
+    else:
+        conn.execute(
+            "UPDATE bulk_subtasks SET status = ?, updated_at = ? WHERE task_hash = ? AND seq = ?",
+            (status, _now(), task_hash, seq),
+        )
+    conn.commit()
+    conn.close()
+
+
+def fail_or_keep_batch(task_hash: str, seq: int, max_attempts: int) -> str:
+    """Registra un intento fallido del batch; si agotó los intentos lo marca
+    'failed' (permanente), si no vuelve a 'pending' para reanudar.
+    Devuelve el nuevo status."""
+    conn = _connect()
+    row = conn.execute(
+        "SELECT attempts FROM bulk_subtasks WHERE task_hash = ? AND seq = ?",
+        (task_hash, seq),
+    ).fetchone()
+    attempts = ((row["attempts"] if row else 0) or 0) + 1
+    status = "failed" if attempts >= max_attempts else "pending"
+    conn.execute(
+        """UPDATE bulk_subtasks
+           SET status = ?, attempts = ?, updated_at = ?
+           WHERE task_hash = ? AND seq = ?""",
+        (status, attempts, _now(), task_hash, seq),
+    )
+    conn.commit()
+    conn.close()
+    return status
+
+
+def bulk_progress(task_hash: str) -> dict:
+    """{total, done, failed, pending} del plan."""
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT status FROM bulk_subtasks WHERE task_hash = ?",
+        (task_hash,),
+    ).fetchall()
+    conn.close()
+    statuses = [r["status"] for r in rows]
+    return {
+        "total": len(statuses),
+        "done": sum(1 for s in statuses if s == "done"),
+        "failed": sum(1 for s in statuses if s == "failed"),
+        "pending": sum(1 for s in statuses if s != "done" and s != "failed"),
+    }

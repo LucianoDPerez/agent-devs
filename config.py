@@ -22,7 +22,10 @@ PLAN_MAX_TOKENS = 4096
 # Reasoning budget: el 4B puede gastar TODO su output budget en reasoning_content,
 # produciendo 0 tokens útiles. Se pasa via extra_body a llama-server.
 # Si el server no lo soporta, se ignora silenciosamente.
-EXECUTE_MAX_REASONING_TOKENS = 256
+# 256 era para el 4B. qwen3.6-35b-a3b es un modelo PENSANTE: 256 tokens cortan
+# la cadena de pensamiento a mitad de un tool call y degradan la calidad
+# (bloques inventados, malas decisiones). 1024 da margen sin permitir runaway.
+EXECUTE_MAX_REASONING_TOKENS = 1024
 REVIEW_MAX_REASONING_TOKENS = 512
 # ANALYZE: reasoning muy limitado para mantener brevidad
 ANALYZE_MAX_REASONING_TOKENS = 64
@@ -68,12 +71,16 @@ JUDGE_MODEL_NAME = "agents-a1-4b"  # ← CAMBIAR por un modelo más grande
 JUDGE_TEMPERATURE = 0.3
 JUDGE_MAX_TOKENS = 4096
 
-# Límite de pasos modelo↔tools por turno (evita loops de exploración de 20+ min)
-AGENT_RECURSION_LIMIT = 35
-# EXECUTE: ya no corta el loop de lectura (eso lo hacen max_calls=0 + retry
-# write-only). 30 da margen para el flujo completo: 5×write + stage + commit
-# + lint + tests + build ≈ 12-15 steps. Antes 10 cortaba antes de terminar.
-EXECUTE_RECURSION_LIMIT = 30
+# Límite de pasos modelo↔tools por turno (evita loops de exploración de 20+ min).
+# En langgraph cada tool call consume ~2 pasos de recursion (nodo agente + nodo
+# tools). 35 pasos ≈ 17 tool calls: ajustado para ANALYZE/PLAN/REVIEW, que
+# exploran (trace_component + reads) y responden en texto.
+AGENT_RECURSION_LIMIT = 50
+# EXECUTE: límite por encima de MAX_TOOL_CALLS_PER_TURN×2+1 para que NUNCA corte
+# antes que el tope de tool calls de stream (tool #15 = paso 30: con 30 el 35B
+# murió justo después de run_tests sin ver el resultado — E2E T7 real). El
+# antiloop REAL vive en el budget (dedupe + write-pressure + read caps), no acá.
+EXECUTE_RECURSION_LIMIT = 70
 # Pre-cargar en el mensaje de EXECUTE archivos .md/.txt citados por path absoluto
 EXECUTE_PRELOAD_MAX_CHARS = 20_000
 EXECUTE_PRELOAD_MAX_FILES = 2
@@ -85,10 +92,16 @@ EXECUTE_EXPLORE_BUDGET = 3
 EXECUTE_MAX_READS_AFTER_EXPLORE = 5
 # Si no escribió nada tras N tool calls totales → forzar write. Con trace_component
 # (1 llamada = source + usos + página) + 3-4 reads hay suficiente para diagnosticar.
-EXECUTE_MAX_TOOLS_BEFORE_WRITE = 5
-# Límite duro total de tool calls por turno (EXECUTE). Solo corta si el modelo
-# entra en runaway.
-MAX_TOOL_CALLS_PER_TURN = 20
+# 12 da margen para el caso real con el 35B: archivo grande de 1800+ líneas que
+# hay que leer por rangos (5-6 reads) + ubicar la función (1-2 search) + editar
+# (1) + verificar (1-2). Antes 8 cortaba justo antes de escribir (E2E T7 re-run).
+EXECUTE_MAX_TOOLS_BEFORE_WRITE = 12
+# Límite duro total de tool calls por turno (EXECUTE). Contado por stream
+# (stream_agent_turn). 30 = flujo completo real del 35B: leer un archivo de
+# 1800+ líneas por rangos (5-8) + search (1-2) + edits (3-5) + lint/tests/build
+# (3) + re-corregir tras fallo (2-4) + stage/commit (2) ≈ 20-28. El retry de
+# budget (max_calls=0) se activa si se agota ANTES de escribir.
+MAX_TOOL_CALLS_PER_TURN = 30
 # Máx edit_file al MISMO archivo por turno sin correr verify (lint/tests/build)
 # en el medio. El loop de la iteración E2E: 8 edit_file al mismo path con args
 # distintos (el dedupe solo atrapa args idénticos) corrompiendo el JSX por
@@ -118,6 +131,29 @@ AUTO_INSTALL_ON_VERIFY_FAIL = True
 # seguidos en iteración real). Una verificación honesta viene acompañada de
 # escritura o cierre; el 6to verify sin write es un loop.
 EXECUTE_MAX_VERIFY_BEFORE_WRITE = 5
+# Tareas bulk: si la tarea toca ≥ este N de archivos (ej. Task 8 spec-kitti:
+# modificar 14 templates), session.py escala los budgets de EXECUTE — lecturas,
+# tools-before-write, writes-before-verify y tope de tool calls por turno. El
+# budget default está calibrado para diagnóstico de 1-5 archivos: una tarea que
+# modifica N archivos necesita ~N lecturas + ~2N edits + verify.
+EXECUTE_BULK_MIN_FILES = 6
+# Tamaño de batch: una tarea bulk se divide en subtareas de ~este N de
+# archivos. Chico = radio de daño acotado y diff revisable; grande = menos
+# turnos pero más riesgo (E2E Task 8: 14 archivos en un turno terminó en
+# corrupción y corte a mitad).
+BULK_BATCH_SIZE = 5
+# Contexto (% del límite) que dispara rotación de sesión ENTRE batches.
+# Nunca a mitad de un batch: se rota solo al terminar uno exitoso.
+BULK_SESSION_ROTATION_CTX = 0.75
+# Intentos por batch antes de marcarlo 'failed' y escalar al usuario.
+BULK_MAX_BATCH_ATTEMPTS = 2
+# Intentos máximos por turno EXECUTE bulk. El flujo real de una tarea de N
+# archivos es: exploración → escritura → compuerta de verificación (VerifyRequired)
+# → completar faltantes. max_attempts default (3: 1 + 2 retries) corta a mitad
+# del trabajo (E2E real Task 8: 11/14 archivos, changelog corrupto, "cancelada
+# (Ctrl+C)" engañoso → en realidad agotamiento de intentos). Con 6 el flujo
+# bulk completo entra holgado.
+EXECUTE_BULK_MAX_ATTEMPTS = 6
 # Máx inyecciones MID-TURN de la compuerta de verificación (VerifyRequired)
 # antes de declarar el turno fallido: evita ping-pong infinito write→gate.
 VERIFY_GATE_MAX_INJECTIONS = 3

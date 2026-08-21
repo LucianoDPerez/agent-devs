@@ -13,6 +13,7 @@ from config import (
     ANALYZE_MAX_REASONING_TOKENS,
     PLAN_MAX_TOKENS,
     PLAN_MAX_REASONING_TOKENS,
+    MCP_CONNECT_TIMEOUT,
 )
 from core.roles import Role, load_prompt, tools_for_role
 from display.console import console
@@ -86,6 +87,7 @@ async def build_agent(
     tools_override: list | None = None,
     force_tool_calls: bool = False,
     tool_call_logger: set | None = None,
+    allow_overwrite_escalation: bool | None = None,
 ) -> tuple:
     """Construye un agente LangChain con tools y prompt del rol indicado.
 
@@ -157,9 +159,20 @@ async def build_agent(
             budget = analyze_budget
         else:
             budget = None
+        # Escalamiento edit_file → write_file completo SOLO si el agente tiene
+        # read_file: en retries sin lecturas el modelo no puede ver el contenido
+        # real y el overwrite destruiría el archivo (E2E real: __init__.py de
+        # 1851 líneas truncado a 78). El retry de budget ahora SÍ tiene read_file
+        # (acotado), pero el overwrite sigue PROHIBIDO ahí: lo pasa session.py
+        # con allow_overwrite_escalation=False.
+        if allow_overwrite_escalation is None:
+            allow_overwrite_escalation = any(
+                getattr(t, "name", None) == "read_file" for t in all_tools
+            )
         all_tools = wrap_tools_with_dedupe(
             all_tools, dedupe, budget, read_cache,
             repo_path=repo_path, tool_call_logger=tool_call_logger,
+            allow_overwrite_escalation=allow_overwrite_escalation,
         )
 
     prompt_template = load_prompt(role)
@@ -192,6 +205,11 @@ async def build_agent(
         repo_path=repo_path,
         framework_rules=fw_rules,
         extra_context=extra_context,
+        # Límite de output del rol EXECUTE (tool calls): se informa al modelo
+        # para que NO escriba archivos enteros que excedan su presupuesto y
+        # terminen TRUNCADOS (E2E real: e2e_verify.sh roto en disco). ~3 chars/token.
+        max_output_tokens=EXECUTE_MAX_TOKENS,
+        max_output_chars=int(EXECUTE_MAX_TOKENS * 3),
     )
 
     role_llm = llm

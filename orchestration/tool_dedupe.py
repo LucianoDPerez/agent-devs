@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.errors import GraphBubbleUp
 
-from config import MAX_EDIT_REJECTIONS_BEFORE_OVERWRITE
+from config import MAX_EDIT_REJECTIONS_BEFORE_OVERWRITE, MAX_FILE_READ_BYTES
 
 
 class ToolBudgetExceeded(GraphBubbleUp):
@@ -112,6 +113,7 @@ class ExploreBudget:
         max_edits_per_file: int = 4,
         max_writes_before_verify: int = 0,
         max_verify_before_write: int = 5,
+        max_reads_per_path: int = 5,
     ):
         """``write_pressure=False`` → modo ANALYZE/PLAN: capa la exploración
         pero NUNCA presiona a escribir. Al agotar el presupuesto lanza
@@ -147,6 +149,7 @@ class ExploreBudget:
         self.max_edits_per_file = max_edits_per_file
         self.max_writes_before_verify = max_writes_before_verify
         self.max_verify_before_write = max_verify_before_write
+        self.max_reads_per_path = max_reads_per_path
         self.write_pressure = write_pressure
         self._productive_names = (
             productive_names if productive_names is not None
@@ -158,8 +161,15 @@ class ExploreBudget:
         self._wrote = False
         self._explore_exhausted = False
         self._edits_per_path: dict[str, int] = {}
+        self._reads_per_path: dict[str, int] = {}
+        self._read_limits: dict[str, int] = {}
         self._writes_since_verify = 0
         self._verify_streak = 0
+        # El wrapper de tools difiere el raise de VerifyRequired al POST-ejecución:
+        # así los writes FALLIDOS se pueden refundir (no disparan compuertas
+        # falsas) y el raise solo ocurre tras un write EFECTIVO. consume() con
+        # este flag en False (API directa, tests) conserva el raise pre-ejecución.
+        self._defer_verify_raise = False
 
     def reset(self) -> None:
         self._count = 0
@@ -168,8 +178,47 @@ class ExploreBudget:
         self._wrote = False
         self._explore_exhausted = self.max_calls <= 0
         self._edits_per_path.clear()
+        self._reads_per_path.clear()
+        self._read_limits.clear()
         self._writes_since_verify = 0
         self._verify_streak = 0
+
+    def set_read_limit(self, path: str, limit: int) -> None:
+        """Sube el tope de lecturas para UN path.
+
+        Archivos más grandes que MAX_FILE_READ_BYTES solo se pueden leer por
+        RANGOS (un read completo se trunca). max_reads_per_path castigaba esa
+        lectura legítima como loop (E2E real: __init__.py de 60KB → 6 reads →
+        ToolBudgetExceeded → retry sin lecturas → alucinación).
+        """
+        self._read_limits[path] = max(limit, self._read_limits.get(path, 0))
+
+    def refund_write(self) -> None:
+        """Un write FALLIDO (bloqueado por guard o 'old_str not found') no es
+        una escritura efectiva: decrementa el contador del tope write→verify.
+
+        Antes los intentos fallidos contaban igual: 6-7 edits rechazados
+        disparaban VerifyRequired y el ping-pong de compuertas sin que el
+        modelo hubiera escrito UNA línea real (E2E real, spec-kitti T7).
+        """
+        if self.write_pressure and self.max_writes_before_verify > 0:
+            self._writes_since_verify = max(0, self._writes_since_verify - 1)
+
+    def maybe_raise_verify_required(self) -> None:
+        """Raise post-ejecución del tope write→verify (solo para writes EFECTIVOS)."""
+        if (
+            self.write_pressure
+            and self.max_writes_before_verify > 0
+            and self._writes_since_verify > self.max_writes_before_verify
+        ):
+            raise VerifyRequired(
+                f"{self._writes_since_verify} escrituras sin correr verify "
+                f"en el medio (límite: {self.max_writes_before_verify}). "
+                "PARÁ de escribir a ciegas. CORRÉ AHORA "
+                "run_lint(path=...), run_tests(path=...) y "
+                "run_build(path=...) para verificar lo que escribiste "
+                "y corregir los errores antes de seguir."
+            )
 
     def limit_reads_now(self) -> None:
         """Activa el tope de lecturas (max_reads_after_explore) DE INMEDIATO,
@@ -214,6 +263,27 @@ class ExploreBudget:
                         "el estado actual."
                     )
 
+        # Tope de read_file al MISMO path: el modelo entra en loop leyendo el
+        # MISMO archivo con RANGOS DECRECIENTES (1450-1550, 1450-1530,
+        # 1450-1510...) que esquivan el dedupe (que solo atrapa args idénticos)
+        # y queman el recursion limit sin escribir nada (E2E real: __init__.py
+        # leído 7+ veces en rangos decrecientes hasta los 30 pasos). Leer el
+        # mismo archivo N veces es un loop: un read completo alcanza.
+        if name == "read_file":
+            path = (kwargs or {}).get("path", "")
+            if path:
+                limit = self._read_limits.get(path, self.max_reads_per_path)
+                n = self._reads_per_path.get(path, 0) + 1
+                self._reads_per_path[path] = n
+                if n > limit:
+                    raise ToolBudgetExceeded(
+                        f"{n} read_file a '{path}'. Ya leíste ese archivo de más — "
+                        "cada read con un rango distinto es un LOOP. "
+                        "Trabajá con el contenido que ya tenés (o el ancla "
+                        "inyectada) y aplicá el fix con edit_file/write_file, "
+                        "o corré run_lint/run_tests/run_build."
+                    )
+
         if name in WRITE_TOOL_NAMES:
             self._wrote = True
             self._verify_streak = 0
@@ -222,7 +292,10 @@ class ExploreBudget:
             # Lanza VerifyRequired → session inyecta la compuerta de verify.
             if self.write_pressure and self.max_writes_before_verify > 0:
                 self._writes_since_verify += 1
-                if self._writes_since_verify > self.max_writes_before_verify:
+                if (
+                    self._writes_since_verify > self.max_writes_before_verify
+                    and not self._defer_verify_raise
+                ):
                     raise VerifyRequired(
                         f"{self._writes_since_verify} escrituras sin correr verify "
                         f"en el medio (límite: {self.max_writes_before_verify}). "
@@ -240,6 +313,14 @@ class ExploreBudget:
         if name in VERIFY_TOOL_NAMES:
             self._edits_per_path.clear()
             self._writes_since_verify = 0
+            # También resetea el contador de lecturas POR PATH y post-explore:
+            # lecturas legítimas ESPACIADAS (con verify en el medio) para
+            # arreglar el propio código se acumulaban hasta disparar el retry
+            # write-only a mitad del fix (E2E real spec-kitti T7: 9 reads de
+            # __init__.py de 77KB en rangos distintos + 6 verifies → TBE → el
+            # modelo no podía terminar de arreglar funciones duplicadas).
+            self._reads_per_path.clear()
+            self._reads_after = 0
             if self.write_pressure and self.max_writes_before_verify > 0:
                 self._verify_streak += 1
                 if self._verify_streak > self.max_verify_before_write:
@@ -293,11 +374,11 @@ class ExploreBudget:
                 if self.max_calls <= 0:
                     raise ToolBudgetExceeded(
                         "Exploración prohibida (max_calls=0). "
-                        "TU ÚNICA ACCIÓN: write_file, edit_file o delete_file AHORA."
+                        "TU ÚNICA ACCIÓN: write_file o edit_file AHORA."
                     )
                 return (
                     "⛔ Exploración agotada. NO uses list_files/search_code/inspect_routes. "
-                    "TU ÚNICA ACCIÓN: write_file, edit_file o delete_file AHORA."
+                    "TU ÚNICA ACCIÓN: write_file o edit_file AHORA."
                 )
             return None
 
@@ -314,11 +395,11 @@ class ExploreBudget:
                     if self.max_calls <= 0:
                         raise ToolBudgetExceeded(
                             "Demasiados read_file. NO leas más. "
-                            "TU ÚNICA ACCIÓN: write_file, edit_file o delete_file AHORA."
+                            "TU ÚNICA ACCIÓN: write_file o edit_file AHORA."
                         )
                     return (
                         "⛔ Demasiados read_file. NO leas más archivos. "
-                        "TU ÚNICA ACCIÓN: write_file, edit_file o delete_file AHORA."
+                        "TU ÚNICA ACCIÓN: write_file o edit_file AHORA."
                     )
 
         return None
@@ -331,6 +412,7 @@ def wrap_tools_with_dedupe(
     read_cache: dict | None = None,
     repo_path: str | None = None,
     tool_call_logger: set | None = None,
+    allow_overwrite_escalation: bool = True,
 ) -> list:
     """Envuelve tools: dedupe idéntico + (opcional) explore/write guard.
 
@@ -346,18 +428,29 @@ def wrap_tools_with_dedupe(
     nombre al set. La sesión lo usa para saber si el modelo corrió verify
     tools (la compuerta de verificación NO puede ver los tool calls en el
     estado del grafo — escanear self._messages daba falsos positivos).
+
+    ``allow_overwrite_escalation``: si es False, el escalamiento de edit_file
+    → write_file completo queda DESHABILITADO (write_file nunca se desbloquea
+    para archivos existentes). Lo usa el retry write-only: sin read_file el
+    modelo escribiría de memoria y destruiría el archivo (E2E real:
+    __init__.py de 1851 líneas truncado a 78).
     """
     # Rechazos del guard quirúrgico de edit_file por path: al llegar al tope,
     # se habilita write_file completo para ese archivo (escalamiento de
     # estrategia — el modelo no converge con cirugía fina en cambios
     # estructurales). El estado vive en este closure: se recrea por agente.
     edit_rejections: dict[str, int] = {}
+    if explore_budget is not None:
+        # El wrapper decide el tope write→verify POST-ejecución (raise solo
+        # para writes efectivos + refund de fallidos). consume() directo
+        # (tests/API) conserva el raise pre-ejecución.
+        explore_budget._defer_verify_raise = True
     wrapped: list[BaseTool] = []
     for t in tools:
         wrapped.append(
             _wrap_one(
                 t, dedupe, explore_budget, read_cache, repo_path,
-                tool_call_logger, edit_rejections,
+                tool_call_logger, edit_rejections, allow_overwrite_escalation,
             )
         )
     return wrapped
@@ -376,6 +469,55 @@ def _resolve_relative_path(path: str, repo_path: str | None) -> str:
     return str(Path(repo_path) / path)
 
 
+def _apply_adaptive_read_limit(budget: ExploreBudget, path: str) -> None:
+    """Archivos > MAX_FILE_READ_BYTES: sube el tope de lecturas por-path.
+
+    Un read completo de un archivo de 60KB+ se trunca (MAX_FILE_READ_BYTES),
+    así que la ÚNICA forma de leerlo es por rangos. Sin este ajuste,
+    max_reads_per_path cortaba lecturas legítimas como si fueran un loop y
+    empujaba al modelo al retry write-only (alucinación + destrucción).
+    """
+    if not path:
+        return
+    try:
+        size = Path(path).stat().st_size
+    except OSError:
+        return
+    if size <= MAX_FILE_READ_BYTES:
+        return
+    chunks = (size + MAX_FILE_READ_BYTES - 1) // MAX_FILE_READ_BYTES
+    budget.set_read_limit(path, chunks * 2 + 4)
+
+
+def _write_succeeded(result: Any) -> bool:
+    """Las tools de escritura devuelven '✅ ...' solo en éxito.
+
+    '⛔ BLOQUEADO', 'old_str not found', 'File does not exist' y rechazos
+    quirúrgicos son intentos FALLIDOS: no deben contar como escritura.
+    """
+    return isinstance(result, str) and result.strip().startswith("✅")
+
+
+_SKIPPED_MARKER_RE = re.compile(r"^\.\.\. \(lines \d+ to \d+ skipped\) \.\.\.$")
+
+
+def _strip_read_artifacts(content: str) -> str:
+    """Quita del resultado de read_file los artefactos del harness (header
+    '📄 path' y marcadores '(lines X to Y skipped)') ANTES de cachearlo.
+
+    El ancla del retry inyecta este contenido al modelo; los marcadores lo
+    confundían ("... (lines 1 to 84 skipped) ..." lo hacía creer que NO tenía
+    el contenido) y lo empujaban a leer/reescribir de memoria (E2E real).
+    """
+    lines = content.splitlines()
+    if lines and lines[0].startswith("📄"):
+        lines = lines[1:]
+    if lines and lines[0].strip() and set(lines[0]) <= {"─"}:
+        lines = lines[1:]
+    lines = [ln for ln in lines if not _SKIPPED_MARKER_RE.match(ln)]
+    return "\n".join(lines)
+
+
 def _wrap_one(
     tool: BaseTool,
     dedupe: ToolCallDedupe,
@@ -384,16 +526,32 @@ def _wrap_one(
     repo_path: str | None = None,
     tool_call_logger: set | None = None,
     edit_rejections: dict | None = None,
+    allow_overwrite_escalation: bool = True,
 ) -> BaseTool:
     name = tool.name
 
     # Guard quirúrgico de edit_file rechazado N veces sobre el mismo archivo →
     # habilitar write_file completo (escalamiento de estrategia). El estado
     # viene del closure de wrap_tools_with_dedupe (compartido entre tools).
-    def _escalate_edit_rejections(path: str, result: Any) -> Any:
-        if edit_rejections is None or not isinstance(result, str):
+    def _escalate_edit_rejections(path: str, result: Any, allow: bool) -> Any:
+        if not isinstance(result, str):
             return result
         if "QUIRÚRGICAS" not in result:
+            return result
+        if not allow:
+            # Retry SIN read_file (write-only): el modelo no puede ver el
+            # contenido real del archivo. El overwrite completo escribiría de
+            # memoria y DESTRUIRÍA el archivo (E2E real: __init__.py de 1851
+            # líneas truncado a 78). Nunca desbloquear write_file acá: forzar
+            # bloques más chicos o fallar el turno (mejor fallar que destruir).
+            return (
+                result
+                + "\n⚠️ En este retry write_file está BLOQUEADO para archivos "
+                "existentes (no tenés read_file para ver su contenido real). "
+                "Aplicá el cambio en bloques MÁS CHICOS (≤20 líneas) con "
+                "edit_file, o no lo apliques."
+            )
+        if edit_rejections is None:
             return result
         n = edit_rejections.get(path, 0) + 1
         edit_rejections[path] = n
@@ -431,6 +589,8 @@ def _wrap_one(
         (GraphBubbleUp) se re-lanza siempre: es la única forma de frenar el 4B.
         """
         kwargs = _resolve_kwargs(kwargs)
+        if explore_budget is not None and name == "read_file":
+            _apply_adaptive_read_limit(explore_budget, kwargs.get("path", ""))
         if explore_budget is not None:
             stop = explore_budget.consume(name, kwargs)
             if stop:
@@ -476,7 +636,7 @@ def _wrap_one(
         return ("proceed", None)
 
     def _cache_read(kwargs: dict[str, Any], result: Any) -> None:
-        # Cache contenido leído: el retry write-only lo inyecta como anclaje
+        # Cache contenido leído: el retry lo inyecta como anclaje
         if read_cache is None:
             return
         if name == "read_file":
@@ -490,7 +650,7 @@ def _wrap_one(
                 and "is a directory" not in result
                 and "does not exist" not in result[:80]
             ):
-                read_cache[path] = result
+                read_cache[path] = _strip_read_artifacts(result)
         elif name == "trace_component":
             # El resultado de trace_component (source + página + usos) vive en el
             # state del graph y se PIERDE al cortar por budget. Cachearlo permite
@@ -507,8 +667,13 @@ def _wrap_one(
         if tool_call_logger is not None:
             tool_call_logger.add(name)
         result = tool.invoke(kwargs)
+        if explore_budget is not None and name in WRITE_TOOL_NAMES:
+            if _write_succeeded(result):
+                explore_budget.maybe_raise_verify_required()
+            else:
+                explore_budget.refund_write()
         if name == "edit_file":
-            result = _escalate_edit_rejections(kwargs.get("path", ""), result)
+            result = _escalate_edit_rejections(kwargs.get("path", ""), result, allow_overwrite_escalation)
         _cache_read(kwargs, result)
         return result
 
@@ -520,8 +685,13 @@ def _wrap_one(
         if tool_call_logger is not None:
             tool_call_logger.add(name)
         result = await tool.ainvoke(kwargs)
+        if explore_budget is not None and name in WRITE_TOOL_NAMES:
+            if _write_succeeded(result):
+                explore_budget.maybe_raise_verify_required()
+            else:
+                explore_budget.refund_write()
         if name == "edit_file":
-            result = _escalate_edit_rejections(kwargs.get("path", ""), result)
+            result = _escalate_edit_rejections(kwargs.get("path", ""), result, allow_overwrite_escalation)
         _cache_read(kwargs, result)
         return result
 

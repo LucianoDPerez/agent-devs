@@ -177,6 +177,20 @@ def test_e2e_gate_retry_includes_read_cache_snapshot():
     assert "GATE_RETRY_TOOLS" in gate_src
 
 
+def test_e2e_budget_retry_tools_exclude_delete():
+    """Regresión E2E real: en el retry de budget el 35B borró __init__.py de
+    1851 líneas con delete_file y reescribió un stub de 40 (borrar+recrear
+    bypassa el guard anti-sobrescritura). BUDGET_RETRY_TOOLS debe tener
+    read_file (acotado, sin lecturas alucina) pero NO delete_file."""
+    from tools import BUDGET_RETRY_TOOLS
+
+    names = [t.name for t in BUDGET_RETRY_TOOLS]
+    assert "read_file" in names, "Retry sin read_file: el 35B alucina/destruye"
+    assert "delete_file" not in names, "delete_file en el retry bypassa el guard"
+    assert "edit_file" in names
+    assert "write_file" in names
+
+
 def test_e2e_verify_gate_exists_in_session():
     """Session debe tener el método _verify_tools_called y la compuerta
     de verificación en run_turn."""
@@ -289,3 +303,53 @@ def test_e2e_read_file_not_productive_in_execute():
     assert "productive_names=VERIFY_TOOL_NAMES" in src, (
         "EXECUTE ExploreBudget must use productive_names=VERIFY_TOOL_NAMES"
     )
+
+
+# ── Recursion limit: alineado con el tope de tool calls + retry ─────────────
+
+
+def test_e2e_recursion_limit_aligned_with_tool_call_cap():
+    """Cada tool call consume ~2 pasos de recursion en langgraph (nodo agente +
+    nodo tools). EXECUTE_RECURSION_LIMIT debe ser > 2×MAX_TOOL_CALLS_PER_TURN
+    para que el tope de tool calls de stream corte ANTES que el recursion
+    (E2E real: con recursion=30 el 35B murió en la tool #15 = run_tests, justo
+    antes de ver el resultado)."""
+    import config
+
+    assert config.MAX_TOOL_CALLS_PER_TURN >= 30, (
+        "30 tool calls son necesarias para el flujo completo del 35B "
+        "(lecturas por rangos + edits + lint/tests/build + re-corregir + commit)"
+    )
+    assert config.EXECUTE_RECURSION_LIMIT > 2 * config.MAX_TOOL_CALLS_PER_TURN, (
+        "EXECUTE_RECURSION_LIMIT debe estar por encima del tope de tool calls "
+        "×2+1 para que el recursion nunca corte antes que stream"
+    )
+
+
+def test_e2e_recursion_retries_instead_of_failing():
+    """Al cortar por recursion, EXECUTE debe reintentar con el agente de budget
+    (read acotado + edit + write) en vez de fallar el turno entero — el modelo
+    suele quedar a 1-2 pasos de terminar (E2E real: murió en run_tests)."""
+    import inspect
+
+    from orchestration.session import Session
+
+    src = inspect.getsource(Session.run_turn)
+    assert "_enter_budget_retry" in src, "Recursion retry must reuse _enter_budget_retry"
+    # El retry de recursion solo aplica a EXECUTE (los cambios quedan en disco;
+    # el ancla inyecta el contenido leído para que el retry continúe).
+    marker = 'or "recursion" in err_text'
+    assert marker in src
+    recursion_block = src[src.index(marker):]
+    assert "new_role == Role.EXECUTE" in recursion_block
+    assert "_enter_budget_retry(" in recursion_block
+
+
+def test_e2e_main_warns_on_dirty_repo():
+    """main.py debe advertir en consola si el repo target arranca con cambios
+    sin commitear (daño pre-existente contamina la verificación y el modelo
+    gasta pasos arreglando lo ajeno)."""
+    import main
+
+    assert hasattr(main, "_warn_dirty_repo")
+    assert "_warn_dirty_repo(repo_path)" in open(main.__file__).read()
