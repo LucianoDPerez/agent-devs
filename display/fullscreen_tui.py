@@ -515,6 +515,16 @@ class FullscreenTUI(App):
                 pass
 
     # ── API ────────────────────────────────────────────────────────────
+    def clear_pane(self) -> None:
+        """Limpia el acumulado (/new): sesión nueva, panel nuevo."""
+        self._pane_text = Text()
+        self._md_active = False
+        self._md_raw = ""
+        try:
+            self.query_one("#pane_text", Static).update(self._pane_text)
+        except Exception:
+            pass
+
     def write(self, text: str) -> None:
         """Output del harness → panel (thread-safe)."""
         self.pane_writer.write(text)

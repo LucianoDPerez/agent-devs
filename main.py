@@ -201,7 +201,13 @@ def run_fullscreen(session) -> None:
         if stripped == "/new":
             session.reset()
             session._fullscreen = True  # reset() no debe apagar el modo
+            tui.clear_pane()  # sesión nueva → panel nuevo
             console.print(f"[green]✅ Nueva sesión iniciada ({session.session_id}).[/green]")
+            return
+        if stripped == "/compact":
+            console.print("[yellow]📦 Compactando contexto (resumen del historial)…[/yellow]")
+            session.force_summarize()
+            console.print(f"[green]✅ Listo. Contexto ahora al {session.context_usage_pct():.0f}%.[/green]")
             return
         if stripped == "/history":
             turns = session.get_recent_history(limit=10)

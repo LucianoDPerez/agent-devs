@@ -113,7 +113,9 @@ agent-devs --list         # lista repos ya analizados (cache)
 agent-devs --analyze REPO # pre-analiza un repo sin abrir sesión
 ```
 
-Dentro de la sesión: **ESC** cancela el turno en curso · **Ctrl+C ×2** sale · `/new` nueva sesión · `/history` últimos turnos.
+Dentro de la sesión: **ESC** cancela el turno en curso · **Ctrl+C ×2** sale · `/new` sesión nueva (limpia el panel) · `/compact` resume el historial para liberar contexto · `/history` últimos turnos.
+
+El límite de contexto se **detecta del server** (`/props` de llama.cpp): cuando la sesión consume ~80%, AgentDevs te avisa y te ofrece compactar; al 90% compacta solo.
 
 ## Requisitos
 
