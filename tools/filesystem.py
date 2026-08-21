@@ -6,12 +6,24 @@ from pathlib import Path
 from langchain_core.tools import tool
 
 from config import (
+    MAX_EDIT_BLOCK_LINES,
     MAX_FILE_READ_BYTES,
     MAX_LIST_RESULTS,
     PROTECTED_TASK_DIRS,
     PROTECTED_TASK_FILENAMES,
     WRITE_FILE_OVERWRITE_MAX_LINES,
 )
+
+# Extensión → lenguaje para el chequeo de sintaxis post-write. Solo se valida
+# cuando el binario del intérprete está disponible; en caso contrario se omite
+# (fail-open, nunca bloquea el write ni genera falsos positivos).
+_SYNTAX_CHECKERS = {
+    ".sh": ["bash", "-n"],
+    ".py": ["python3", "-m", "py_compile"],
+}
+# Extensiones cuyo contenido se valida por balance de delimitadores. Las cadenas
+# y comentarios se respetan para evitar falsos positivos.
+_INTEGRITY_EXTS = {".sh", ".py", ".go", ".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte", ".md"}
 
 from ._helpers import _is_excluded
 
@@ -187,6 +199,171 @@ def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> st
     return header + content
 
 
+def _integrity_check(content: str) -> str | None:
+    """Detecta contenido TRUNCADO por desbalance de delimitadores.
+
+    El LLM local (Qwen 35B) a veces agota su presupuesto de output DURANTE un
+    tool call de write_file y el contenido llega cortado a mitad de una apertura
+    (E2E real: e2e_verify.sh terminó en `python3 -c "` sin cerrar). write_file
+    escribía el fragmento y devolvía éxito — nadie lo detectaba.
+
+    Devuelve un string con la descripción del imbalance, o None si el contenido
+    parece íntegro. Respetamos cadenas (con escapes) y comentarios para no dar
+    falsos positivos.
+    """
+    openers: list[str] = []
+    stack: list[str] = []
+    in_squote = in_dquote = in_backtick = False
+    i = 0
+    n = len(content)
+    while i < n:
+        ch = content[i]
+        nxt = content[i + 1] if i + 1 < n else ""
+
+        if in_backtick:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == "`":
+                in_backtick = False
+            i += 1
+            continue
+        if in_squote:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == "'":
+                in_squote = False
+            i += 1
+            continue
+        if in_dquote:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == '"':
+                in_dquote = False
+            i += 1
+            continue
+
+        # Comentarios de línea (los de bloque no se rastrean: raro en estos ext)
+        if ch == "#":
+            while i < n and content[i] != "\n":
+                i += 1
+            continue
+        # Comentario de línea en JS/TS
+        if ch == "/" and nxt == "/":
+            while i < n and content[i] != "\n":
+                i += 1
+            continue
+
+        if ch in ('"', "'", "`"):
+            if ch == '"':
+                in_dquote = True
+            elif ch == "'":
+                in_squote = True
+            else:
+                in_backtick = True
+            openers.append(ch)
+            i += 1
+            continue
+
+        if ch in "([{":
+            stack.append(ch)
+            i += 1
+            continue
+        if ch in ")]}":
+            pairs = {")": "(", "]": "[", "}": "{"}
+            if not stack or stack[-1] != pairs[ch]:
+                # Desbalance real (cierre sin apertura o cruce) → truncado probable
+                return (
+                    f"⚠️ INTEGRIDAD: delimitador de cierre '{ch}' sin su apertura "
+                    f"correspondiente en el contenido (¿truncado?)."
+                )
+            stack.pop()
+            i += 1
+            continue
+
+        i += 1
+
+    problems: list[str] = []
+    if in_squote or in_dquote or in_backtick:
+        problems.append("cadena (comilla) abierta sin cerrar")
+    if stack:
+        problems.append(f"{len(stack)} delimitador(es) sin cerrar: {''.join(stack)}")
+    if not problems:
+        return None
+    return (
+        "⚠️ INTEGRIDAD: el contenido parece TRUNCADO — " + "; ".join(problems) + ". "
+        "Releé el archivo con read_file y completá el contenido, o escribí el "
+        "archivo en partes más chicas (el LLM tiene un límite de output por tool call)."
+    )
+
+
+def _syntax_check(path: str, content: str) -> str | None:
+    """Chequeo de sintaxis por extensión (bash -n / py_compile) en memoria.
+
+    Devuelve None si la sintaxis es válida (o no se pudo verificar), o un string
+    con el error. Fail-open: si el intérprete no existe o falla el subprocess,
+    no bloquea (el write ya se persistió; esto es un aviso, no una compuerta).
+    """
+    import subprocess
+    import tempfile
+
+    ext = Path(path).suffix.lower()
+    checker = _SYNTAX_CHECKERS.get(ext)
+    if checker is None:
+        return None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=ext, delete=False, encoding="utf-8"
+        ) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        try:
+            proc = subprocess.run(
+                [*checker, tmp_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        finally:
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+    except (OSError, subprocess.SubprocessError):
+        # intérprete ausente o fallo de entorno → no podemos verificar, omitir
+        return None
+
+    if proc.returncode == 0:
+        return None
+    err = (proc.stderr or proc.stdout or "").strip()
+    short_err = err.splitlines()[0] if err else f"exit {proc.returncode}"
+    return (
+        f"⚠️ SINTAXIS: el archivo {path} no pasa la verificación ({checker[0]}). "
+        f"Error: {short_err}. Corregí el contenido o releé el archivo."
+    )
+
+
+def _post_write_check(path: str, content: str) -> str:
+    """Valida el contenido recién escrito y devuelve mensajes de advertencia.
+
+    NO bloquea el write (ya se persistió) pero alerta al modelo para que corrija
+    archivos truncados o con sintaxis inválida — el gap que dejó pasar el E2E
+    real donde e2e_verify.sh quedó roto en disco sin que nadie lo notara.
+    """
+    warnings: list[str] = []
+    if Path(path).suffix.lower() in _INTEGRITY_EXTS:
+        integrity = _integrity_check(content)
+        if integrity:
+            warnings.append(integrity)
+    syntax = _syntax_check(path, content)
+    if syntax:
+        warnings.append(syntax)
+    return "\n".join(warnings)
+
+
 @tool
 def write_file(path: str, content: str) -> str:
     """
@@ -238,7 +415,74 @@ def write_file(path: str, content: str) -> str:
         p.write_text(content, encoding="utf-8")
     except (OSError, IsADirectoryError, FileExistsError) as e:
         return f"⛔ Failed to write {path}: {e}. Choose a different file path."
-    return f"✅ Written {len(content)} characters to {path}"
+    result = f"✅ Written {len(content)} characters to {path}"
+    if p.suffix.lower() == ".md":
+        flags = _md_integrity(content)
+        violation = ""
+        if flags["fm"] is False and bool(content.splitlines()) and content.splitlines()[0].strip() == "---":
+            violation = "frontmatter roto (línea 1 '---' sin cierre único en las primeras 40 líneas)"
+        elif not flags["fences_even"]:
+            violation = "cerca de código (```) desbalanceada"
+        if violation:
+            result += (
+                f"\n⚠️ INTEGRIDAD: {violation}. El archivo fue creado pero "
+                "probablemente quedó corrupto; corregilo con edit_file."
+            )
+    post = _post_write_check(path, content)
+    if post:
+        result += "\n" + post
+    return result
+
+
+def _md_integrity(content: str) -> dict:
+    """Señales estructurales de un .md para detectar corrupción post-edit.
+
+    E2E real (Task 8 spec-kitti): un edit_file fuzzy con old_str incorrecto
+    DUPLICÓ el frontmatter (dos bloques ---) y fusionó ```text + $ARGUMENTS
+    en una sola línea ($ARGUMENTS```), perdiendo el fence de apertura.
+    - fm_clean: línea 1 es '---' y hay EXACTAMENTE otra '---' de cierre en
+      las primeras 40 líneas (frontmatter YAML válido).
+    - fences_merged: líneas que CONTIENEN ``` sin EMPEZAR por él (ej.
+      '$ARGUMENTS```') — en markdown bien formado los fences viven solos
+      en su línea; un fence incrustado al final de contenido es fusión.
+    - fences_even: cantidad de ``` par (bloques balanceados).
+
+    El guard solo RECHAZA cuando el archivo estaba sano ANTES del edit y el
+    edit lo rompe — nunca toca archivos que ya estaban así.
+    """
+    lines = content.splitlines()
+    fm_clean = bool(lines) and lines[0].strip() == "---" and (
+        sum(1 for ln in lines[:40] if ln.strip() == "---") == 2
+    )
+    fences_merged = sum(
+        1 for ln in lines if "```" in ln and not ln.lstrip().startswith("```")
+    )
+    fences_even = content.count("```") % 2 == 0
+    return {
+        "fm": fm_clean,
+        "fences_merged": fences_merged,
+        "fences_even": fences_even,
+    }
+
+
+def _md_integrity_violation(before: dict, after: dict) -> str:
+    """Mensaje de rechazo si el edit rompió estructura que antes estaba sana."""
+    if before["fm"] and not after["fm"]:
+        return (
+            "frontmatter duplicado o roto (la edición introdujo bloques '---' "
+            "extra en las primeras 40 líneas)"
+        )
+    if before["fences_merged"] == 0 and after["fences_merged"] > 0:
+        return (
+            "línea con cerca de código (```) FUSIONADA con contenido "
+            "(ej. 'texto```') — la edición eliminó saltos de línea"
+        )
+    if before["fences_even"] and not after["fences_even"]:
+        return (
+            "cerca de código (```) desbalanceada — la edición eliminó un "
+            "delimitador"
+        )
+    return ""
 
 
 @tool
@@ -292,6 +536,17 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
             "Do not call edit_file on this path again."
         )
 
+    # GUARD ANTI-NOOP: el modelo descubre que "escribir algo" satisface la
+    # presión del harness y hace edit_file con old_str == new_str en loop
+    # (E2E real Task 8 batch ya-completo: 20+ no-ops hasta agotar budget).
+    if old_str.strip() == new_str.strip() and old_str.strip():
+        return (
+            "⛔ NO-OP edit: old_str == new_str (no cambiarías NADA).\n"
+            "Si los archivos YA cumplen la tarea, NO llames edit_file: "
+            "corré run_lint/run_tests para verificarlo y terminá con un "
+            "resumen — ese cierre es válido."
+        )
+
     content = p.read_text(encoding="utf-8")
 
     # GUARD ANTI-REESCRITURA MASIVA: el modelo chico usa edit_file con
@@ -301,7 +556,7 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
     # bloqueado para archivos existentes; edit_file debe ser QUIRÚRGICO.
     total_lines = len(content.splitlines())
     block_lines = len(old_str.splitlines()) + len(new_str.splitlines())
-    if block_lines > 40 or (total_lines > 0 and len(old_str.splitlines()) > max(10, total_lines // 2)):
+    if block_lines > MAX_EDIT_BLOCK_LINES or (total_lines > 0 and len(old_str.splitlines()) > max(10, total_lines // 2)):
         return (
             f"⛔ edit_file es para ediciones QUIRÚRGICAS, no para reescribir "
             f"archivos enteros.\n"
@@ -331,16 +586,51 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
 
     start, end = spans[0]
     new_content = content[:start] + new_str + content[end:]
+
+    # GUARD DE INTEGRIDAD .md: un edit con old_str fuzzy-incorrecto DUPLICÓ
+    # frontmatter y fusionó fences (E2E real Task 8: changelog.md y
+    # sync-status.md inutilizables). Rechazar ANTES de escribir si el archivo
+    # estaba sano y el edit rompe estructura.
+    if p.suffix.lower() == ".md":
+        before = _md_integrity(content)
+        after = _md_integrity(new_content)
+        violation = _md_integrity_violation(before, after)
+        if violation:
+            return (
+                f"⛔ Edit RECHAZADO por integridad estructural en {path}: {violation}.\n"
+                "El archivo NO fue modificado. El old_str que pasaste no "
+                "corresponde al contenido real (el matcher encontró un bloque "
+                "parecido pero distinto).\n"
+                "PROCEDÉ ASÍ:\n"
+                f"  1) read_file(path='{path}') para ver el contenido REAL.\n"
+                "  2) Rehacé el edit con old_str copiado LITERAL del archivo "
+                "(2-5 líneas de contexto alrededor del cambio)."
+            )
+
     p.write_text(new_content, encoding="utf-8")
     return f"✅ Replaced block in {path}"
 
 
 def _exact_spans(content: str, needle: str) -> list[tuple[int, int]]:
-    """All spans of an exact substring match."""
+    """All spans of an exact substring match.
+
+    Si el bloque es MULTILINEA, el span debe alinearse a líneas COMPLETAS:
+    un match que termina a mitad de línea (ej. última línea 'from pathlib
+    import Path' contra 'from pathlib import Path, PureWindowsPath') es un
+    match por PREFIJO y reemplazar corrompe la línea (E2E real: borró
+    ', PureWindowsPath' de un archivo real). Los old_str de UNA línea
+    permiten fragmentos in-line (ej. 'useState(null)' dentro de una línea).
+    """
+    multiline = "\n" in needle
     spans: list[tuple[int, int]] = []
     idx = content.find(needle)
     while idx >= 0:
-        spans.append((idx, idx + len(needle)))
+        end = idx + len(needle)
+        if not multiline or (
+            (idx == 0 or content[idx - 1] == "\n")
+            and (end == len(content) or content[end] == "\n")
+        ):
+            spans.append((idx, end))
         idx = content.find(needle, idx + len(needle))
     return spans
 
@@ -348,13 +638,18 @@ def _exact_spans(content: str, needle: str) -> list[tuple[int, int]]:
 def _build_fuzzy_regex(old_str: str) -> re.Pattern | None:
     """Regex tolerante a espacios/indentación: cada línea del bloque se matchea
     por su contenido stripped, permitiendo whitespace variable entre palabras
-    y en los bordes. Ignora líneas vacías del bloque."""
+    y en los bordes. Ignora líneas vacías del bloque.
+
+    Cada línea se ancla al FINAL (\\s*$): sin anclaje, el matcher hacía match
+    por PREFIJO y reemplazaba líneas incompletas (E2E real: 'from pathlib
+    import Path' matcheó 'from pathlib import Path, PureWindowsPath' y borró
+    ', PureWindowsPath' de un archivo real)."""
     lines = [ln.strip() for ln in old_str.splitlines() if ln.strip()]
     if not lines:
         return None
     parts = []
     for ln in lines:
-        parts.append(re.escape(ln).replace(r"\ ", r"\s+"))
+        parts.append(re.escape(ln).replace(r"\ ", r"\s+") + r"\s*$")
     return re.compile(r"(?m)^\s*" + r"\s*\n\s*".join(parts))
 
 

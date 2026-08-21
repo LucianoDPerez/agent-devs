@@ -94,6 +94,12 @@ MAX_TOOL_CALLS_PER_TURN = 20
 # distintos (el dedupe solo atrapa args idénticos) corrompiendo el JSX por
 # partes. Al superar el tope se lanza ToolBudgetExceeded → retry con ancla.
 MAX_EDITS_PER_FILE = 4
+# edit_file: rechazo de bloques GRANDES (reescritura de memoria). 40 era el
+# límite para el 4B. El 35B produce bloques de 50-90 líneas CORRECTOS (p. ej.
+# insertar una función entera); rechazarlos disparaba el escalamiento a
+# write_file → destrucción. 100 permite esos cambios sin habilitar
+# reescrituras masivas: el old_str debe matchear el archivo real igual.
+MAX_EDIT_BLOCK_LINES = 100
 # Máx escrituras TOTALES (cualquier archivo) sin correr verify (lint/tests/build)
 # en el medio. MAX_EDITS_PER_FILE solo capa el MISMO path; el spree multi-archivo
 # (15 writes ciegos en la iteración de Medicos: scaffolding de tests roto sin

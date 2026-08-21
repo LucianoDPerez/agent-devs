@@ -144,6 +144,20 @@ class TestEditFileFuzzy:
         )
         assert "useState, useEffect" in out
 
+    def test_fuzzy_rejects_prefix_match_on_longer_line(self):
+        """Regresión E2E real: old_str 'from pathlib import Path' matcheaba por
+        PREFIJO la línea real 'from pathlib import Path, PureWindowsPath' y le
+        borraba ', PureWindowsPath' (corrupción silenciosa). Cada línea del
+        bloque debe anclarse al FINAL: el prefijo ya NO debe matchear."""
+        repo = _create_repo({"app.py": "import sys\nfrom pathlib import Path, PureWindowsPath\n\nx = 1\n"})
+        result = edit_file.invoke({
+            "path": str(Path(repo) / "app.py"),
+            "old_str": "import sys\nfrom pathlib import Path",
+            "new_str": "import sys\nfrom pathlib import Path as P",
+        })
+        assert "old_str not found" in result, result
+        assert "Path, PureWindowsPath" in (Path(repo) / "app.py").read_text()
+
     def test_not_found_returns_context_hint(self):
         repo = _create_repo({"PacientesPage.tsx": self.CONTENT})
         # La primera línea (ancla) existe, pero la segunda línea inventada NO →
@@ -309,3 +323,200 @@ class TestWriteOverride:
         self._set.add(path)
         result = write_file.invoke({"path": path, "content": "hack"})
         assert "PLANIFICACIÓN" in result or "PROHIBIDO" in result
+
+
+class TestIntegrityAndSyntaxCheck:
+    """Validación post-write de integridad y sintaxis (Corrección 1).
+
+    Detectar archivos que el LLM escribe TRUNCADOS (agota su output durante el
+    tool call) y que quedaban rotos sin que nadie lo notara (E2E real:
+    e2e_verify.sh terminó en `python3 -c "` sin cerrar)."""
+
+    def test_balanced_content_ok(self):
+        from tools.filesystem import _integrity_check
+        assert _integrity_check('echo "hola"\nif [ -n "$X" ]; then\n  echo ok\nfi\n') is None
+
+    def test_truncated_unclosed_quote_detected(self):
+        from tools.filesystem import _integrity_check
+        # Termina a mitad de una cadena abierta (caso real del e2e)
+        result = _integrity_check('TOKENS_OK=$(echo "$NR_RESPONSE" | python3 -c "')
+        assert result is not None
+        assert "TRUNCADO" in result
+
+    def test_truncated_unclosed_bracket_detected(self):
+        from tools.filesystem import _integrity_check
+        result = _integrity_check('def foo():\n    x = [1, 2, 3')
+        assert result is not None
+        assert "TRUNCADO" in result
+
+    def test_syntax_check_bash_ok(self):
+        from tools.filesystem import _syntax_check
+        assert _syntax_check("/tmp/test.sh", '#!/usr/bin/env bash\necho "ok"\n') is None
+
+    def test_syntax_check_bash_broken(self):
+        from tools.filesystem import _syntax_check
+        result = _syntax_check("/tmp/test.sh", 'echo "unclosed')
+        assert result is not None
+        assert "SINTAXIS" in result
+
+    def test_syntax_check_python_broken(self):
+        from tools.filesystem import _syntax_check
+        result = _syntax_check("/tmp/test.py", "def foo(:\n    pass")
+        assert result is not None
+        assert "SINTAXIS" in result
+
+    def test_syntax_check_unknown_ext_skips(self):
+        from tools.filesystem import _syntax_check
+        # Extensión sin checker → no verifica (fail-open)
+        assert _syntax_check("/tmp/test.xyz", "anything !!!") is None
+
+    def test_write_file_reports_truncation_warning(self):
+        repo = tempfile.mkdtemp()
+        path = str(Path(repo) / "script.sh")
+        result = write_file.invoke({"path": path, "content": 'echo "unclosed'})
+        # El write persiste (no bloqueado) pero el resultado advierte
+        assert "Written" in result
+        assert "INTEGRIDAD" in result or "SINTAXIS" in result
+
+    def test_write_file_clean_content_no_warning(self):
+        repo = tempfile.mkdtemp()
+        path = str(Path(repo) / "clean.sh")
+        result = write_file.invoke({"path": path, "content": '#!/usr/bin/env bash\necho "ok"\n'})
+        assert "Written" in result
+        assert "INTEGRIDAD" not in result
+        assert "SINTAXIS" not in result
+
+
+class TestMdIntegrityGuard:
+    """Guard anti-corrupción .md: rechazar edits que rompan frontmatter/fences."""
+
+    def _template_md(self) -> str:
+        return (
+            "---\n"
+            "description: Template de command\n"
+            "scripts:\n"
+            "  sh: scripts/bash/check.sh --json\n"
+            "---\n"
+            "\n"
+            "## User Input\n"
+            "\n"
+            "```text\n"
+            "$ARGUMENTS\n"
+            "```\n"
+            "\n"
+            "## Outline\n"
+            "\n"
+            "Pasos del comando.\n"
+        )
+
+    def test_edit_rejected_when_frontmatter_duplicated(self):
+        repo = tempfile.mkdtemp()
+        path = str(Path(repo) / "cmd.md")
+        Path(path).write_text(self._template_md(), encoding="utf-8")
+        # old_str fuzzy-incorrecto (como el E2E real): el modelo pasa un
+        # frontmatter DISTINTO al real; el matcher ancla en líneas parecidas
+        # y el new_str inserta un segundo bloque ---
+        bad_old = (
+            "---\n"
+            "description: OTRA description que no existe en el archivo\n"
+            "---\n"
+            "\n"
+            "## User Input\n"
+        )
+        bad_new = (
+            "---\n"
+            "description: OTRA description que no existe en el archivo\n"
+            "scripts:\n"
+            "  sh: otra/cosa.sh\n"
+            "---\n"
+            "\n"
+            "Run: telemetry start\n"
+            "\n"
+            "## User Input\n"
+        )
+        result = edit_file.invoke({"path": path, "old_str": bad_old, "new_str": bad_new})
+        assert "RECHAZADO" in result
+        assert "frontmatter" in result
+        # El archivo NO fue modificado
+        assert Path(path).read_text(encoding="utf-8") == self._template_md()
+
+    def test_edit_rejected_when_fence_lost(self):
+        repo = tempfile.mkdtemp()
+        path = str(Path(repo) / "cmd.md")
+        Path(path).write_text(self._template_md(), encoding="utf-8")
+        # Fusionar ```text + $ARGUMENTS (pierde el fence de apertura)
+        result = edit_file.invoke({
+            "path": path,
+            "old_str": "```text\n$ARGUMENTS",
+            "new_str": "$ARGUMENTS```",
+        })
+        assert "RECHAZADO" in result
+        assert "```" in result or "desbalanceada" in result
+        assert Path(path).read_text(encoding="utf-8") == self._template_md()
+
+    def test_legit_edit_allowed(self):
+        repo = tempfile.mkdtemp()
+        path = str(Path(repo) / "cmd.md")
+        original = self._template_md()
+        Path(path).write_text(original, encoding="utf-8")
+        hook = "\nRun: `.spec-kitti/bin/spec-kitti-telemetry end cmd`\n"
+        result = edit_file.invoke({
+            "path": path,
+            "old_str": "Pasos del comando.\n",
+            "new_str": "Pasos del comando." + hook,
+        })
+        assert "✅" in result
+        assert "spec-kitti-telemetry" in Path(path).read_text(encoding="utf-8")
+
+    def test_already_corrupted_file_not_blocked(self):
+        repo = tempfile.mkdtemp()
+        path = str(Path(repo) / "broken.md")
+        broken = (
+            "---\n"
+            "description: A\n"
+            "---\n"
+            "description: B\n"
+            "---\n"
+            "\n"
+            "contenido\n"
+        )
+        Path(path).write_text(broken, encoding="utf-8")
+        # Editar un archivo YA corrupto no debe bloquearse por este guard
+        result = edit_file.invoke({
+            "path": path,
+            "old_str": "contenido\n",
+            "new_str": "contenido corregido\n",
+        })
+        assert "✅" in result
+
+    def test_non_md_files_unaffected(self):
+        repo = tempfile.mkdtemp()
+        path = str(Path(repo) / "code.py")
+        Path(path).write_text("x = 1\n", encoding="utf-8")
+        result = edit_file.invoke({"path": path, "old_str": "x = 1", "new_str": "x = 2"})
+        assert "✅" in result
+
+
+class TestNoopEditGuard:
+    """edit_file con old_str == new_str debe rechazarse (loop de no-ops E2E)."""
+
+    def test_noop_edit_rejected(self):
+        repo = tempfile.mkdtemp()
+        path = str(Path(repo) / "x.md")
+        Path(path).write_text("línea\n", encoding="utf-8")
+        result = edit_file.invoke({
+            "path": path, "old_str": "línea", "new_str": "línea",
+        })
+        assert "NO-OP" in result
+        assert Path(path).read_text(encoding="utf-8") == "línea\n"
+
+    def test_noop_edit_whitespace_only_diff_also_rejected(self):
+        repo = tempfile.mkdtemp()
+        path = str(Path(repo) / "y.md")
+        Path(path).write_text("hola mundo\n", encoding="utf-8")
+        result = edit_file.invoke({
+            "path": path,
+            "old_str": "hola mundo",
+            "new_str": "hola mundo  ",
+        })
+        assert "NO-OP" in result

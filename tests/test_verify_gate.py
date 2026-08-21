@@ -89,6 +89,7 @@ def test_code_exts_cover_common_stacks():
     assert ".tsx" in CODE_EXTS
     assert ".py" in CODE_EXTS
     assert ".go" in CODE_EXTS
+    assert ".sh" in CODE_EXTS  # Corrección 2: scripts bash entran en la compuerta
     assert ".md" not in CODE_EXTS
 
 
@@ -134,5 +135,27 @@ def test_syntax_gate_fail_open_when_clean(tmp_path):
     (repo / "a.md").write_text("x")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "init")
+    ok, err = syntax_gate(str(repo))
+    assert ok is True
+
+
+# ── Corrección 2: scripts .sh rotos son detectados por la compuerta ──────────
+
+
+def test_syntax_gate_detects_broken_sh(tmp_path):
+    """Un script bash TRUNCADO (write_file devolvió éxito pero bash -n falla)
+    debe ser detectado por syntax_gate — el caso que se escapó en E2E."""
+    repo = _init_repo(tmp_path)
+    broken = 'TOKENS_OK=$(echo "$NR_RESPONSE" | python3 -c "\n'  # comilla abierta
+    (repo / "e2e_verify.sh").write_text(broken)
+    # sin commitear → lo detecta changed_code_files como untracked
+    ok, err = syntax_gate(str(repo))
+    assert ok is False
+    assert "e2e_verify.sh" in err
+
+
+def test_syntax_gate_passes_valid_sh(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "ok.sh").write_text('#!/usr/bin/env bash\necho "ok"\n')
     ok, err = syntax_gate(str(repo))
     assert ok is True

@@ -17,7 +17,14 @@ from pathlib import Path
 
 CODE_EXTS = {
     ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
-    ".py", ".go", ".vue", ".svelte",
+    ".py", ".go", ".vue", ".svelte", ".sh",
+}
+
+# Extensiones cuyo archivo se valida con un chequeo de sintaxis directo (sin
+# build del proyecto) porque son scripts sueltos sin stack compilable. Mapeo
+# extensión → (comando, descripción). Fail-open si el binario no existe.
+_SYNTAX_EXTS = {
+    ".sh": ("bash", "-n"),
 }
 
 _MAX_ERROR_CHARS = 3_500
@@ -104,6 +111,50 @@ def _implicated(changed_file: str, error_text: str) -> bool:
     return changed_file.replace("\\", "/") in error_text.replace("\\", "/")
 
 
+def _syntax_errors(repo_path: str, files: list[str]) -> tuple[bool, str]:
+    """Valida por sintaxis directa los scripts sueltos (p. ej. .sh con bash -n).
+
+    El caso que se escapó en E2E: un script bash que el LLM escribió TRUNCADO
+    (write_file devolvió éxito pero `bash -n` falla). No hay stack/package.json
+    que el build detecte, así que la compuerta no lo veía. Acá se corre el
+    intérprete sobre CADA archivo modificado con extensión sintáctica.
+
+    Retorna (ok, error_recortado). Fail-open: si el binario no existe o falla
+    el subprocess, no bloquea.
+    """
+    import subprocess
+
+    root = Path(repo_path)
+    first_error = ""
+    for rel in files:
+        ext = Path(rel).suffix.lower()
+        checker = _SYNTAX_EXTS.get(ext)
+        if checker is None:
+            continue
+        target = root / rel
+        if not target.is_file():
+            continue
+        try:
+            proc = subprocess.run(
+                [*checker, str(target)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue  # binario ausente / fallo de entorno → fail-open
+        if proc.returncode != 0:
+            err = (proc.stderr or proc.stdout or "").strip()
+            first_error = (
+                f"Script {rel} no pasa la verificación de sintaxis "
+                f"({checker[0]}):\n{err[:_MAX_ERROR_CHARS]}"
+            )
+            break
+    if first_error:
+        return False, first_error
+    return True, ""
+
+
 def syntax_gate(repo_path: str) -> tuple[bool, str]:
     """Corre el build/lint tras una escritura. Devuelve (ok, error_recortado).
 
@@ -114,6 +165,12 @@ def syntax_gate(repo_path: str) -> tuple[bool, str]:
         files = changed_code_files(repo_path)
         if not files:
             return True, ""
+
+        # 1) Scripts sueltos (p. ej. .sh) con sintaxis directa — el caso que el
+        #    build del proyecto no detecta (no hay package.json/stack compilable).
+        ok, err = _syntax_errors(repo_path, files)
+        if not ok:
+            return False, err
 
         build_dir = _find_build_dir(repo_path, files)
         if not build_dir:
