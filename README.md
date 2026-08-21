@@ -100,7 +100,6 @@ agent-devs /otro/repo     # abre sobre una ruta específica
 agent-devs --doctor       # verifica el entorno e instala lo que falte
 agent-devs --list         # lista repos ya analizados (cache)
 agent-devs --analyze REPO # pre-analiza un repo sin abrir sesión
-agent-devs --no-tui       # modo simple (para scripts / CI)
 ```
 
 Dentro de la sesión: **ESC** cancela el turno en curso · **Ctrl+C ×2** sale · `/new` nueva sesión · `/history` últimos turnos.

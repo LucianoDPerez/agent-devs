@@ -440,9 +440,6 @@ def main():
     parser.add_argument("--list", action="store_true", help="Lista los análisis guardados")
     parser.add_argument("--doctor", action="store_true",
                         help="Verifica el entorno (deps, git, MCP, llama-server) e instala lo que falte")
-    parser.add_argument("--no-tui", action="store_true",
-                        help="Desactiva el TUI full-screen (usa el input simple). "
-                             "Por defecto el TUI se activa si el stdin es una terminal.")
     args = parser.parse_args()
 
     if args.doctor:
@@ -466,11 +463,10 @@ def main():
     session = Session(_make_llm(), repo_path, cached_analysis=_format_cached_context(cached))
     session.start()
 
-    # TUI por defecto cuando hay terminal interactiva (--no-tui para el
-    # flujo simple, que es el que usan scripts/CI sin tty).
-    use_tui = not args.no_tui and sys.stdin.isatty()
-
-    if use_tui:
+    # TUI siempre que haya terminal interactiva. Sin tty (pipe/script) el
+    # fallback al input simple evita que Textual reviente — no es un modo
+    # soportado, solo una red de seguridad.
+    if sys.stdin.isatty():
         run_fullscreen(session)
         return
 
