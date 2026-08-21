@@ -24,6 +24,7 @@ from config import (
     ANALYZE_MAX_READS_AFTER_EXPLORE,
     EXECUTE_ASK_COMMIT,
     EXECUTE_EXPLORE_BUDGET,
+    LLM_BASE_URL,
     EXECUTE_MAX_READS_AFTER_EXPLORE,
     EXECUTE_MAX_TOOLS_BEFORE_WRITE,
     EXECUTE_MAX_VERIFY_BEFORE_WRITE,
@@ -98,9 +99,11 @@ _ROLE_LABELS = {
 
 # Context window: llama-server -c 62000 (configurado por el usuario).
 # 90% = 55800 tokens.
+# Fallback si no se puede detectar el n_ctx real del server. El valor VIVO
+# vive en self._ctx_limit (Session.start lo detecta via GET /props).
 _CONTEXT_LIMIT = 55800
 _SUMMARY_THRESHOLD = 0.90
-_WARNING_THRESHOLD = 0.85
+_WARNING_THRESHOLD = 0.80
 
 # Mensaje para el retry EXECUTE: el agente se reconstruye con BUDGET_RETRY_TOOLS
 # (read_file ACOTADO + edit_file + write_file; sin delete_file, sin verify, sin
@@ -520,12 +523,22 @@ class Session:
         self._fullscreen: bool = False
         # Cancel del turno EN CURSO: lo setea run_turn; lo llama la TUI con ESC.
         self._turn_cancel = None
+        # Límite de contexto VIVO: se detecta del server en start() (GET /props).
+        # El config hardcodeado quedaba viejo (asumía -c 62000, había 36608) y
+        # el summary automático nunca alcanzaba a disparar antes del overflow.
+        self._ctx_limit: int = _CONTEXT_LIMIT
 
     def start(self) -> str:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
             self._tools, self._mcp_available = loop.run_until_complete(init_mcp())
+            # n_ctx REAL del server (GET /props): el config hardcodeado quedaba
+            # viejo y el summary automático no alcanzaba a disparar.
+            from llm_wrapper import detect_context_limit
+            detected_ctx = detect_context_limit(LLM_BASE_URL)
+            if detected_ctx:
+                self._ctx_limit = detected_ctx
             # Resolver UNA vez la key del knowledge graph del repo actual:
             # el 4B la inventa (trace_component fallaba y repetía la llamada).
             self._graph_project = ""
@@ -706,12 +719,26 @@ class Session:
     def _check_context(self) -> str | None:
         """Verifica el contexto. Devuelve warning o None."""
         estimated = _estimate_tokens(self._messages)
-        pct = estimated / _CONTEXT_LIMIT
+        pct = estimated / self._ctx_limit
         if pct >= _SUMMARY_THRESHOLD:
             return "summary"
         if pct >= _WARNING_THRESHOLD:
             return "warning"
         return None
+
+    def force_summarize(self):
+        """Compacta el contexto AHORA: summary del historial + recorte.
+
+        Expuesto como comando /compact en la TUI — el usuario no debería
+        esperar al 90% automático si sabe que la sesión ya no aporta.
+        """
+        old_messages = self._messages[:-2]  # preservar últimos 2 mensajes
+        recent = self._messages[-2:] if len(self._messages) >= 2 else self._messages
+        summary = _generate_summary(self.llm, old_messages)
+        self._messages = [
+            SystemMessage(f"Resumen de la conversación previa:\n{summary}"),
+            *recent,
+        ]
 
     def _maybe_summarize(self):
         """Si el contexto llega al 90%, genera un summary y reemplaza historial viejo."""
@@ -720,15 +747,7 @@ class Session:
             return
 
         console.print("\n[yellow]📦 Contexto al 90% — generando resumen del historial…[/yellow]")
-
-        old_messages = self._messages[:-2]  # preservar últimos 2 mensajes
-        recent = self._messages[-2:] if len(self._messages) >= 2 else self._messages
-
-        summary = _generate_summary(self.llm, old_messages)
-        self._messages = [
-            SystemMessage(f"Resumen de la conversación previa:\n{summary}"),
-            *recent,
-        ]
+        self.force_summarize()
         console.print("[green]✅ Resumen generado. Historial comprimido.[/green]\n")
 
     def _retry_with_read_anchor(self) -> str:
@@ -1909,7 +1928,7 @@ class Session:
                     )
             else:
                 if (
-                    _estimate_tokens(self._messages) / _CONTEXT_LIMIT
+                    _estimate_tokens(self._messages) / self._ctx_limit
                     >= BULK_SESSION_ROTATION_CTX
                 ):
                     console.print(
@@ -1928,8 +1947,11 @@ class Session:
 
         ctx_status = self._check_context()
         if ctx_status == "warning":
-            pct = _estimate_tokens(self._messages) / _CONTEXT_LIMIT * 100
-            console.print(f"\n[yellow]⚠️  Contexto al {pct:.0f}% — usá /new para empezar sesión nueva[/yellow]\n")
+            pct = _estimate_tokens(self._messages) / self._ctx_limit * 100
+            console.print(
+                f"\n[yellow]⚠️  Contexto al {pct:.0f}% (límite {self._ctx_limit:,} tokens) — "
+                f"escribí /compact para resumir ahora o /new para empezar limpio[/yellow]\n"
+            )
         elif ctx_status == "summary":
             self._maybe_summarize()
 
@@ -2041,6 +2063,10 @@ class Session:
                 cb()
             except Exception:
                 pass
+
+    def context_usage_pct(self) -> float:
+        """% del ctx_limit consumido por la sesión actual (para /compact, TUI)."""
+        return _estimate_tokens(self._messages) / self._ctx_limit * 100
 
     def get_status(self) -> dict:
         usage = get_usage()

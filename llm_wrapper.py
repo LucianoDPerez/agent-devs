@@ -425,3 +425,30 @@ def detect_server_model(base_url: str, timeout: float = 1.5) -> str | None:
         return pretty_model_id(ids[0]) if ids else None
     except Exception:
         return None
+
+
+def detect_context_limit(base_url: str, timeout: float = 1.5) -> int | None:
+    """n_ctx REAL asignado al server (GET /props de llama-server), o None.
+
+    El config puede quedar viejo: en esta máquina el default asumía -c 62000
+    y el server tenía 36608 → la estimación de contexto nunca llegaba al umbral
+    de summary y las requests reventaban con 400 contra n_ctx físico.
+    """
+    import json
+    import urllib.request
+
+    base = base_url.split("/v1")[0]
+    try:
+        with urllib.request.urlopen(base + "/props", timeout=timeout) as resp:
+            data = json.load(resp)
+        for getter in (
+            lambda d: d.get("default_generation_settings", {}).get("n_ctx"),
+            lambda d: d.get("model", {}).get("n_ctx_train"),
+            lambda d: d.get("n_ctx"),
+        ):
+            v = getter(data)
+            if isinstance(v, int) and v > 0:
+                return v
+    except Exception:
+        return None
+    return None
