@@ -123,6 +123,31 @@ class TestResolveCommand:
             cmd = _resolve_command(root, "build")
             assert cmd == ["python", "-m", "build"]
 
+    def test_python_uv_detection(self):
+        """Proyecto con uv.lock → comandos con `uv run`."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(
+                root / "pyproject.toml",
+                "[project]\nname='x'\n[tool.ruff]\n[build-system]\nrequires=['hatchling']\n",
+            )
+            _write(root / "uv.lock", "version = 1\n")
+            assert _resolve_command(root, "test") == ["uv", "run", "pytest"]
+            assert _resolve_command(root, "lint") == ["uv", "run", "ruff", "check", "."]
+            assert _resolve_command(root, "build") == ["uv", "build"]
+
+    def test_python_uv_install(self):
+        """run_install en proyecto uv debe correr `uv sync`, no venv+pip."""
+        from tools import verify as v
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "pyproject.toml", "[project]\nname='x'\n")
+            _write(root / "uv.lock", "version = 1\n")
+            with patch.object(v, "_run_command", return_value="[PASSED] uv sync ok") as m:
+                res = v._run_python_install(root)
+            assert "uv sync" in res
+            m.assert_called_once_with(str(root), ["uv", "sync"])
+
     def test_go_commands(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -339,3 +364,20 @@ def test_run_npm_script_rejects_undeclared_script(tmp_path):
     result = v.run_npm_script.invoke({"path": str(tmp_path), "script": "rm -rf /"})
     assert "No 'rm -rf /' script" in result
     assert "dev" in result  # lista los disponibles
+
+
+def test_run_npm_script_rejects_non_node_stack(tmp_path):
+    """Corrección 4: en un repo Python/Go, run_npm_script debe RECHAZARSE de
+    forma firme (excepción GraphBubbleUp que corta el turno y redirige) y no
+    devolver un string ignorable. El modelo local ignoraba el string y repetía
+    la llamada con 'install'/'uv sync' en pr-coe-genai-spec-kitti (Python),
+    quemando el presupuesto sin instalar nada."""
+    from orchestration.tool_dedupe import ToolBudgetExceeded
+    from tools import verify as v
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='t'\n")
+    import pytest
+    with pytest.raises(ToolBudgetExceeded) as exc:
+        v.run_npm_script.invoke({"path": str(tmp_path), "script": "uv sync --all-extras"})
+    assert "solo funciona en repos NODE" in str(exc.value)
+    assert "PYTHON" in str(exc.value)
+    assert "run_install" in str(exc.value)

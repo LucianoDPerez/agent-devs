@@ -120,6 +120,26 @@ def _python_has_build_system(root: Path) -> bool:
     return "[build-system]" in text
 
 
+def _python_uses_uv(root: Path) -> bool:
+    """True si el proyecto Python se gestiona con uv (uv.lock presente).
+
+    Los proyectos modernos con uv (pyproject.toml + uv.lock) NO se pueden
+    verificar con `pytest`/`ruff` planos del PATH — sus deps viven en el
+    entorno uv. El harness fallaba E2E real: pr-coe-genai-spec-kitti usa uv y
+    el agente no lograba verificar porque run_tests corría `pytest` plano (sin
+    deps) → loop infinito. Si hay uv.lock, usamos `uv run` / `uv sync`.
+    """
+    if (root / "uv.lock").is_file():
+        return True
+    # También aceptar pyproject.toml con sección [tool.uv] o dependency de uv
+    pyproject = root / "pyproject.toml"
+    if pyproject.is_file():
+        text = pyproject.read_text(encoding="utf-8", errors="replace")
+        if "[tool.uv]" in text:
+            return True
+    return False
+
+
 def _java_build_tool(root: Path) -> str | None:
     """Detecta el build tool de un proyecto Java/Gradle/Maven."""
     if (root / "build.gradle").is_file() or (root / "build.gradle.kts").is_file():
@@ -194,15 +214,16 @@ def _resolve_command(root: Path, action: str) -> list[str] | str:
             return mvn_cmds[action]
 
     # python
+    uv_py = _python_uses_uv(root)
     if action == "lint":
         if _python_has_ruff(root):
-            return ["ruff", "check", "."]
+            return ["uv", "run", "ruff", "check", "."] if uv_py else ["ruff", "check", "."]
         return "No ruff configuration or dependency found for Python linting"
     if action == "test":
-        return ["pytest"]
+        return ["uv", "run", "pytest"] if uv_py else ["pytest"]
     if action == "build":
         if _python_has_build_system(root):
-            return ["python", "-m", "build"]
+            return ["uv", "build"] if uv_py else ["python", "-m", "build"]
         return "No [build-system] in pyproject.toml — build not configured"
     return f"Unknown action: {action}"
 
@@ -265,6 +286,12 @@ def _run_node_install(root: Path) -> str:
 
 
 def _run_python_install(root: Path) -> str:
+    if _python_uses_uv(root):
+        # Proyecto con uv: uv sync crea/actualiza el .venv desde uv.lock y
+        # resuelve todas las deps. Mucho más robusto que venv+pip para estos
+        # proyectos (E2E real: el harness corría pip -e . y el agente no
+        # lograba instalar, entrando en loop de verificación fallida).
+        return _run_command(str(root), ["uv", "sync"])
     venv = root / ".venv"
     if not venv.is_dir():
         return _run_command(str(root), ["python3", "-m", "venv", ".venv"])
@@ -382,6 +409,28 @@ def run_npm_script(path: str, script: str) -> str:
         return error
 
     root = Path(path)
+    stack = _detect_stack(root)
+    if stack is not None and stack != "node":
+        # Este repo NO es Node: run_npm_script solo sirve para scripts declarados
+        # en package.json. Devolver un string NO basta — el modelo local ignora
+        # los mensajes de las tools y repite la misma llamada (E2E real: llamó
+        # run_npm_script con "install" dos veces en un repo Python, quemando el
+        # presupuesto). Lanzamos ToolBudgetExceeded (GraphBubbleUp): ToolNode lo
+        # RE-LANZA, session.py lo captura y reintenta con un agente write-only
+        # que NO tiene run_npm_script — el modelo ya no puede volver a llamarlo
+        # y queda forzado a run_install/run_lint/run_tests.
+        hint = {
+            "python": "run_install(path=...) / run_lint / run_tests (pip/uv/pytest)",
+            "go": "run_install(path=...) / run_lint / run_tests / run_build (go mod/vet/test)",
+            "java": "run_install(path=...) / run_lint / run_tests / run_build (gradle/maven)",
+        }.get(stack, "run_install / run_lint / run_tests")
+        from orchestration.tool_dedupe import ToolBudgetExceeded
+        raise ToolBudgetExceeded(
+            f"⛔ run_npm_script solo funciona en repos NODE (con package.json). "
+            f"Este proyecto se detectó como {stack.upper()}. "
+            f"Usá {hint} en su lugar."
+        )
+
     resolved = _node_script(root, script)
     if isinstance(resolved, str):
         pkg = _read_package_json(root)
