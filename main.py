@@ -307,6 +307,58 @@ def _llama_server_alive(timeout: float = 2.0) -> tuple[bool, str]:
     return False, base
 
 
+def _locate_install_repo() -> Path | None:
+    """Repo del cual esta instalación corre.
+
+    El shim global ejecuta <install>/.venv/bin/agent-devs → sys.prefix ES el
+    venv de la instalación y su padre el repo. Fallback: cwd si es un checkout
+    del proyecto (modo dev).
+    """
+    candidates = [Path(sys.prefix).parent]
+    candidates.append(Path.cwd())
+    for repo in candidates:
+        if (repo / ".git").exists() and (repo / "pyproject.toml").exists():
+            return repo
+    return None
+
+
+def run_update() -> int:
+    """Actualiza esta instalación: git pull --ff-only + pip install -e ."""
+    import subprocess as sp
+
+    repo = _locate_install_repo()
+    if repo is None:
+        print("❌ No encontré la instalación (ni venv ni cwd con pyproject.toml).")
+        print("   Re-corré el one-liner de instalación desde la carpeta que quieras.")
+        return 1
+
+    def git(*args):
+        return sp.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
+
+    head_antes = git("rev-parse", "--short", "HEAD").stdout.strip()
+    print(f"🔄 Actualizando AgentDevs en {repo} ({head_antes})…")
+
+    r = git("pull", "--ff-only", "-q")
+    if r.returncode != 0:
+        print(f"❌ git pull falló: {(r.stderr or r.stdout).strip()}")
+        print(f"   Si tocaste código en esa copia: git -C {repo} stash && repetí --update")
+        return 1
+
+    head_despues = git("rev-parse", "--short", "HEAD").stdout.strip()
+    if head_antes == head_despues:
+        print(f"✅ Ya estabas en la última versión ({head_despues}). Nada para instalar.")
+        return 0
+    print(f"⬆️  {head_antes} → {head_despues}")
+
+    print("🔧 Refrescando instalación editable (+ deps nuevas si las hubo)…")
+    r = sp.run([sys.executable, "-m", "pip", "install", "-q", "-e", str(repo)])
+    if r.returncode != 0:
+        print("❌ pip install -e . falló — revisá el output de pip arriba.")
+        return 1
+    print("✅ Actualizado. Corré agent-devs --doctor si querés verificar el entorno.")
+    return 0
+
+
 def run_doctor() -> int:
     """Verifica el entorno completo e instala de a uno los faltantes.
 
@@ -443,10 +495,14 @@ def main():
     parser.add_argument("--list", action="store_true", help="Lista los análisis guardados")
     parser.add_argument("--doctor", action="store_true",
                         help="Verifica el entorno (deps, git, MCP, llama-server) e instala lo que falte")
+    parser.add_argument("--update", action="store_true",
+                        help="Actualiza esta instalación: git pull + reinstall editable")
     args = parser.parse_args()
 
     if args.doctor:
         return run_doctor()
+    if args.update:
+        return run_update()
     if args.list:
         do_list()
         return

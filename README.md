@@ -48,6 +48,16 @@ El instalador se encarga de todo:
 3. Instala [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) si falta (macOS/Linux).
 4. Corre **`agent-devs doctor`**: verifica Python, git, dependencias, MCP y llama-server; lo que puede, lo instala solo; lo que no, te dice exactamente cómo resolverlo.
 
+### Actualizar
+
+Cuando saquemos cambios nuevos:
+
+```bash
+agent-devs --update       # git pull + reinstall editable, muestra de qué commit a cuál
+```
+
+También podés re-correr el one-liner de instalación: detecta la instalación existente y actualiza en vez de duplicar.
+
 ## Empezar a usarlo
 
 **1. Levantá el modelo** (llama-server escuchando en `http://localhost:8080`, el default):
@@ -98,6 +108,7 @@ Además, cada rol recibe **solo el subset de tools que necesita**: el rol `analy
 agent-devs .              # abre el agente sobre el repo actual
 agent-devs /otro/repo     # abre sobre una ruta específica
 agent-devs --doctor       # verifica el entorno e instala lo que falte
+agent-devs --update       # actualiza esta instalación (git pull + reinstall)
 agent-devs --list         # lista repos ya analizados (cache)
 agent-devs --analyze REPO # pre-analiza un repo sin abrir sesión
 ```
