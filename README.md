@@ -94,7 +94,9 @@ AgentDevs no le tira un grep al LLM y que se arregle: las herramientas de explor
 
 | Tool | Qué devuelve en una llamada |
 |---|---|
-| `inspect_routes` | Todos los endpoints HTTP del proyecto: método, ruta y propósito. Escanea Next.js, Express, FastAPI, Flask, Go (chi/gin), Spring, PHP y .NET |
+| `inspect_routes` | Todos los endpoints HTTP del proyecto: método, ruta y propósito. Escanea Next.js, Express, FastAPI, FastAPI/Flask, Go (chi/gin), Spring, PHP y .NET |
+| `inspect_models` | Todos los modelos/tablas de datos: Prisma, SQLAlchemy, Django ORM, TypeORM, Mongoose, Rails — con relaciones y archivo |
+| `inspect_env` | Las variables de entorno que el proyecto necesita (lee solo `.env.example`, jamás el `.env` real) |
 | `trace_component` | Un componente completo: su código fuente + quién lo usa + la página que lo renderiza |
 | `search_code` | Búsqueda semántica sobre el knowledge graph del código (MCP) |
 | `run_install / run_lint / run_tests / run_build` | Verificación real según el stack detectado (npm, uv, gradle, maven…) |

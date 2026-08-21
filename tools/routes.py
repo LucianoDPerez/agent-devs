@@ -101,6 +101,19 @@ _RAILS_RE = re.compile(
 )
 _SYMFONY_METHODS_RE = re.compile(r"methods\s*:\s*\[([^\]]*)\]", re.IGNORECASE)
 
+# React Router declarativo: <Route path="/users" element={<ListUsers />} />
+_REACT_ROUTE_RE = re.compile(
+    r"<Route\b[^>]*?path=[\"']([^\"']+)[\"'][^>]*?element=\{<?\s*(\w+)",
+    re.IGNORECASE,
+)
+
+
+def _scan_react_router(text: str) -> list[str]:
+    out = []
+    for path_, element in _REACT_ROUTE_RE.findall(text):
+        out.append(f"{'ROUTE':7} {path_} — {element}")
+    return out
+
 
 def _nextjs_route(rel: str) -> str:
     segs = rel.split("/")
@@ -329,7 +342,12 @@ def inspect_routes(path: str) -> str:
 
         if p.name == "route.ts":
             collect("NEXT.JS (App Router)", _with_file(_scan_nextjs(p, rel)))
-        elif p.suffix in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"):
+        elif p.suffix in (".tsx", ".jsx"):
+            collect("EXPRESS / FASTIFY / NESTJS", _with_file(_scan_js(p)))
+            rr = _scan_react_router(_read_text(p))
+            if rr:
+                collect("REACT ROUTER", _with_file(rr))
+        elif p.suffix in (".ts", ".js", ".mjs", ".cjs"):
             collect("EXPRESS / FASTIFY / NESTJS", _with_file(_scan_js(p)))
         elif p.suffix == ".py":
             collect("PYTHON (FastAPI/Flask/Django)", _with_file(_scan_python(_read_text(p))))

@@ -11,6 +11,8 @@ REGLAS STRICTAS:
 4b. Para modelos/tablas de datos, usá inspect_models(path) EN UNA llamada: te da
    modelo, tabla, cantidad de campos, relaciones y el archivo donde vive.
    Detalle de columnas: read_file sobre ese archivo.
+4c. Variables de entorno para correr el proyecto: inspect_env(path) EN UNA
+   llamada. Solo lee archivos de ejemplo (.env.example etc), nunca el .env real.
 5. Si el análisis cacheado existe, NO lo re-explores. Andá directo a la tarea.
 6. Nunca listés directorios completos. Acotá el path (ej: app/api/).
 7. Si una tool dice "does not exist", aceptalo y seguí. No intentes variantes.

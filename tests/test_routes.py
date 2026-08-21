@@ -216,3 +216,52 @@ app.MapPost("/users", () => "created");
         result = inspect_routes.invoke({"path": repo})
         assert "GET     /users" in result
         assert "POST    /users" in result
+
+
+class TestFileAttribution:
+    """Cada línea incluye el archivo fuente: '¿qué controller tiene X?'
+    se responde con ESTA llamada (los modelos chicos quemaban el presupuesto
+    de exploración re-buscando lo que ya estaba en pantalla)."""
+
+    def test_express_line_includes_file(self):
+        repo = _create_repo({
+            "src/routes/dashboardRoutes.ts": """
+import { Router } from "express";
+const router = Router();
+router.get("/dashboard", stats);
+export default router;
+""",
+        })
+        result = inspect_routes.invoke({"path": repo})
+        assert "GET     /dashboard" in result
+        assert "(src/routes/dashboardRoutes.ts)" in result
+
+    def test_python_line_includes_file(self):
+        repo = _create_repo({
+            "backend/api/users.py": """
+from fastapi import APIRouter
+router = APIRouter()
+
+@router.get("/users")
+def list_users():
+    return []
+""",
+        })
+        result = inspect_routes.invoke({"path": repo})
+        assert "GET     /users" in result
+        assert "(backend/api/users.py)" in result
+
+    def test_java_line_includes_file(self):
+        repo = _create_repo({
+            "src/SearchController.java": """
+@RestController
+@RequestMapping("/api/search")
+public class SearchController {
+    @GetMapping("/users")
+    public List<User> searchUsers() { }
+}
+""",
+        })
+        result = inspect_routes.invoke({"path": repo})
+        assert "GET     /api/search/users" in result
+        assert "(src/SearchController.java)" in result
