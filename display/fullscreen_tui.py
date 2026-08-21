@@ -231,6 +231,9 @@ class FullscreenTUI(App):
         self._pane_text: Text = Text()   # acumulado único del pane
         self._exit_armed = False         # confirmación de salida (ctl+c ×2)
         self._last_selected_text = ""    # cache del drag-selection (⌘C)
+        # Modelo real cargado en llama-server: se detecta lazy al primer
+        # render del header (fallback a LLM_MODEL_NAME si no hay server).
+        self._model_name: str | None = None
         # Render de markdown por segmento (marcadores de display.console)
         self._md_active = False
         self._md_raw = ""
@@ -272,6 +275,12 @@ class FullscreenTUI(App):
         from config import (
             LLM_BASE_URL, LLM_MAX_TOKENS, LLM_MODEL_NAME, LLM_TEMPERATURE,
         )
+        from llm_wrapper import detect_server_model
+
+        if self._model_name is None:
+            # Modelo REAL cargado en llama-server (el config puede quedar
+            # viejo si el usuario carga otro modelo). Fail-open a config.
+            self._model_name = detect_server_model(LLM_BASE_URL) or LLM_MODEL_NAME
         try:
             st = self.status_provider() or {}
         except Exception:
@@ -284,7 +293,7 @@ class FullscreenTUI(App):
             ("   📁 ", "cyan bold"), (repo, ""), ("  🌿 ", "green bold"), (branch, ""),
         ]
         right = [
-            (" ⚡ ", "yellow bold"), (LLM_MODEL_NAME, ""),
+            (" ⚡ ", "yellow bold"), (self._model_name, ""),
             (" | Temp: ", "dim"), (f"{LLM_TEMPERATURE}", ""),
             (" | Max: ", "dim"), (f"{LLM_MAX_TOKENS}", ""),
             (" | 🛠️  ", "yellow bold"), (f"{tools}", ""),

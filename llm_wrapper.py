@@ -387,3 +387,41 @@ class LocalLLM(BaseChatModel):
                         }],
                     )
                 )
+
+
+# ── Detección del modelo real cargado en llama-server ──────────────────────
+
+
+def pretty_model_id(raw: str) -> str:
+    """Normaliza el id/path que reporta llama-server a un nombre legible.
+
+    '/models/qwen3.6-35b-a3b-Q4_K_M.gguf' → 'qwen3.6-35b-a3b-Q4_K_M'.
+    Si ya es un alias limpio, lo deja intacto.
+    """
+    name = (raw or "").strip().rstrip("/").split("/")[-1]
+    low = name.lower()
+    for ext in (".gguf", ".bin", ".safetensors"):
+        if low.endswith(ext):
+            name = name[: -len(ext)]
+            break
+    return name
+
+
+def detect_server_model(base_url: str, timeout: float = 1.5) -> str | None:
+    """Modelo realmente cargado en el server (GET /v1/models), o None.
+
+    El header de la TUI muestra ESTE valor y no el LLM_MODEL_NAME del config:
+    el config puede quedar viejo si el usuario carga otro modelo en
+    llama-server. Fail-open: si no hay server, None y el caller hace fallback.
+    """
+    import json
+    import urllib.request
+
+    base = base_url.split("/v1")[0]
+    try:
+        with urllib.request.urlopen(base + "/v1/models", timeout=timeout) as resp:
+            data = json.load(resp)
+        ids = [m.get("id") for m in data.get("data", []) if m.get("id")]
+        return pretty_model_id(ids[0]) if ids else None
+    except Exception:
+        return None
