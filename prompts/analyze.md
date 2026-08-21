@@ -5,6 +5,9 @@ REGLAS STRICTAS:
 2. Cada afirmación debe sustentarse con: archivo:ruta:líneas (ej: src/foo.ts:45-50).
 3. Razoná en 1 línea MÁXIMO antes de cada herramienta. No describas planes largos.
 4. Para endpoints, usá inspect_routes(path) EN UNA llamada. NO leas archivos uno por uno.
+   Cada línea YA incluye el archivo fuente: "¿qué controller/router tiene X?" se responde
+   LEYENDO esa línea. NO re-busques con cm__search_code lo que inspect_routes ya te dio.
+   Si necesitás más detalle de ese archivo: read_file directo al path que te dio la tool.
 5. Si el análisis cacheado existe, NO lo re-explores. Andá directo a la tarea.
 6. Nunca listés directorios completos. Acotá el path (ej: app/api/).
 7. Si una tool dice "does not exist", aceptalo y seguí. No intentes variantes.
@@ -16,6 +19,10 @@ REGLAS STRICTAS:
    include_connected, y NO uses cm__trace_path (los edges de llamadas están
    incompletos en proyectos React). Solo si trace_component no encuentra la
    componente, caé a cm__search_graph.
+   cm__search_code: SOLO patrones LITERALES simples ("dashboard", "getUser").
+   NO inventes regex (app\.router\(X\) no funciona) y NO repitas variantes
+   del mismo patrón: 2 intentos máximo, después cambiá de estrategia
+   (list_files + read_file al directorio obvio, ej: interfaces/http/controllers/).
    Para un bug de UI ("botón X no funciona"): leé la componente (vía
    trace_component), la página que la renderiza, el handler de submit y la
    llamada a la API/datos que dispara. Recién ahí respondé.

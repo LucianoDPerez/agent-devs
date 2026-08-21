@@ -286,7 +286,9 @@ def inspect_routes(path: str) -> str:
     Go (net/http, gin, echo, chi, fiber), Rust (axum, actix, rocket),
     Java/Kotlin (Spring Boot + WebFlux annotation-based & functional, JAX-RS),
     PHP (Laravel, Symfony, Slim), C# (ASP.NET Core) and Ruby (Rails, Sinatra).
-    Returns one line per endpoint: METHOD /route — purpose (when available).
+    Returns one line per endpoint: METHOD /route — purpose (when available)
+    (source file relative to the repo root). The file attribution answers
+    "which controller/router contains X?" directly from this single call.
     Usage: inspect_routes(path="/Users/me/repo")
     """
     root = Path(path)
@@ -318,24 +320,31 @@ def inspect_routes(path: str) -> str:
             continue
         rel = p.relative_to(root).as_posix()
 
+        # Atribución de archivo por endpoint: la pregunta "¿qué controller
+        # tiene X?" debe responderse con ESTA llamada, no con búsquedas
+        # adicionales (los modelos chicos quemaban el presupuesto explorando
+        # después de que la info ya estaba en pantalla).
+        def _with_file(entries: list[str], _rel: str = rel) -> list[str]:
+            return [f"{e} ({_rel})" for e in entries]
+
         if p.name == "route.ts":
-            collect("NEXT.JS (App Router)", _scan_nextjs(p, rel))
+            collect("NEXT.JS (App Router)", _with_file(_scan_nextjs(p, rel)))
         elif p.suffix in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"):
-            collect("EXPRESS / FASTIFY / NESTJS", _scan_js(p))
+            collect("EXPRESS / FASTIFY / NESTJS", _with_file(_scan_js(p)))
         elif p.suffix == ".py":
-            collect("PYTHON (FastAPI/Flask/Django)", _scan_python(_read_text(p)))
+            collect("PYTHON (FastAPI/Flask/Django)", _with_file(_scan_python(_read_text(p))))
         elif p.suffix == ".go":
-            collect("GO (net/http / gin / echo / chi / fiber)", _scan_go(_read_text(p)))
+            collect("GO (net/http / gin / echo / chi / fiber)", _with_file(_scan_go(_read_text(p))))
         elif p.suffix == ".rs":
-            collect("RUST (axum / actix / rocket)", _scan_rust(_read_text(p)))
+            collect("RUST (axum / actix / rocket)", _with_file(_scan_rust(_read_text(p))))
         elif p.suffix in (".java", ".kt"):
-            collect("JAVA / KOTLIN (Spring / JAX-RS)", _scan_java(_read_text(p)))
+            collect("JAVA / KOTLIN (Spring / JAX-RS)", _with_file(_scan_java(_read_text(p))))
         elif p.suffix == ".php":
-            collect("PHP (Laravel / Symfony / Slim)", _scan_php(_read_text(p)))
+            collect("PHP (Laravel / Symfony / Slim)", _with_file(_scan_php(_read_text(p))))
         elif p.suffix == ".cs":
-            collect("C# (ASP.NET Core)", _scan_csharp(_read_text(p)))
+            collect("C# (ASP.NET Core)", _with_file(_scan_csharp(_read_text(p))))
         elif p.suffix == ".rb":
-            collect("RUBY (Rails / Sinatra)", _scan_ruby(_read_text(p)))
+            collect("RUBY (Rails / Sinatra)", _with_file(_scan_ruby(_read_text(p))))
 
     parts = []
     for label, entries in groups.items():
