@@ -47,6 +47,12 @@ _CHAT_LEADING = [
     "chau", "adiós", "adios", "nos vemos",
 ]
 
+# (sin|no) + verbo de acción → el verbo NO cuenta como intención
+_NEGATED_ACTION_RE = re.compile(
+    r"\b(?:sin|no)\s+(?:modific\w*|edit\w*|implement\w*|escrib\w*|cre\w*|"
+    r"arregl\w*|correg\w*|aplic\w*|toc\w*|code\w*)\b"
+)
+
 
 def _extract_command_prefix(text: str, max_chars: int = 120) -> str:
     """Extract the user's command from the start of the message.
@@ -65,6 +71,15 @@ def _extract_command_prefix(text: str, max_chars: int = 120) -> str:
 def classify_intent(_llm, user_message: str) -> Intent:
     text = user_message.strip().lower()
     prefix = _extract_command_prefix(user_message)
+
+    # NEGRACIONES DE ACCIÓN: "SIN modificar nada", "no implementes aún" — el
+    # verbo está negado y la intención real es ANÁLISIS/PLAN. E2E real: "decime
+    # qué archivo habría que cambiar SIN modificar nada" → 'modificar' lo
+    # mandaba a EXECUTE, que exigía escritura (require_write) y castigó con
+    # reintentos un turno que por definición no escribe (45 min perdidos).
+    # Neutralizamos el verbo negado para todo el matching posterior.
+    text = _NEGATED_ACTION_RE.sub(" ", text)
+    prefix = _NEGATED_ACTION_RE.sub(" ", prefix)
 
     # CORRECCIÓN POST-REVIEW: verbo de acción + mención de review/correcciones
     # → EXECUTE (aplicar los hallazgos del review). Debe ir ANTES del check de
