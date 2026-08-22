@@ -1,0 +1,71 @@
+╭───────────────────────────────── AgentDevs ──────────────────────────────────╮
+│ 🔌 LLM: http://localhost:8080/v1                                             │
+│ 📁 Repo: /Users/luchop/PROYECTOS IA/Medicos  🌿 new-frontend                 │
+│ ⚡ Modelo: qwen3.6-35b-a3b | Temp: 0.2 | Max: 3584                           │
+│ 🛠️  Tools: 23 locales + 14 graph (cm__*)                                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+⚠️  El repo tiene 14 archivo(s) modificado(s) y 8 sin trackear SIN COMMITEAR. 
+Los lint/tests pueden fallar por daño pre-existente (ajeno a tu tarea); si es 
+así, el agente puede gastar pasos de más.
+
+📚 Análisis cacheado encontrado. No se re-explora.
+💡 Decime qué querés hacer (implementá, planificá, revisá, analizá…).
+
+› 💭 Razonando…
+
+────────────────────────────────────────
+
+  🔧 cm__list_projects{}
+  🔧 inspect_routes{"path":"/Users/luchop/PROYECTOS IA/Medicos"}
+  🔧 trace_component{"component":"pacientesRoutes","project":"Users-luchop-PROYECTOS-IA-Medicos"}
+  🔧 trace_component{"component":"PacienteController","project":"Users-luchop-PROYECTOS-IA-Medicos"}
+  🔧 trace_component{"component":"ListPacientes","project":"Users-luchop-PROYECTOS-IA-Medicos"}
+  🔧 trace_component{"component":"PrismaPacienteRepository","project":"Users-luchop-PROYECTOS-IA-Medicos"}
+
+
+⚠️  Exploración agotada en 🔍 Análisis: Exploración agotada. NO uses más tools 
+de búsqueda (cm__search_graph/cm__trace_path). Respondé TU ANÁLISIS/PLAN AHORA 
+con lo que ya leíste. — Reintentando sin tools de búsqueda (responde con lo ya 
+leído)...
+💭 Razonando…
+
+────────────────────────────────────────
+
+
+
+⚠️  El modelo gastó 15361 chars razonando sin actuar — Reintentando sin tools de
+búsqueda (responde con lo ya leído)...
+💭 Razonando…
+
+────────────────────────────────────────
+
+
+
+
+⚠️  El modelo gastó todo el output (16202 chars) en razonamiento sin producir acción. Reinicia con /new o reduce el prompt.
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 1500.8s | 19,912 tokens (in 10,657 + out 9,255, 10,006          │
+│ reutilizados)                                                                │
+│ 📊 Sesión: 1500.8s | 19,912 tokens (in 10,657 + out 9,255)                   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› 
+👋 ¡Hasta luego!
+
+=== STDERR ===
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384

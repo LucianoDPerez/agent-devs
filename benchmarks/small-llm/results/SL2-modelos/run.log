@@ -1,0 +1,92 @@
+╭───────────────────────────────── AgentDevs ──────────────────────────────────╮
+│ 🔌 LLM: http://localhost:8080/v1                                             │
+│ 📁 Repo: /Users/luchop/PROYECTOS IA/Medicos  🌿 new-frontend                 │
+│ ⚡ Modelo: qwen3.6-35b-a3b | Temp: 0.2 | Max: 3584                           │
+│ 🛠️  Tools: 23 locales + 14 graph (cm__*)                                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+⚠️  El repo tiene 14 archivo(s) modificado(s) y 8 sin trackear SIN COMMITEAR. 
+Los lint/tests pueden fallar por daño pre-existente (ajeno a tu tarea); si es 
+así, el agente puede gastar pasos de más.
+
+📚 Análisis cacheado encontrado. No se re-explora.
+💡 Decime qué querés hacer (implementá, planificá, revisá, analizá…).
+
+› 💭 Razonando…
+
+────────────────────────────────────────
+
+  🔧 inspect_models{"path":"/Users/luchop/PROYECTOS IA/Medicos"}
+  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/prisma/schema.prisma"}
+## Modelos de Datos del Proyecto
+
+Los modelos de datos están definidos en **`backend/prisma/schema.prisma`**. Son tres entidades principales:
+
+### 1. **Paciente** (13 campos)
+- `id` (Int, primary key)
+- `nombre` (String, requerido)
+- `telefono` (String?)
+- `email` (String?)
+- `documento` (String, único)
+- `edadMenarquia` (Int?)
+- `paridad` (String?)
+- `ultimaMenstruacion` (DateTime?)
+- `fotoTarjetaUrl` (String?)
+- `createdAt` (DateTime)
+- `updatedAt` (DateTime)
+
+### 2. **Consulta** (10 campos)
+- `id` (Int, primary key)
+- `pacienteId` (Int, foreign key → Paciente.id)
+- `fecha` (DateTime)
+- `sintomas` (String, requerido)
+- `diagnostico` (String?)
+- `recomendaciones` (String?)
+- `adjuntos` (String?)
+- `createdAt` (DateTime)
+- `updatedAt` (DateTime)
+
+### 3. **Migracion** (14 campos)
+- `id` (String, primary key)
+- `nombre` (String, requerido)
+- `documento` (String)
+- `telefono` (String?)
+- `email` (String?)
+- `edadMenarquia` (Int?)
+- `paridad` (String?)
+- `ultimaMenstruacion` (DateTime?)
+- `fotoUrl` (String, requerido)
+- `status` (String, default "reviewing")
+- `pacienteId` (Int?, optional foreign key → Paciente.id)
+- `createdAt` (DateTime)
+- `updatedAt` (DateTime)
+
+## Relaciones entre modelos
+
+| Relación | Tipo | Descripción |
+|----------|------|-------------|
+| **Paciente → Consulta** | One-to-Many | Un paciente puede tener múltiples consultas |
+| **Paciente → Migracion** | One-to-Many (inversa) | Un paciente puede tener múltiples migraciones |
+| **Consulta → Paciente** | One-to-Many | Una consulta pertenece a un único paciente |
+| **Migracion → Paciente** | Optional One-to-Many | Una migración puede estar asociada a un paciente (opcional) |
+
+## Estructura de datos clave
+
+- **Paciente**: Entidad principal de usuarios, con información demográfica y clínica.
+- **Consulta**: Registro de citas médicas con síntomas, diagnóstico y recomendaciones.
+- **Migracion**: Proceso de migración de datos (ej: desde un sistema legacy), con estado de procesamiento.
+
+Todos los modelos usan **SQLite** como datasource y tienen timestamps automáticos (`createdAt`, `updatedAt`).
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 258.6s | 8,863 tokens (in 7,796 + out 1,067, 7,227              │
+│ reutilizados)                                                                │
+│ 📊 Sesión: 258.6s | 8,863 tokens (in 7,796 + out 1,067)                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› 
+👋 ¡Hasta luego!
+
+=== STDERR ===
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
