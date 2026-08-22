@@ -57,7 +57,7 @@ def _ensure_analysis(llm: LocalLLM, repo_path: str, status: str | None = None) -
     if status:
         print(status, flush=True)
     try:
-        result = run_analysis(repo_path, llm, on_token=lambda tok: print(tok, end="", flush=True), timeout=180)
+        result = run_analysis(repo_path, llm, on_token=lambda tok: print(tok, end="", flush=True), timeout=420)
     except FileNotFoundError as e:
         print(f"❌ {e}")
         sys.exit(1)

@@ -29,6 +29,44 @@ VERIFY_TIMEOUT = 300
 
 DEFAULT_BANK = "medicos"
 BANKS_DIR = ROOT / "benchmarks"
+MODEL_LABEL = "unknown"
+
+# ── Métricas por caso (4B vs 9B study) ─────────────────────────────────────
+_ROLE_RE = re.compile(r"\[(📋 Planificación|🔍 Análisis|🛠️\s*Ejecución|🔎\s*Review)\]")
+_TOOL_RE = re.compile(r"🔧\s*(\w+)")
+_SESSION_RE = re.compile(
+    r"Sesión:\s*([\d.,]+)s\s*\|\s*([\d.,]+)\s*tokens?\s*"
+    r"\(in\s+([\d,]+)\s*\+\s*out\s+([\d,]+)",
+    re.IGNORECASE,
+)
+
+
+def _num(s: str) -> int:
+    return int((s or "0").replace(",", "").replace(".", "") or 0)
+
+
+def extract_metrics(log_text: str) -> dict:
+    """Métricas objetivas de un run.log del agente.
+
+    role_routed, tool_calls (total + por nombre), retries, timeouts de
+    razonamiento, budget agotado y tokens/tiempo de sesión (del resumen final).
+    """
+    from collections import Counter
+
+    tools = _TOOL_RE.findall(log_text)
+    role = _ROLE_RE.search(log_text)
+    sess = _SESSION_RE.search(log_text)
+    return {
+        "role_routed": role.group(1).strip() if role else None,
+        "tool_calls": len(tools),
+        "tools_by_name": dict(Counter(tools)),
+        "retries": log_text.count("Reintentando"),
+        "reasoning_timeouts": log_text.count("sin producir output"),
+        "budget_exhausted": "agotado" in log_text.lower(),
+        "session_secs": _num(sess.group(1)) if sess else None,
+        "tokens_in": _num(sess.group(3)) if sess else None,
+        "tokens_out": _num(sess.group(4)) if sess else None,
+    }
 
 
 def load_tasks() -> list[dict]:
@@ -195,6 +233,8 @@ def run_task(task: dict, force: bool = False) -> dict:
         "id": tid,
         "nivel": task["nivel"],
         "titulo": task["titulo"],
+        "rol_esperado": task.get("rol"),
+        "model": MODEL_LABEL,
         "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     print(f"\n{'=' * 70}\n▶ {tid} [{task['nivel']}] {task['titulo']}\n{'=' * 70}")
@@ -223,12 +263,20 @@ def run_task(task: dict, force: bool = False) -> dict:
         record["stdout_tail"] = proc.stdout[-4000:]
         record["stderr_tail"] = proc.stderr[-2000:]
         (out_dir / "run.log").write_text(proc.stdout + "\n=== STDERR ===\n" + proc.stderr, encoding="utf-8")
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
+        # En timeout, subprocess mata el proceso: lo que alcanzó a emitir vive
+        # en e.stdout/e.stderr — capturarlo para no perder la evidencia.
         record["exit_code"] = "TIMEOUT(2400s)"
-        record["stdout_tail"] = ""
+        partial_out = (e.stdout or b"").decode("utf-8", errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+        record["stdout_tail"] = partial_out[-4000:]
         record["stderr_tail"] = ""
-        (out_dir / "run.log").write_text("TIMEOUT: el turno del agente excedió 2400s", encoding="utf-8")
+        (out_dir / "run.log").write_text(partial_out + "\n=== TIMEOUT 2400s ===\n", encoding="utf-8")
     record["duration_s"] = round(time.monotonic() - started, 1)
+    record["metrics"] = extract_metrics(record.get("stdout_tail") or "")
+    if record.get("rol_esperado") and record["metrics"]["role_routed"]:
+        esperado = {"analyze": "Análisis", "plan": "Planificación",
+                    "execute": "Ejecución", "review": "Review"}.get(record["rol_esperado"], "")
+        record["metrics"]["role_match"] = esperado.lower() in record["metrics"]["role_routed"].lower()
 
     record["git_post"] = git_capture(REPO, "status", "--short")
     diff_stat = git_capture(REPO, "diff", "--stat")
@@ -325,14 +373,26 @@ def main():
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--force", action="store_true")
-    ap.add_argument("--bank", default=None,
-                    help="Banco de tareas: 'medicos' (default, compat) o subcarpeta de benchmarks/")
+    ap.add_argument("--bank", default=None,                    help="Banco de tareas: 'medicos' (default, compat) o subcarpeta de benchmarks/")
     ap.add_argument("--step", metavar="PROMPT", default=None,
                     help="Corre UN turno libre del agente con el prompt dado (micro-paso)")
     ap.add_argument("--step-label", default="step", help="Nombre del micro-paso")
+    ap.add_argument("--model", default=None,
+                    help="Etiqueta del modelo para los resultados (default: detecta del server)")
     args = ap.parse_args()
 
     resolve_bank(args.bank)
+
+    global MODEL_LABEL
+    if args.model:
+        MODEL_LABEL = args.model
+    elif MODEL_LABEL == "unknown":
+        try:
+            from llm_wrapper import detect_server_model
+            from config import LLM_BASE_URL
+            MODEL_LABEL = detect_server_model(LLM_BASE_URL) or "unknown"
+        except Exception:
+            pass
 
     if args.step:
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)

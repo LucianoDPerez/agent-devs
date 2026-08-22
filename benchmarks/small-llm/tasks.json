@@ -1,0 +1,55 @@
+{
+  "repo": "/Users/luchop/PROYECTOS IA/Medicos",
+  "objetivo": "Comparativa de modelos chicos (4B vs 9B) en tareas reales mixtas sobre Medicos: analyze / plan / execute / review.",
+  "contexto": "Mismo repo, mismas tools, mismo verification pipeline; solo cambia el modelo servido por llama.cpp en :8080. Métricas: éxito (criterio), tokens, tool calls, retries, tiempo.",
+  "tasks": [
+    {
+      "id": "SL1-endpoints", "rol": "analyze", "nivel": "junior",
+      "titulo": "Endpoints del backend agrupados por controller con archivos",
+      "prompt": "¿Qué endpoints expone el backend y en qué archivos viven? Listá agrupado por controller.",
+      "criterio": []
+    },
+    {
+      "id": "SL2-modelos", "rol": "analyze", "nivel": "junior",
+      "titulo": "Modelos de datos, relaciones y ubicación",
+      "prompt": "¿Qué modelos de datos existen en el proyecto, cómo se relacionan entre sí y dónde están definidos?",
+      "criterio": []
+    },
+    {
+      "id": "SL3-env", "rol": "analyze", "nivel": "junior",
+      "titulo": "Variables de entorno necesarias para correr",
+      "prompt": "¿Qué variables de entorno necesito configurar para correr el proyecto completo (backend y frontend)?",
+      "criterio": []
+    },
+    {
+      "id": "SL4-debug500", "rol": "analyze", "nivel": "senior",
+      "titulo": "Causa raíz del 500 en búsqueda de pacientes (sin modificar)",
+      "prompt": "La búsqueda de pacientes por nombre devuelve error 500 desde el frontend. Analizá la causa raíz SIN modificar nada y decime exactamente qué archivo(s) habría que cambiar y por qué.",
+      "criterio": []
+    },
+    {
+      "id": "SL5-plan-softdelete", "rol": "plan", "nivel": "medio",
+      "titulo": "Plan de soft-delete en Pacientes sin implementar",
+      "prompt": "Hacé un plan paso a paso para implementar soft-delete en Pacientes (campo deletedAt, filtrado en todas las queries, migración incluida). No implementes nada: solo el plan con archivos a tocar.",
+      "criterio": []
+    },
+    {
+      "id": "SL6-healthcheck", "rol": "execute", "nivel": "junior",
+      "titulo": "Crear script healthcheck.sh nuevo",
+      "prompt": "Creá el archivo backend/scripts/healthcheck.sh: script bash que haga curl -sf http://localhost:3000/api/health, imprima OK si responde y salga con código 1 si falla.",
+      "criterio": [
+        {"label": "existe healthcheck.sh", "cmd": "test -f backend/scripts/healthcheck.sh"},
+        {"label": "sintaxis bash válida", "cmd": "bash -n backend/scripts/healthcheck.sh"}
+      ]
+    },
+    {
+      "id": "SL7-slugify", "role": "execute", "rol": "execute", "nivel": "medio",
+      "titulo": "Crear util slug.ts con función pura exportada",
+      "prompt": "Creá backend/src/utils/slug.ts exportando la función slugify(text: string): string (lowercase, sin acentos, espacios a guiones) siguiendo el estilo TypeScript del proyecto.",
+      "criterio": [
+        {"label": "existe slug.ts", "cmd": "test -f backend/src/utils/slug.ts"},
+        {"label": "exporta slugify", "cmd": "grep -q 'export function slugify' backend/src/utils/slug.ts"}
+      ]
+    }
+  ]
+}

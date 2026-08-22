@@ -421,7 +421,9 @@ def detect_server_model(base_url: str, timeout: float = 1.5) -> str | None:
     try:
         with urllib.request.urlopen(base + "/v1/models", timeout=timeout) as resp:
             data = json.load(resp)
-        ids = [m.get("id") for m in data.get("data", []) if m.get("id")]
+        # llama-server moderno: {"models":[...]}; compat OpenAI: {"data":[...]}
+        items = data.get("data") or data.get("models") or []
+        ids = [m.get("id") or m.get("name") for m in items if (m.get("id") or m.get("name"))]
         return pretty_model_id(ids[0]) if ids else None
     except Exception:
         return None
