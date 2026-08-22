@@ -14,6 +14,7 @@ Uso:
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -26,10 +27,12 @@ TASKS_FILE = ROOT / "benchmarks" / "tasks.json"
 SUMMARY = RESULTS_DIR / "summary.jsonl"
 
 VERIFY_TIMEOUT = 300
+TURN_TIMEOUT = 2400  # override: --turn-timeout
 
 DEFAULT_BANK = "medicos"
 BANKS_DIR = ROOT / "benchmarks"
 MODEL_LABEL = "unknown"
+RESTORE_AFTER = False
 
 # ── Métricas por caso (4B vs 9B study) ─────────────────────────────────────
 _ROLE_RE = re.compile(r"\[(📋 Planificación|🔍 Análisis|🛠️\s*Ejecución|🔎\s*Review)\]")
@@ -241,6 +244,19 @@ def run_task(task: dict, force: bool = False) -> dict:
 
     record["git_pre"] = git_capture(REPO, "status", "--short")
 
+    # SNAPSHOT DE SEGURIDAD: contenido pre-tarea de todo archivo trackeado
+    # modificado + lista untracked. --restore-after vuelve a ESTE estado
+    # exacto (sin tocar HEAD ni el resto del working tree).
+    pre_dir = out_dir / "pre_snapshot"
+    dirty_pre = [ln[3:] for ln in record["git_pre"].splitlines() if ln.strip() and not ln.startswith("??")]
+    untracked_pre = {ln[3:] for ln in record["git_pre"].splitlines() if ln.startswith("??")}
+    for rel in dirty_pre:
+        src = Path(REPO) / rel
+        if src.is_file():
+            dst = pre_dir / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+
     # BASELINE: verificación del estado inicial ANTES de que el agente toque nada.
     # Permite distinguir fallos hereditarios (ya fallaban antes) de fallos del agente.
     baseline = run_criteria(REPO, task.get("criterio", []))
@@ -257,7 +273,7 @@ def run_task(task: dict, force: bool = False) -> dict:
     started = time.monotonic()
     try:
         proc = subprocess.run(
-            cmd, shell=True, cwd=ROOT, capture_output=True, text=True, timeout=2400,
+            cmd, shell=True, cwd=ROOT, capture_output=True, text=True, timeout=TURN_TIMEOUT,
         )
         record["exit_code"] = proc.returncode
         record["stdout_tail"] = proc.stdout[-4000:]
@@ -266,11 +282,11 @@ def run_task(task: dict, force: bool = False) -> dict:
     except subprocess.TimeoutExpired as e:
         # En timeout, subprocess mata el proceso: lo que alcanzó a emitir vive
         # en e.stdout/e.stderr — capturarlo para no perder la evidencia.
-        record["exit_code"] = "TIMEOUT(2400s)"
+        record["exit_code"] = f"TIMEOUT({TURN_TIMEOUT}s)"
         partial_out = (e.stdout or b"").decode("utf-8", errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
         record["stdout_tail"] = partial_out[-4000:]
         record["stderr_tail"] = ""
-        (out_dir / "run.log").write_text(partial_out + "\n=== TIMEOUT 2400s ===\n", encoding="utf-8")
+        (out_dir / "run.log").write_text(partial_out + f"\n=== TIMEOUT {TURN_TIMEOUT}s ===\n", encoding="utf-8")
     record["duration_s"] = round(time.monotonic() - started, 1)
     record["metrics"] = extract_metrics(record.get("stdout_tail") or "")
     if record.get("rol_esperado") and record["metrics"]["role_routed"]:
@@ -364,6 +380,26 @@ def run_task(task: dict, force: bool = False) -> dict:
         else:
             mark = "⏭️ heredado (mismo error que baseline)"
         print(f"   verify[{v['label']}]: exit={v['exit']} {mark}")
+    if RESTORE_AFTER:
+        restored = []
+        for rel in dirty_pre:
+            snap = pre_dir / rel
+            if snap.exists():
+                shutil.copy2(snap, Path(REPO) / rel)
+                restored.append(rel)
+        post_untracked = {
+            ln[3:] for ln in git_capture(REPO, "status", "--porcelain").splitlines()
+            if ln.startswith("??")
+        }
+        removed = []
+        for rel in sorted(post_untracked - untracked_pre):
+            f = Path(REPO) / rel
+            if f.is_file():
+                f.unlink()
+                removed.append(rel)
+        record["restored"] = {"tracked": restored, "untracked_removed": removed}
+        print(f"🧹 Working tree restaurado al estado pre-tarea ({len(restored)} tracked, {len(removed)} untracked).")
+
     return record
 
 
@@ -379,11 +415,26 @@ def main():
     ap.add_argument("--step-label", default="step", help="Nombre del micro-paso")
     ap.add_argument("--model", default=None,
                     help="Etiqueta del modelo para los resultados (default: detecta del server)")
+    ap.add_argument("--fresh-analysis", action="store_true",
+                    help="Limpia el análisis cacheado del repo antes de la corrida (regenera canónico)")
+    ap.add_argument("--restore-after", action="store_true",
+                    help="Restaura el working tree del repo al estado pre-tarea tras CADA tarea (destructivo con cambios propios no commiteados)")
+    ap.add_argument("--turn-timeout", type=int, default=2400,
+                    help="Timeout por turno del agente en segundos (default 2400)")
     args = ap.parse_args()
 
     resolve_bank(args.bank)
 
-    global MODEL_LABEL
+    global MODEL_LABEL, RESTORE_AFTER, TURN_TIMEOUT
+    TURN_TIMEOUT = args.turn_timeout
+    RESTORE_AFTER = args.restore_after
+    if args.fresh_analysis:
+        import sqlite3 as _sq
+        from cache import CACHE_DB
+        conn = _sq.connect(CACHE_DB)
+        cur = conn.execute("DELETE FROM repos WHERE path = ?", (REPO,))
+        conn.commit()
+        print(f"🧹 Análisis cacheado limpiado para {REPO} ({cur.rowcount} fila(s))")
     if args.model:
         MODEL_LABEL = args.model
     elif MODEL_LABEL == "unknown":

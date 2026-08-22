@@ -533,6 +533,10 @@ class Session:
         # budget cortó, y el retry —sin sus conclusiones— re-derivó otra
         # hipótesis equivocada desde cero.
         self._partial_reasoning: str = ""
+        # Banner de rol: el default current_role=ANALYZE suprimía el anuncio
+        # del primer turno analyze (role_changed=False) y el benchmark perdía
+        # la métrica role_routed.
+        self._role_announced = False
 
     def start(self) -> str:
         loop = asyncio.new_event_loop()
@@ -1187,8 +1191,9 @@ class Session:
         role_changed = self._rebuild_agent(new_role, no_explore=selfcontained)
         role_label = _ROLE_LABELS.get(new_role, "")
 
-        if role_changed and new_role != Role.CHAT:
+        if new_role != Role.CHAT and (role_changed or not self._role_announced):
             print_role_switch(role_label, self._local_count, self._mcp_count)
+            self._role_announced = True
 
         if status:
             print(status, flush=True)
