@@ -1,14 +1,3 @@
-🤔 Analizando el repositorio... (puede tardar 1-2 min). Ctrl+C para cancelar.
-
-📄 Generando análisis...
-
-
-✅ Análisis guardado en el caché.
-🌐 Lenguaje: javascript
-🧰 Stack: concurrently + jest + ts-jest + @types/jest + supertest + eslint + @typescript-eslint/eslint-plugin + @typescript-eslint/parser
-
-Sistema de gestión médica para consultorios, enfocado en la separación de roles entre **médico** (atención clínica) y **secretario/administrativo** (gestión operativa). [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](./package.json) [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE) - [Visión del Producto](#visión-del-producto) - [Características](#características) - [Arquitectura](#arquitectura) - [Estructura del Proyecto](#estructura-del-proyecto) - [Instalación](#instalación) - [Variables de Entorno](#variables-de-entorno) - [Desarrollo](#desarroll
-
 ╭───────────────────────────────── AgentDevs ──────────────────────────────────╮
 │ 🔌 LLM: http://localhost:8080/v1                                             │
 │ 📁 Repo: /Users/luchop/PROYECTOS IA/Medicos  🌿 new-frontend                 │
@@ -23,47 +12,44 @@ así, el agente puede gastar pasos de más.
 📚 Análisis cacheado encontrado. No se re-explora.
 💡 Decime qué querés hacer (implementá, planificá, revisá, analizá…).
 
-› 💭 Razonando…
+› 
+[🔍 Análisis] Tools: 12 locales + 14 graph
+💭 Razonando…
 
 ────────────────────────────────────────
 
   🔧 inspect_routes{"path":"/Users/luchop/PROYECTOS IA/Medicos"}
-## Endpoints del Backend (Agrupados por Controller)
+Los endpoints del backend están agrupados por los siguientes archivos de rutas:
 
-### 1. ConsultasRoutes
-**Archivo:** `backend/src/interfaces/http/routes/consultasRoutes.ts`
+### **Consultas** (`backend/src/interfaces/http/routes/consultasRoutes.ts`)
 - `POST /:pacienteId/consultas`
 - `GET /:pacienteId/consultas/recent`
 - `GET /:pacienteId/consultas`
 - `DELETE /consultas/:id`
 
-### 2. DashboardRoutes
-**Archivo:** `backend/src/interfaces/http/routes/dashboardRoutes.ts`
+### **Dashboard** (`backend/src/interfaces/http/routes/dashboardRoutes.ts`)
 - `GET /dashboard`
 
-### 3. MigracionRoutes
-**Archivo:** `backend/src/interfaces/http/routes/migracionRoutes.ts`
+### **Migración** (`backend/src/interfaces/http/routes/migracionRoutes.ts`)
 - `POST /extract`
 - `POST /`
 - `GET /list`
 - `POST /:id/confirm`
 
-### 4. PacientesRoutes
-**Archivo:** `backend/src/interfaces/http/routes/pacientesRoutes.ts`
+### **Pacientes** (`backend/src/interfaces/http/routes/pacientesRoutes.ts`)
 - `GET /`
 - `POST /`
 - `GET /:id`
 - `PUT /:id`
 - `DELETE /:id`
 
-### 5. Server Health Checks
-**Archivo:** `backend/src/server.ts`
+### **Sistema (Health)** (`backend/src/server.ts`)
 - `GET /api/health`
 - `GET /health`
 
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│ ⚡ Pregunta: 195.5s | 8,212 tokens (in 7,545 + out 667, 7,091 reutilizados)  │
-│ 📊 Sesión: 195.5s | 9,236 tokens (in 7,545 + out 1,691)                      │
+│ ⚡ Pregunta: 362.3s | 7,422 tokens (in 7,055 + out 367, 6,533 reutilizados)  │
+│ 📊 Sesión: 362.3s | 7,422 tokens (in 7,055 + out 367)                        │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
 › 

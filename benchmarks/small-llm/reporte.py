@@ -54,7 +54,7 @@ def main():
             verify = r.get("verify") or []
             vok = all(x["ok"] for x in verify) if verify else None
             verdict = "✅" if vok else ("❌" if vok is False else "n/a")
-            role = metrics.get("role_routed") or "—"
+            role = metrics.get("role_final") or metrics.get("role_initial") or "—"
             lines.append(
                 f"| {tid} | {ROLES.get(tid,'?')} | `{m}` | {verdict} "
                 f"| {fmt(metrics.get('tool_calls'))} "

@@ -12,41 +12,33 @@ así, el agente puede gastar pasos de más.
 📚 Análisis cacheado encontrado. No se re-explora.
 💡 Decime qué querés hacer (implementá, planificá, revisá, analizá…).
 
-› 💭 Razonando…
+› 
+[🔍 Análisis] Tools: 12 locales + 14 graph
+💭 Razonando…
 
 ────────────────────────────────────────
 
   🔧 inspect_env{"path":"/Users/luchop/PROYECTOS IA/Medicos"}
-## Variables de Entorno Requeridas
+Para correr el proyecto completo (backend y frontend), necesitas configurar las siguientes variables de entorno basándote en el archivo `.env.example`:
 
-Para ejecutar el proyecto completo (backend y frontend), necesitas configurar las siguientes variables en un archivo `.env`:
+### **Base de Datos (MySQL)**
+*   `MYSQL_ROOT_PASSWORD`: Contraseña del usuario root de MySQL.
+*   `MYSQL_DATABASE`: Nombre de la base de datos (ej: `medica_saas`).
+*   `MYSQL_USER`: Usuario de la base de datos.
+*   `MYSQL_PASSWORD`: Contraseña del usuario de la base de datos.
+*   `DATABASE_URL`: URL de conexión completa (ej: `mysql://usuario:password@localhost:3306/nombre_db`).
 
-```bash
-MYSQL_ROOT_PASSWORD=rootpassword
-MYSQL_DATABASE=medica_saas
-MYSQL_USER=medica_user
-MYSQL_PASSWORD=medica_pass
-DATABASE_URL=mysql://medica_user:medica_pass@local...
-NODE_ENV=development
-PORT=3000
-FRONTEND_URL=http://localhost:5173
-VITE_API_URL=http://localhost:3000/api
-```
+### **Backend**
+*   `NODE_ENV`: Entorno de ejecución (usualmente `development`).
+*   `PORT`: Puerto en el que correrá el servidor backend (por defecto `3000`).
 
-### Descripción de las variables:
-- **MySQL credentials**: `MYSQL_ROOT_PASSWORD`, `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`
-- **Database URL**: `DATABASE_URL` (usado por Prisma)
-- **Node environment**: `NODE_ENV=development`
-- **Server port**: `PORT=3000` (backend)
-- **Frontend URL**: `FRONTEND_URL=http://localhost:5173` (Vite dev server)
-- **API endpoint**: `VITE_API_URL=http://localhost:3000/api` (URL que usa el frontend para llamadas al backend)
-
-### Ubicación del archivo:
-El archivo de ejemplo está en `/Users/luchop/PROYECTOS IA/Medicos/.env.example`. Debes crear un archivo `.env` con estos valores o editar este archivo según tus necesidades.
+### **Frontend**
+*   `FRONTEND_URL`: URL base del frontend (ej: `http://localhost:5173`).
+*   `VITE_API_URL`: URL de la API a la que consultará el frontend (ej: `http://localhost:3000/api`).
 
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│ ⚡ Pregunta: 153.0s | 7,849 tokens (in 7,262 + out 587, 7,118 reutilizados)  │
-│ 📊 Sesión: 153.0s | 7,849 tokens (in 7,262 + out 587)                        │
+│ ⚡ Pregunta: 428.1s | 7,071 tokens (in 6,699 + out 372, 6,549 reutilizados)  │
+│ 📊 Sesión: 428.1s | 7,071 tokens (in 6,699 + out 372)                        │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
 › 

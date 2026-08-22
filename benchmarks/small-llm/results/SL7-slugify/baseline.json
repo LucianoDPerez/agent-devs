@@ -2,15 +2,15 @@
   {
     "label": "existe slug.ts",
     "cmd": "test -f backend/src/utils/slug.ts",
-    "exit": 0,
-    "ok": true,
+    "exit": 1,
+    "ok": false,
     "tail": ""
   },
   {
     "label": "exporta slugify",
     "cmd": "grep -q 'export function slugify' backend/src/utils/slug.ts",
-    "exit": 0,
-    "ok": true,
-    "tail": ""
+    "exit": 2,
+    "ok": false,
+    "tail": "grep: backend/src/utils/slug.ts: No such file or directory\n"
   }
 ]

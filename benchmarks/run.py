@@ -229,7 +229,11 @@ def baseline_block(results: list[dict]) -> str:
 
 def run_task(task: dict, force: bool = False) -> dict:
     tid = task["id"]
-    out_dir = RESULTS_DIR / tid
+    # Logs por MODELO: si todos escriben <id>/run.log, cada re-run pisa la
+    # evidencia del anterior y la comparativa de calidad entre modelos es
+    # imposible retroactivamente.
+    model_dir = MODEL_LABEL.replace("/", "_").replace(" ", "_") or "unknown"
+    out_dir = RESULTS_DIR / model_dir / tid
     out_dir.mkdir(parents=True, exist_ok=True)
     log_file = out_dir / "run.log"
     if log_file.exists() and not force:

@@ -20,40 +20,44 @@ así, el agente puede gastar pasos de más.
 
 
 
-⚠️  El modelo gastó 5429 chars razonando sin actuar — Reintentando sin tools de 
+⚠️  El modelo gastó 890 chars razonando sin actuar — Reintentando sin tools de 
 búsqueda (responde con lo ya leído)...
 💭 Razonando…
 
 ────────────────────────────────────────
-# Plan de Implementación de Soft-Delete para Pacientes
+Para implementar el **soft-delete** en la entidad `Paciente`, se debe asegurar que los registros no se eliminen físicamente de la base de datos, sino que se marquen con una marca de tiempo. A continuación, el plan detallado:
 
-## 1. Base de Datos y Migración
+### Plan de Implementación: Soft-Delete para Pacientes
+
+#### 1. Base de Datos y Esquema
 *   **Archivo:** `backend/prisma/schema.prisma`
-*   **Acción:** Agregar campo `deletedAt DateTime?` al modelo `Paciente`.
-*   **Acción:** Ejecutar `prisma migrate dev` para crear la migración.
+    *   **Acción:** Agregar el campo `deletedAt DateTime?` al modelo `Paciente`.
+*   **Acción de Migración:** Ejecutar `npx prisma migrate dev` para generar la migración y actualizar la estructura de la base de datos.
 
-## 2. Lógica de Servicio (Backend)
-*   **Archivo:** `backend/src/services/paciente.service.ts` (o similar)
-*   **Acción:** Modificar métodos de consulta (`getPacientes`, `getPacienteById`) para filtrar `deletedAt IS NULL`.
-*   **Acción:** Actualizar método de eliminación (`deletePaciente`) para establecer `deletedAt` en lugar de eliminar el registro.
+#### 2. Capa de Datos (Backend - Repositorio/Servicios)
+Se deben identificar y modificar todas las funciones que consultan la tabla `Paciente` para incluir el filtro de exclusión.
+*   **Archivos a tocar:** Todos los archivos en `backend/src/services/` o `backend/src/repositories/` (o carpetas equivalentes de lógica de negocio) que interactúen con `Paciente`.
+*   **Cambios necesarios:**
+    *   **Listado y Búsqueda:** Agregar la condición `where: { deletedAt: null }` en las consultas de obtención de lista, búsqueda por nombre/documento y paginación.
+    *   **Obtención por ID:** Asegurar que al buscar un paciente por ID para editar o ver detalles, se verifique que `deletedAt` sea nulo (para evitar acceder a registros "borrados").
 
-## 3. Controladores y Rutas (Backend)
-*   **Archivo:** `backend/src/interfaces/http/routes/paciente.routes.ts` (o similar)
-*   **Acción:** Asegurar que los endpoints de GET y DELETE usen el servicio actualizado.
+#### 3. Lógica de Eliminación (Backend - Controladores/Servicios)
+*   **Archivo:** El controlador o servicio que maneja el endpoint de eliminación de pacientes (ej. `backend/src/controllers/pacientesController.ts` o similar).
+*   **Cambio técnico:**
+    *   Cambiar la operación de `prisma.paciente.delete()` por `prisma.paciente.update()`.
+    *   En el `update`, asignar `deletedAt: new Date()`.
 
-## 4. Hooks y Componentes (Frontend)
-*   **Archivo:** `frontend/src/application/hooks/usePacientes.ts`
-*   **Acción:** Verificar que la llamada `remove` (DELETE) funcione con el nuevo comportamiento de soft-delete en el backend.
-*   **Archivo:** `frontend/src/presentation/components/PacienteList.tsx`
-*   **Acción:** Asegurar que la lista no muestre pacientes eliminados (depende del backend filtrado).
+#### 4. Integración Frontend
+*   **Archivo:** `frontend/src/application/hooks/usePacientes.ts` (y otros hooks relacionados).
+*   **Verificación:** Dado que el backend filtrará los registros automáticamente, el frontend no debería requerir cambios lógicos en la visualización. Solo se debe verificar que las llamadas a la API sigan funcionando correctamente con los nuevos filtros del backend.
 
-## 5. Tests
-*   **Archivo:** `backend/tests/services/paciente.service.test.ts` (o similar)
-*   **Acción:** Agregar tests para verificar que pacientes eliminados no aparezcan en listas y que el soft-delete persista datos.
+#### 5. Riesgos y Consideraciones
+*   **Consultas de Relación:** Si existen tablas relacionadas con `Paciente` (ej. `Consulta`), se debe decidir si las consultas de esas tablas también deben filtrar pacientes eliminados o si deben mantener la integridad histórica.
+*   **Rendimiento:** Asegurar que el campo `deletedAt` tenga un índice si el volumen de datos es muy alto, para no afectar la velocidad de las consultas filtradas.
 
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│ ⚡ Pregunta: 759.8s | 8,316 tokens (in 4,435 + out 3,881)                    │
-│ 📊 Sesión: 759.8s | 8,316 tokens (in 4,435 + out 3,881)                      │
+│ ⚡ Pregunta: 1254.9s | 4,874 tokens (in 3,785 + out 1,089)                   │
+│ 📊 Sesión: 1254.9s | 4,874 tokens (in 3,785 + out 1,089)                     │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
 › 
