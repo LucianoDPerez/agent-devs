@@ -32,3 +32,14 @@ def test_plan_con_negacion():
     assert classify_intent(
         None, "Hacé un plan para el soft-delete. No implementes nada."
     ) == Intent.PLAN
+
+
+def test_crea_el_archivo_es_execute():
+    """E2E real: 'Creá el archivo backend/scripts/healthcheck.sh' fue a ANALYZE
+    porque la lista solo tenía 'creá UN archivo' (con artículo)."""
+    assert classify_intent(
+        None, "Creá el archivo backend/scripts/healthcheck.sh que verifique el /api/health"
+    ) == Intent.EXECUTE
+    assert classify_intent(
+        None, "Generá un script de migración para la tabla consultas"
+    ) == Intent.EXECUTE
