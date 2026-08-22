@@ -572,6 +572,17 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
 
     spans = _find_spans(content, old_str)
     if not spans:
+        # ¿El cambio YA está aplicado? (old_str viejo ausente + new_str
+        # presente). E2E real: el modelo repetía el MISMO edit 4 veces —
+        # decía "now let me run the tests" y volvía a llamar edit_file en vez
+        # de verificar. El mensaje explícito corta el loop.
+        if new_str.strip() and new_str.strip() in content:
+            return (
+                f"old_str not found in {path} — PERO tu new_str YA ESTÁ en el "
+                "archivo: el cambio ya está aplicado.\n"
+                "NO repitas este edit. Si venías diciendo 'corro los tests': "
+                "llamá AHORA run_lint/run_tests/run_build y terminá."
+            )
         return (
             f"old_str not found in {path}. Cannot perform replacement.\n"
             f"Re-read the file with read_file and copy the block LITERALLY, "

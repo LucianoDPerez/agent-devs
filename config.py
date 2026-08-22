@@ -122,8 +122,10 @@ MAX_EDIT_BLOCK_LINES = 100
 # (15 writes ciegos en la iteración de Medicos: scaffolding de tests roto sin
 # instalar deps ni verificar) se colaba entre archivos distintos. Al superarlo
 # se lanza VerifyRequired → session inyecta la compuerta de verificación
-# (GATE_RETRY_TOOLS, que SÍ incluye run_lint/run_tests/run_build).
-EXECUTE_MAX_WRITES_BEFORE_VERIFY = 6
+# (GATE_RETRY_TOOLS, que SÍ incluye run_lint/run_tests/run_build). 4 (antes 6):
+# E2E real de búsqueda Medicos — 6 edits console.log-debugger en loop sin NINGÚN
+# run_tests, diciendo "now let me run the tests" antes de cada edit_file.
+EXECUTE_MAX_WRITES_BEFORE_VERIFY = 4
 # Si un verify (lint/tests/build) FALLA y faltan dependencias declaradas en
 # node_modules, el harness ejecuta npm install automáticamente y re-corre la
 # verificación UNA vez. Los LLM chicos (4B/9B) ignoran sistemáticamente el
