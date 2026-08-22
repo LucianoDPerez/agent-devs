@@ -1171,6 +1171,9 @@ class Session:
         self._no_explore_retry = False
         intent = classify_intent(self.llm, user_input)
         new_role = role_for_intent(intent)
+        # Instrumentación de routing: el benchmark necesita auditar por qué un
+        # prompt cayó en un rol (E2E: 'Creá el archivo' llegó como Análisis).
+        console.print(f"[dim]🎯 intent={intent.value} → rol={new_role.value}[/dim]")
 
         # Continuación: palabras como "continuar", "sigue", "dale" no son
         # verbos EXECUTE pero el usuario claramente quiere seguir con lo

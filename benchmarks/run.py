@@ -57,10 +57,14 @@ def extract_metrics(log_text: str) -> dict:
     from collections import Counter
 
     tools = _TOOL_RE.findall(log_text)
-    role = _ROLE_RE.search(log_text)
+    banners = _ROLE_RE.findall(log_text)
+    role = re.search(r"[^\n]*$", "")  # placeholder no-op
+    role_first = banners[0] if banners else None
     sess = _SESSION_RE.search(log_text)
     return {
-        "role_routed": role.group(1).strip() if role else None,
+        "role_initial": role_first,
+        "role_final": banners[-1].strip() if banners else None,
+        "role_switches": max(0, len(banners) - 1),
         "tool_calls": len(tools),
         "tools_by_name": dict(Counter(tools)),
         "retries": log_text.count("Reintentando"),
@@ -269,7 +273,12 @@ def run_task(task: dict, force: bool = False) -> dict:
     base_block = baseline_block(baseline)
     if base_block:
         prompt = prompt + "\n\n" + base_block
-    cmd = f'echo {json.dumps(prompt)} | {sys.executable} main.py "{REPO}"'
+    # ensure_ascii=False CRÍTICO: con el default, 'creá' llega al agente como
+    # el literal 'cre\u00e1' → el router no matchea verbos con acentos y TODO
+    # prompt de ejecución se enruta a ANALYZE (benchmark v1 completo invalidado
+    # por esto: los 'execute' eran reintentos write-only sobre artefactos
+    # heredados).
+    cmd = f'echo {json.dumps(prompt, ensure_ascii=False)} | {sys.executable} main.py "{REPO}"'
     started = time.monotonic()
     try:
         proc = subprocess.run(
@@ -289,14 +298,17 @@ def run_task(task: dict, force: bool = False) -> dict:
         (out_dir / "run.log").write_text(partial_out + f"\n=== TIMEOUT {TURN_TIMEOUT}s ===\n", encoding="utf-8")
     record["duration_s"] = round(time.monotonic() - started, 1)
     record["metrics"] = extract_metrics(record.get("stdout_tail") or "")
-    if record.get("rol_esperado") and record["metrics"]["role_routed"]:
+    if record.get("rol_esperado"):
         esperado = {"analyze": "Análisis", "plan": "Planificación",
                     "execute": "Ejecución", "review": "Review"}.get(record["rol_esperado"], "")
-        record["metrics"]["role_match"] = esperado.lower() in record["metrics"]["role_routed"].lower()
+        roles = [r for r in (record["metrics"].get("role_initial"),
+                             record["metrics"].get("role_final")) if r]
+        record["metrics"]["role_match"] = any(esperado.lower() in r.lower() for r in roles)
 
     record["git_post"] = git_capture(REPO, "status", "--short")
     diff_stat = git_capture(REPO, "diff", "--stat")
     record["diff_stat"] = diff_stat
+    (out_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
     (out_dir / "git_pre.txt").write_text(record["git_pre"], encoding="utf-8")
     (out_dir / "git_post.txt").write_text(record["git_post"] + "\n\n=== DIFF STAT ===\n" + diff_stat, encoding="utf-8")
 
