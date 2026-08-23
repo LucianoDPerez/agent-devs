@@ -508,6 +508,10 @@ class Session:
         # write-only lo inyecta como anclaje para reescribir sin leer.
         self._read_cache: dict[str, str] = {}
         self._no_explore_retry = False
+        # El agente actual se construyó SIN tools (no_explore)? Reutilizarlo
+        # para una orden NUEVA dejaría al usuario sin exploración — cada orden
+        # debe arrancar con el agente completo.
+        self._agent_no_explore = False
         # Tarea bulk detectada (≥ EXECUTE_BULK_MIN_FILES archivos): escala
         # budgets de EXECUTE y permite lecturas en el retry (0) para releer
         # los archivos que faltan.
@@ -632,7 +636,16 @@ class Session:
         self._rebuild_agent(Role.ANALYZE)
 
     def _rebuild_agent(self, role: Role, no_explore: bool = False) -> bool:
-        if self.agent is not None and role == self.current_role and not no_explore:
+        # no_explore=True construye un agente SIN tools: reutilizarlo para una
+        # orden NUEVA normal dejaría al usuario sin exploración (E2E real:
+        # "arquitectura del backend" agota el budget → retry no_explore → la
+        # orden siguiente "arquitectura del frontend" arrancaba SIN tools).
+        if (
+            self.agent is not None
+            and role == self.current_role
+            and not no_explore
+            and not getattr(self, "_agent_no_explore", False)
+        ):
             return False
         self.current_role = role
         loop = asyncio.new_event_loop()
@@ -648,6 +661,7 @@ class Session:
                     tool_call_logger=self._called_tools,
                 )
             )
+            self._agent_no_explore = no_explore
         finally:
             loop.close()
         return True
