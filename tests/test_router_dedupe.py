@@ -406,3 +406,21 @@ def test_failed_writes_do_not_count_toward_verify_cap(tmp_path):
         assert r.startswith("✅")
     with pytest.raises(VerifyRequired):
         by_name["write_file"].invoke({"path": str(tmp_path / "n3.py"), "content": "x"})
+
+
+def test_trace_component_dedupe_by_component_ignores_project():
+    """El MISMO componente con project distinto (o sin project) es una
+    repetición: el dedupe debe frenar la 2da llamada aunque los args cambien.
+    E2E real: trace_component sin project + con slug inventado = 2 llamadas."""
+    dedupe = ToolCallDedupe(max_repeats=1)
+    k1 = dedupe.key("trace_component", {"component": "HandleClickUseCase"})
+    k2 = dedupe.key("trace_component", {"component": "HandleClickUseCase", "project": "venture-ueno-ads"})
+    assert k1 == k2, "la key debe ignorar el project"
+
+    # con max_repeats=1 la segunda llamada queda marcada como repetida
+    assert dedupe.register("trace_component", {"component": "X"}) == 1
+    assert dedupe.register("trace_component", {"component": "X", "project": "otro"}) == 2
+
+    # componentes DISTINTAS no colisionan
+    k3 = dedupe.key("trace_component", {"component": "OtraComponente"})
+    assert k3 != k1

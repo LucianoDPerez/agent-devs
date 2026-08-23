@@ -83,6 +83,13 @@ class ToolCallDedupe:
         self._counts.clear()
 
     def key(self, name: str, args: dict[str, Any]) -> str:
+        # trace_component se dedupea por COMPONENTE, ignorando el project:
+        # la tool auto-resuelve el slug del repo actual, así que llamar el
+        # mismo componente con project distinto (o sin project) es la MISMA
+        # consulta repetida. E2E real: sin project + slug inventado = 2
+        # llamadas por lo mismo. Aplica a todos los roles (dedupe compartido).
+        if name == "trace_component":
+            args = {"component": args.get("component")}
         try:
             payload = json.dumps(args, sort_keys=True, default=str)
         except TypeError:
