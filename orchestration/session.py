@@ -2244,6 +2244,7 @@ class Session:
         return {
             "branch": _git_branch(self.repo_path),
             "tokens": total,
+            "ctx_pct": round(self.context_usage_pct()),
             "role": _ROLE_LABELS.get(self.current_role, ""),
             "repo": self.repo_path,
             "tools": f"{self._local_count}+{self._mcp_count}",

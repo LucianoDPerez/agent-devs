@@ -273,7 +273,7 @@ class FullscreenTUI(App):
         config del LLM.
         """
         from config import (
-            LLM_BASE_URL, LLM_MAX_TOKENS, LLM_MODEL_NAME, LLM_TEMPERATURE,
+            LLM_BASE_URL, LLM_MODEL_NAME,
         )
         from llm_wrapper import detect_server_model
 
@@ -287,16 +287,12 @@ class FullscreenTUI(App):
             st = {}
         repo = (st.get("repo") or "-").rstrip("/").split("/")[-1]
         branch = st.get("branch", "-")
-        tools = st.get("tools", "?")
         lines = [
             (" 🔌 LLM: ", "cyan bold"), (LLM_BASE_URL, ""),
             ("   📁 ", "cyan bold"), (repo, ""), ("  🌿 ", "green bold"), (branch, ""),
         ]
         right = [
             (" ⚡ ", "yellow bold"), (self._model_name, ""),
-            (" | Temp: ", "dim"), (f"{LLM_TEMPERATURE}", ""),
-            (" | Max: ", "dim"), (f"{LLM_MAX_TOKENS}", ""),
-            (" | 🛠️  ", "yellow bold"), (f"{tools}", ""),
         ]
         from rich.panel import Panel
         inner = Text.assemble(*lines)
@@ -404,15 +400,24 @@ class FullscreenTUI(App):
             st = self.status_provider() or {}
         except Exception:
             st = {}
-        usage = get_usage()
-        total = usage["session"]["prompt"] + usage["session"]["completion"]
+        total = int(st.get("tokens") or 0)
+        ctx = int(st.get("ctx_pct") or 0)
         repo = (st.get("repo") or "-").rstrip("/").split("/")[-1]
         spin = _SPINNER[int(__import__("time").monotonic() * 4) % len(_SPINNER)]
         busy = f" {spin} trabajando…" if self._busy else ""
+        # Contexto usado (%) es la métrica accionable (dispara /compact al
+        # 80%); el conteo de tokens es la medición CLIENTE del API, que
+        # difiere del total procesado por llama.cpp (retries, cache) — por
+        # eso se etiqueta como API para no confundir.
+        ctx_label = f"contexto {ctx}%"
+        if ctx >= 80:
+            ctx_label += " (escribí /compact)"
         txt = Text.assemble(
             (" 🌿 " + str(st.get("branch", "-")), "green"),
             ("  ·  ", "dim"),
-            (f"⚡ {total:,} tokens", "yellow"),
+            (ctx_label, "yellow" if ctx < 80 else "red"),
+            ("  ·  ", "dim"),
+            (f"⚡ {total:,} tok (API)", "dim"),
             ("  ·  ", "dim"),
             (" " + str(st.get("role", "🔍")), "cyan"),
             ("  ·  ", "dim"),
