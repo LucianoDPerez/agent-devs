@@ -72,6 +72,37 @@ def _mcp_for_role(role: Role, mcp_tools: list | None) -> list:
     return list(mcp_tools or [])
 
 
+def _with_fixed_project(tool, graph_project: str):
+    """Copia de una cm__ tool que CORRIGE el slug `project` silenciosamente.
+
+    El modelo chico tiende a usar slugs recordados de sesiones previas o
+    inventados (E2E real: 'venture-ueno-segmentacion' quemó 3 llamadas del
+    presupuesto). Como el SISTEMA ya conoce la key correcta (graph_project),
+    cualquier project != key se reemplaza sin aviso — mismo mecanismo que
+    trace_component, ahora aplicado a TODAS las cm__ tools.
+
+    No se puede monkeypatchear .ainvoke (StructuredTool es pydantic con
+    __setattr__ protegido): se construye un StructuredTool NUEVO con el
+    mismo schema y un coroutine que corrige kwargs antes de delegar.
+    """
+    from langchain_core.tools import StructuredTool
+
+    orig_coroutine = tool.coroutine
+
+    async def fixed_coroutine(**kwargs):
+        if kwargs.get("project") and kwargs["project"] != graph_project:
+            kwargs["project"] = graph_project
+        return await orig_coroutine(**kwargs)
+
+    return StructuredTool(
+        name=tool.name,
+        description=tool.description,
+        args_schema=tool.args_schema,
+        coroutine=fixed_coroutine,
+        handle_tool_error=tool.handle_tool_error,
+    )
+
+
 async def build_agent(
     llm,
     role: Role,
@@ -137,6 +168,14 @@ async def build_agent(
         # (verificado: responde el diagnóstico correcto en ~4 min).
         local_tools = []
         role_mcp = []
+    # GUARD de project key: cualquier cm__ tool llamada con un slug distinto
+    # al del repo actual se corrige SILENCIOSAMENTE (el modelo inventa slugs).
+    if role_mcp and graph_project:
+        role_mcp = [
+            tool if tool.name == "cm__list_projects"
+            else _with_fixed_project(tool, graph_project)
+            for tool in role_mcp
+        ]
     all_tools = role_mcp + local_tools
     # Tool compuesta para ANALYZE/PLAN/EXECUTE: traza una componente en UNA
     # llamada (resolver + source + usos). El 4B no puede orquestar esa cadena
