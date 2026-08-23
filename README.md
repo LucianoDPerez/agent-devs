@@ -164,3 +164,7 @@ Cada mensaje pasa por un **router** que elige el rol apropiado. Cada rol tiene s
 ¿Querés la versión larga con diagramas, budgets y decisiones de diseño?
 
 📘 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
+
+---
+
+*[English](README.en.md) · Español*
