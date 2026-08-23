@@ -125,14 +125,36 @@ El límite de contexto se **detecta del server** (`/props` de llama.cpp): cuando
 |---|---|---|
 | Python | 3.10+ | — |
 | git | moderno | — |
-| llama.cpp (`llama-server`) | escuchando en `:8080` | detecta e instruye según tu OS |
+| llama.cpp (`llama-server`) | build reciente (b5000+; b6200+ si usás MTP/spec-draft) escuchando en `:8080` | detecta e instruye según tu OS |
 | codebase-memory-mcp | 0.8+ | sí (macOS/Linux); Windows: manual |
+
+> **Nota Windows**: `install.ps1` está provisto, pero el flujo fue verificado en
+> macOS/Linux. Si encontrás algún problema en Windows, abrí un issue.
 
 ## Solución de problemas
 
 - **El agente no responde / cuelga al iniciar** → casi seguro falta el modelo: corré `agent-devs doctor`; si dice "nadie responde en http://localhost:8080", levantá llama-server.
 - **No aparecen las tools `cm__*`** → falta codebase-memory-mcp; el doctor lo instala en macOS/Linux.
 - **Quiero usar otro puerto/modelo** → editá `LLM_BASE_URL` y `LLM_MODEL_NAME` en `config.py`.
+
+## Limitaciones conocidas (léelas antes de usar)
+
+AgentDevs está diseñado para modelos chicos y funciona bien en tareas acotadas,
+pero tiene límites medidos en nuestros benchmarks (7 tareas reales × 4 modelos,
+ver `benchmarks/ANALISIS.md`):
+
+- **Modelos chicos (4B/9B)**: completan ~86% del banco (5/5 análisis + 1/2
+  ejecución). La tarea que se les escapa suele ser implementación fina.
+- **Debug profundo sin stack trace**: si no pegás el error exacto (log, consola,
+  stack), ningún modelo converge confiable — pegá la evidencia del error en el
+  prompt.
+- **PLAN no explora**: el rol planificador responde desde el análisis cacheado
+  (0 tools en los 3 modelos probados) — es un gap de diseño conocido.
+- **Codemod PATH FIX**: al arrancar EXECUTE, el harness corrige automáticamente
+  mismatches de paths frontend↔backend (se anuncian en consola). Desactivable
+  con `PATH_FIX_ENABLED = False` en `config.py`.
+- **Tiempo > capacidad**: en hardware local, los execute largos pueden exceder
+  40 min; el límite por turno es configurable (`--turn-timeout`).
 
 ## Cómo funciona (la versión corta)
 

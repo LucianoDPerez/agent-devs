@@ -23,6 +23,7 @@ from config import (
     ANALYZE_EXPLORE_BUDGET,
     ANALYZE_MAX_READS_AFTER_EXPLORE,
     EXECUTE_ASK_COMMIT,
+    PATH_FIX_ENABLED,
     EXECUTE_EXPLORE_BUDGET,
     LLM_BASE_URL,
     EXECUTE_MAX_READS_AFTER_EXPLORE,
@@ -1313,16 +1314,22 @@ class Session:
                     f"project='{self._graph_project}' (o omitilo: el sistema "
                     f"lo resuelve solo)."
                 )
-            # Detección + FIX determinístico de mismatch frontend↔backend.
+                        # Detección + FIX determinístico de mismatch frontend↔backend.
             # El modelo chico no hace este diagnóstico cross-file y aplica
             # fixes mecánicos a medias (E2E: arregló 6 paths, se saltó 6).
             # El SISTEMA detecta y aplica el codemod; el modelo solo verifica.
-            if detect_path_mismatches(self.repo_path):
+            # Opt-in: PATH_FIX_ENABLED (config) — modifica código REAL del
+            # usuario, se disclosia en consola.
+            if PATH_FIX_ENABLED and detect_path_mismatches(self.repo_path):
                 fix_report = apply_mismatch_fixes(self.repo_path)
                 if fix_report:
+                    console.print(
+                        "[yellow]🔧 PATH FIX: corregí mismatches de paths "
+                        "frontend↔backend determinísticamente "
+                        "(config PATH_FIX_ENABLED=False para desactivar)[/yellow]\n"
+                    )
                     agent_input = f"{agent_input}\n\n{fix_report}"
-                    console.print("[dim]🔧 PATH FIX aplicado por el sistema (codemod determinístico).[/dim]\n")
-            # Diagnóstico de RUNTIME: si el usuario reporta errores de servidor
+# Diagnóstico de RUNTIME: si el usuario reporta errores de servidor
             # ("Error interno del servidor", 500, no guarda...), el problema
             # puede ser del ENTORNO (container Docker con código viejo pisando
             # el puerto, dev server caído) — el modelo no puede descubrirlo

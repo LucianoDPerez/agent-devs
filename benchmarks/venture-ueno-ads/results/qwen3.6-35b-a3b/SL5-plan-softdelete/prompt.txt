@@ -1,1 +1,0 @@
-Hacé un plan paso a paso para implementar soft-delete en Pautas (campo deletedAt, filtrado en todas las queries, migración incluida). No implementes nada: solo el plan con archivos a tocar (prisma/schema.prisma, migración, repositorios que consultan pautas y queries del ad-serving).

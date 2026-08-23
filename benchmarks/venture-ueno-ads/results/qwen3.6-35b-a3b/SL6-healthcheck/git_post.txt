@@ -1,8 +1,0 @@
-M next-env.d.ts
- M package.json
-?? scripts/healthcheck.sh
-
-=== DIFF STAT ===
-next-env.d.ts | 3 +--
- package.json  | 1 +
- 2 files changed, 2 insertions(+), 2 deletions(-)

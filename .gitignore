@@ -61,3 +61,10 @@ opencode.json
 cache.db
 benchmarks/**/.DS_Store
 benchmarks/**/pre_snapshot/
+
+# Privacidad: los logs crudos del benchmark contienen paths absolutos de usuarios
+benchmarks/**/results/*/run.log
+benchmarks/**/results/*/git_pre.txt
+benchmarks/**/results/*/git_post.txt
+benchmarks/**/results/*/prompt.txt
+benchmarks/**/results/*/pre_snapshot/

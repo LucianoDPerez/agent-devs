@@ -181,6 +181,12 @@ EXECUTE_MAX_REASONING_SECONDS = 90
 # scripts), se omite la pregunta.
 EXECUTE_ASK_COMMIT = True
 
+# Codemod determinístico de paths frontend↔backend al arrancar EXECUTE: corrige
+# automáticamente mismatches de imports/rutas (PATH FIX). Es modificador de
+# código REAL del usuario: el mensaje lo disclosia, y este flag permite
+# desactivarlo si no querés que el harness toque nada solo.
+PATH_FIX_ENABLED = True
+
 # EXECUTE: si el turno termina (el modelo responde texto) SIN haber llamado
 # NINGUNA tool de escritura, lanzar retry write-only (sin read_file). Aider
 # evita esto porque su formato de edición ES texto; acá el modelo puede
