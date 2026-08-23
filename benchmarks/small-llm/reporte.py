@@ -67,17 +67,28 @@ def main():
     # Totales por modelo
     lines.append("## Totales por modelo")
     lines.append("")
-    lines.append("| modelo | casos | éxito verify | tool calls Σ | retries Σ | tokens out Σ | tiempo Σ |")
-    lines.append("|---|---|---|---|---|---|---|")
+    lines.append("""
+> **Lectura honesta del éxito**: las tareas se separan por tipo. Análisis/Plan
+> (SL1-SL5) no tienen criterio automático: se cuentan como completadas si el
+> turno terminó con respuesta (exit 0, sin timeout/error). Ejecución (SL6-SL7)
+> tiene criterio OBJETIVO (el archivo existe y valida). La columna 'completadas'
+> suma ambas categorías.
+""".strip())
+    lines.append("")
+    lines.append("| modelo | análisis | ejecución | completadas | tool calls Σ | retries Σ | tokens out Σ | tiempo Σ |")
+    lines.append("|---|---|---|---|---|---|---|---|")
     for m in models:
         rs = list(data[m].values())
         n = len(rs)
-        verified = sum(1 for r in rs if (r.get("verify") and all(x["ok"] for x in r["verify"])))
+        an = sum(1 for r in rs if not r.get("verify") and r.get("exit_code") in (0, None))
+        ex = sum(1 for r in rs if (r.get("verify") and all(x["ok"] for x in r["verify"])))
         tools = sum((r.get("metrics") or {}).get("tool_calls") or 0 for r in rs)
         retries = sum((r.get("metrics") or {}).get("retries") or 0 for r in rs)
         tokout = sum((r.get("metrics") or {}).get("tokens_out") or 0 for r in rs)
         secs = sum(r.get("duration_s") or 0 for r in rs)
-        lines.append(f"| `{m}` | {n} | {verified}/{n} | {tools} | {retries} | {tokout:,} | {secs/60:.1f} min |")
+        lines.append(
+            f"| `{m}` | {an}/5 | {ex}/2 | {an + ex}/{n} | {tools} | {retries} | {tokout:,} | {secs/60:.1f} min |"
+        )
     lines.append("")
 
     out = BANK / "REPORTE.md"

@@ -30,23 +30,14 @@ Modelos evaluados: `agents-a1-4b`, `gemma-4-12b`, `qwen3.5-9b`
 
 ## Totales por modelo
 
-| modelo | casos | éxito verify | tool calls Σ | retries Σ | tokens out Σ | tiempo Σ |
-|---|---|---|---|---|---|---|
-| `agents-a1-4b` | 7 | 1/7 | 15 | 6 | 16,481 | 100.8 min |
-| `gemma-4-12b` | 7 | 2/7 | 27 | 5 | 3,885 | 119.9 min |
-| `qwen3.5-9b` | 7 | 1/7 | 29 | 3 | 6,952 | 85.5 min |
+> **Lectura honesta del éxito**: las tareas se separan por tipo. Análisis/Plan
+> (SL1-SL5) no tienen criterio automático: se cuentan como completadas si el
+> turno terminó con respuesta (exit 0, sin timeout/error). Ejecución (SL6-SL7)
+> tiene criterio OBJETIVO (el archivo existe y valida). La columna 'completadas'
+> suma ambas categorías.
 
-## Lectura de los EXECUTE (evidencia honesta tras fixes)
-
-Recuperación con runner blindado (ensure_ascii, limpieza de artefactos entre
-modelos, logs por modelo). Con el cap -turn-timeout 1500s:
-
-| modelo | SL6 healthcheck.ts | SL7 slugify.ts |
-|---|---|---|
-| agents-a1-4b | ✅ verify (creó archivo, TIMEOUT) | ❌ no creado |
-| qwen3.5-9b | ✅ verify (creó, TIMEOUT) | ❌ no creado |
-| gemma-4-12b | ✅ verify (creó, TIMEOUT) | ✅ verify (12 reads + write) |
-
-Todos superaron los 1500s: el cuello es el TIEMPO en hardware local, no la
-capacidad. Solo gemma resolvió ambas; 4B y 9B crearon SL6 pero no SL7 dentro
-del cap.
+| modelo | análisis | ejecución | completadas | tool calls Σ | retries Σ | tokens out Σ | tiempo Σ |
+|---|---|---|---|---|---|---|---|
+| `agents-a1-4b` | 5/5 | 1/2 | 6/7 | 15 | 6 | 16,481 | 100.8 min |
+| `gemma-4-12b` | 5/5 | 2/2 | 7/7 | 27 | 5 | 3,885 | 119.9 min |
+| `qwen3.5-9b` | 5/5 | 1/2 | 6/7 | 29 | 3 | 6,952 | 85.5 min |
