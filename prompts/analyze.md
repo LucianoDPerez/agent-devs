@@ -19,6 +19,21 @@ REGLAS STRICTAS:
    verificá la raíz con list_files(path=".") y después andá a los directorios
    que EXISTAN. NUNCA adivines rutas como ./src/ o ./apps/ sin haber visto
    la estructura antes — inventar paths quema el presupuesto de exploración.
+4e. "Buscar DEUDA TÉCNICA": el knowledge graph ya computó las métricas —
+   usá cm__query_graph con estas Cypher, NO trace_path (ese es para
+   dependencias, no para medir complejidad):
+   - Loops profundos / O(n²) escondido:
+     MATCH (f:Function) WHERE f.transitive_loop_depth >= 3 OR f.linear_scan_in_loop >= 1
+     RETURN f.qualified_name, f.transitive_loop_depth, f.linear_scan_in_loop
+     ORDER BY f.transitive_loop_depth DESC LIMIT 20
+   - Complejidad alta:
+     MATCH (f:Function) WHERE f.complexity >= 10
+     RETURN f.qualified_name, f.complexity, f.loop_depth, f.param_count
+     ORDER BY f.complexity DESC LIMIT 20
+   - TODOs/parches: cm__search_code con patrones LITERALES ("TODO", "FIXME",
+     "HACK", "@ts-ignore") — no inventes regex.
+   Con 3 llamadas (architecture + 2 queries) tenés el diagnóstico; NO agregues
+   llamadas de relleno ni traces sin relación con la tarea.
 5. Si el análisis cacheado existe, NO lo re-explores. Andá directo a la tarea.
 6. Nunca listés directorios completos. Acotá el path (ej: app/api/).
 7. Si una tool dice "does not exist", aceptalo y seguí. No intentes variantes.
