@@ -574,14 +574,29 @@ class Session:
                             "(primera vez — puede tardar 1-2 min)…[/yellow]"
                         )
                         try:
-                            loop.run_until_complete(
+                            out = loop.run_until_complete(
                                 idx.ainvoke({"repo_path": self.repo_path, "mode": "moderate"})
                             )
                             self._graph_project = loop.run_until_complete(
                                 _resolve_project_key(by_name, self.repo_path)
                             )
-                        except Exception:
-                            pass
+                            if "store.corrupt" in str(out) or "bad_root_path" in str(out):
+                                # Store del MCP con filas corruptas (root_path
+                                # relativo de una sesión vieja con 'agent-devs .'):
+                                # avisar cómo limpiarlo en vez de fallar mudo.
+                                console.print(
+                                    "[red]⚠️ El store del knowledge graph reportó "
+                                    "corrupción (root_path relativo). Limpialo con:[/red]\n"
+                                    "[yellow]   codebase-memory-mcp delete-project "
+                                    "--root \".\"[/yellow]"
+                                )
+                        except Exception as e:
+                            if "store.corrupt" in str(e) or "bad_root_path" in str(e):
+                                console.print(
+                                    "[red]⚠️ Knowledge graph corrupto — limpiá el "
+                                    "proyecto con root_path='.' (ver docs). El agente "
+                                    "sigue sin tools cm__*.[/red]"
+                                )
             except Exception:
                 pass
             self.current_role = Role.ANALYZE

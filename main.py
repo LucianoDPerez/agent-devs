@@ -517,7 +517,11 @@ def main():
         do_analyze(_make_llm(max_tokens=1024, temperature=0.4), args.analyze)
         return
 
-    repo_path = (args.repo or os.getcwd()).strip()
+    # Normalizar a ABSOLUTO siempre: 'agent-devs .' dejaba repo_path='.'
+    # relativo → cm__index_repository indexaba root_path='.' y CORROMPÍA el
+    # store del knowledge graph (ERROR store.corrupt table=projects
+    # bad_root_path=. en la máquina del otro usuario).
+    repo_path = str(Path(args.repo or os.getcwd()).expanduser().resolve()).strip()
 
     reset_turn_usage()
     cached = _ensure_analysis(
