@@ -45,7 +45,7 @@ def main():
         check(f"{intent.value} → {role.value}", role is not None)
     check("analyze: 14 tools", len(tools_for_role(Role.ANALYZE)) == 14)
     check("plan: 13 tools", len(tools_for_role(Role.PLAN)) == 13)
-    check("execute: 16 tools", len(tools_for_role(Role.EXECUTE)) == 16)
+    check("execute: 20 tools", len(tools_for_role(Role.EXECUTE)) == 20)
     check("review: 17 tools", len(tools_for_role(Role.REVIEW)) == 17)
     check("chat: 0 tools", len(tools_for_role(Role.CHAT)) == 0)
     for role in Role:

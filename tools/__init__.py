@@ -52,6 +52,9 @@ EXECUTOR_TOOLS = [
     read_file, write_file, edit_file, delete_file,
     search_code, inspect_routes,
     run_lint, run_tests, run_build, run_npm_script,
+    # git de LECTURA: 'hacer commit de los modificados' exige VER qué cambió
+    # (E2E real: sin git_status el modelo intentó leer .git/HEAD con read_file).
+    current_branch, changed_files, git_status, git_log,
     stage_files, create_commit, push, git_restore,
     probe_http, capture_dev_server,
 ]
