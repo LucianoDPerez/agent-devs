@@ -77,3 +77,4 @@ benchmarks/**/results/**/retry.log
 benchmarks/**/git_pre.txt
 benchmarks/**/git_post.txt
 benchmarks/**/prompt.txt
+benchmarks/**/results/*/summary.jsonl
