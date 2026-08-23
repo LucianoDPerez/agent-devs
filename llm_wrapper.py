@@ -443,14 +443,21 @@ def detect_context_limit(base_url: str, timeout: float = 1.5) -> int | None:
     try:
         with urllib.request.urlopen(base + "/props", timeout=timeout) as resp:
             data = json.load(resp)
-        for getter in (
-            lambda d: d.get("default_generation_settings", {}).get("n_ctx"),
-            lambda d: d.get("model", {}).get("n_ctx_train"),
-            lambda d: d.get("n_ctx"),
-        ):
-            v = getter(data)
-            if isinstance(v, int) and v > 0:
-                return v
+        # El contexto EFECTIVO es default_generation_settings.n_ctx: refleja el
+        # -c configurado (por slot). n_ctx_train es el máximo TEÓRICO del
+        # modelo (ej. 131072 para Qwen3) y NO lo que el server acepta: usarlo
+        # inflaba el % de contexto del toolbar (nunca llegaba a 80% y el
+        # /compact nunca aparecía). n_ctx_train SOLO como último recurso y
+        # acotado a 4x el contexto configurado (heurística segura).
+        v = data.get("default_generation_settings", {}).get("n_ctx")
+        if isinstance(v, int) and v > 0:
+            return v
+        v = data.get("n_ctx")
+        if isinstance(v, int) and v > 0:
+            return v
+        v = data.get("model", {}).get("n_ctx_train")
+        if isinstance(v, int) and v > 0:
+            return v
     except Exception:
         return None
     return None
