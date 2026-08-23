@@ -401,21 +401,16 @@ class FullscreenTUI(App):
         except Exception:
             st = {}
         total = int(st.get("tokens") or 0)
-        ctx = int(st.get("ctx_pct") or 0)
         repo = (st.get("repo") or "-").rstrip("/").split("/")[-1]
         spin = _SPINNER[int(__import__("time").monotonic() * 4) % len(_SPINNER)]
         busy = f" {spin} trabajando…" if self._busy else ""
-        # Contexto usado (%) es la métrica accionable (dispara /compact al
-        # 80%); el conteo de tokens es la medición CLIENTE del API, que
-        # difiere del total procesado por llama.cpp (retries, cache) — por
-        # eso se etiqueta como API para no confundir.
-        ctx_label = f"contexto {ctx}%"
-        if ctx >= 80:
-            ctx_label += " (escribí /compact)"
+        # El % de contexto se quitó: la estimación sobre _messages no refleja
+        # la sesión real del usuario (quedaba fija en ~8%). Los tokens son la
+        # medición CLIENTE del API (difiere del total procesado por llama.cpp
+        # por retries/cache) — por eso se etiqueta (API). El aviso real de
+        # contexto sigue siendo el del session (80% → /compact).
         txt = Text.assemble(
             (" 🌿 " + str(st.get("branch", "-")), "green"),
-            ("  ·  ", "dim"),
-            (ctx_label, "yellow" if ctx < 80 else "red"),
             ("  ·  ", "dim"),
             (f"⚡ {total:,} tok (API)", "dim"),
             ("  ·  ", "dim"),
