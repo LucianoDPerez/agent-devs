@@ -80,6 +80,13 @@ def _extract_command_prefix(text: str, max_chars: int = 120) -> str:
         idx = prefix.find(marker)
         if idx >= 0:
             prefix = prefix[:idx]
+    # Línea de guiones largos (———, ───, ---) = separador de contenido pegado
+    # (tasks, logs, salidas). E2E real: "verificar si estas tasks ya están
+    # implementadas" + pegote de Task 4 (que dice "Implementar...") caía en
+    # EXECUTE porque el verbo del texto pegado entraba en los 120 chars.
+    m = re.search(r"\n[─—\-]{3,}", prefix)
+    if m:
+        prefix = prefix[: m.start()]
     return prefix.strip().lower()
 
 

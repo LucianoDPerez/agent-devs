@@ -53,3 +53,20 @@ def test_verificacion_con_fallback_accion_ruta_execute(prompt):
     El 'no implementalas' se neutralizaba por _NEGATED_ACTION_RE y el check
     si-no moría: hay que evaluarlo sobre el prefix ORIGINAL."""
     assert classify_intent(None, prompt) == Intent.EXECUTE
+
+
+def test_verificacion_con_tasks_pegadas_ruta_analyze():
+    """Verificación + contenido pegado (que dice 'Implementar') → ANALYZE.
+    El separador de guiones largos debe cortar el prefix antes del texto
+    pegado; el verbo 'Implementar' del pegote NO puede activar EXECUTE."""
+    prompt = (
+        "verificar si estas tasks ya estan implementadas correctamente \n"
+        "—————————————————        Task 4: Implementar CLI principal (start/end)\n"
+        "Resumen: Implementar el entry point del binario con comandos start y end.\n"
+        "- Implementar telemetry/cmd/spec-kitti-telemetry/main.go"
+    )
+    assert classify_intent(None, prompt) == Intent.ANALYZE
+
+
+def test_orden_con_implementar_real_sigue_execute():
+    assert classify_intent(None, "implementá el endpoint /dashboard") == Intent.EXECUTE
