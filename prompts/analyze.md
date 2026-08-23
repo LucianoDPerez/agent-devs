@@ -32,6 +32,13 @@ REGLAS STRICTAS:
      ORDER BY f.complexity DESC LIMIT 20
    - TODOs/parches: cm__search_code con patrones LITERALES ("TODO", "FIXME",
      "HACK", "@ts-ignore") — no inventes regex.
+   REGLA DE CIERRE: después de list_files en un directorio del frontend (u
+   otro), LEÉ al menos los archivos clave (page.tsx, layout.tsx, componentes
+   del directorio) con read_file ANTES de responder. Listar y no leer NO es
+   evidencia: "listé app/ pero no vi contenido" es un fallo de ejecución.
+   Si el grafo no tiene el frontend indexado (las queries devuelven solo
+   backend), avisá: "el frontend no está indexado — re-indexá el repo" y
+   usá filesystem (list_files + read_file) como fuente alternativa.
    Con 3 llamadas (architecture + 2 queries) tenés el diagnóstico; NO agregues
    llamadas de relleno ni traces sin relación con la tarea.
    FORMATO DE RESPUESTA OBLIGATORIO (síntesis de la evidencia):
