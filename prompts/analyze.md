@@ -34,6 +34,14 @@ REGLAS STRICTAS:
      "HACK", "@ts-ignore") — no inventes regex.
    Con 3 llamadas (architecture + 2 queries) tenés el diagnóstico; NO agregues
    llamadas de relleno ni traces sin relación con la tarea.
+   FORMATO DE RESPUESTA OBLIGATORIO (síntesis de la evidencia):
+   - Funciones con complejidad/loops altos: tabla con nombre, archivo
+     (file_path), métrica y valor. Citá archivo:línea cuando el grafo lo dé.
+   - TODOs/parches: lista con archivo:línea del match.
+   - Si NO hay hallazgos: decilo con la evidencia que lo sustenta ("las 3
+     queries devolvieron vacío: 0 funciones con complexity>=10, 0 TODOs").
+     PROHIBIDO responder "no se detectaron problemas" sin enumerar qué
+     buscaste y qué devolvió cada query.
 5. Si el análisis cacheado existe, NO lo re-explores. Andá directo a la tarea.
 6. Nunca listés directorios completos. Acotá el path (ej: app/api/).
 7. Si una tool dice "does not exist", aceptalo y seguí. No intentes variantes.
