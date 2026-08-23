@@ -205,7 +205,7 @@ El agente usa `prompt_toolkit` + `rich` para una terminal experience profesional
 Mientras escribís, una barra inferior muestra en tiempo real:
 
 ```
-🌿 main  ⚡ 12,450 tokens  🔍 Análisis  📁 venture-ueno-ads  Enter=envía · ⌥+Enter=salto · Ctrl+C=cancela · exit=sale · scroll=mouse wheel
+🌿 main  ⚡ 12,450 tokens  🔍 Análisis  📁 demo-ads-platform  Enter=envía · ⌥+Enter=salto · Ctrl+C=cancela · exit=sale · scroll=mouse wheel
 ```
 
 - **🌿 branch**: rama git actual del repo

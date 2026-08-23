@@ -76,7 +76,7 @@ def _with_fixed_project(tool, graph_project: str):
     """Copia de una cm__ tool que CORRIGE el slug `project` silenciosamente.
 
     El modelo chico tiende a usar slugs recordados de sesiones previas o
-    inventados (E2E real: 'venture-ueno-segmentacion' quemó 3 llamadas del
+    inventados (E2E real: 'demo-segmentacion' quemó 3 llamadas del
     presupuesto). Como el SISTEMA ya conoce la key correcta (graph_project),
     cualquier project != key se reemplaza sin aviso — mismo mecanismo que
     trace_component, ahora aplicado a TODAS las cm__ tools.
@@ -245,7 +245,7 @@ async def build_agent(
         # La key del knowledge graph va en el SYSTEM PROMPT (no solo en el
         # mensaje del usuario): el modelo chico tiende a usar slugs recordados
         # de sesiones previas en vez del inyectado (E2E real: inventó
-        # 'venture-ueno-segmentacion' y quemó 3 llamadas del presupuesto).
+        # 'demo-segmentacion' y quemó 3 llamadas del presupuesto).
         extra_context += (
             f"\n\n[KNOWLEDGE GRAPH] Project key de ESTE repo para las tools "
             f"cm__*: '{graph_project}'. USALA SIEMPRE — nunca inventes ni "

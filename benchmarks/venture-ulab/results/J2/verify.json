@@ -1,9 +1,0 @@
-[
-  {
-    "label": "test nuevo pasa",
-    "cmd": "./gradlew test --tests '*GenericJiraWebhookController*' --console=plain -q 2>&1",
-    "exit": 1,
-    "ok": false,
-    "tail": "Note: Some input files use or override a deprecated API.\nNote: Recompile with -Xlint:deprecation for details.\nNote: Some input files use unchecked or unsafe operations.\nNote: Recompile with -Xlint:unchecked for details.\nOpenJDK 64-Bit Server VM warning: Sharing is only supported for boot loader classes because bootstrap classpath has been appended\n2026-08-17T13:57:15.822-03:00  INFO 47576 --- [ionShutdownHook] o.s.b.w.embedded.netty.GracefulShutdown  : Commencing graceful shutdown. Waiting for active requests to complete\n2026-08-17T13:57:16.125-03:00  INFO 47576 --- [ netty-shutdown] o.s.b.w.embedded.netty.GracefulShutdown  : Graceful shutdown complete\n2026-08-17T13:57:18.210-03:00  INFO 47576 --- [ionShutdownHook] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Shutdown initiated...\n2026-08-17T13:57:18.211-03:00  INFO 47576 --- [ionShutdownHook] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Shutdown completed.\n\n3 tests completed, 2 failed\n\nFAILURE: Build failed with an exception.\n\n* What went wrong:\nExecution failed for task ':test'.\n> There were failing tests. See the report at: file:///Users/luciano.perez/itti/venture-api-ulab/build/reports/tests/test/index.html\n\n* Try:\n> Run with --scan to get full insights.\n\nBUILD FAILED in 20s\n"
-  }
-]

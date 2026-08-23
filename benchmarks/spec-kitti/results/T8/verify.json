@@ -1,7 +1,7 @@
 [
   {
     "label": "14 templates con start",
-    "cmd": "cd /Users/luciano.perez/itti/pr-coe-genai-spec-kitti && test $(grep -l 'spec-kitti-telemetry start' src/spec_kitti_cli/templates/commands/*.md | wc -l | tr -d ' ') -eq 14 && test $(grep -l 'spec-kitti-telemetry end' src/spec_kitti_cli/templates/commands/*.md | wc -l | tr -d ' ') -eq 14 && echo 14_OK",
+    "cmd": "cd ~/demo/demo-spec-kitti && test $(grep -l 'spec-kitti-telemetry start' src/spec_kitti_cli/templates/commands/*.md | wc -l | tr -d ' ') -eq 14 && test $(grep -l 'spec-kitti-telemetry end' src/spec_kitti_cli/templates/commands/*.md | wc -l | tr -d ' ') -eq 14 && echo 14_OK",
     "exit": 1,
     "ok": false,
     "tail": ""

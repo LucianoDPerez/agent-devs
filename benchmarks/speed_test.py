@@ -36,7 +36,7 @@ USER = (
     "handles abiertos de PrismaClient — hay que agregar forceExit: true a jest.config.js; 5) @types/supertest ya está "
     "instalado y el Prisma Client ya fue generado con prisma generate, no toques eso. "
     "Plan: 1) editá server.test.ts reemplazando el test de GET / por un test de 404 en una ruta inexistente; "
-    "2) agregá forceExit: true en jest.config.js; 3) corré run_tests(path=\"/Users/luchop/PROYECTOS IA/Medicos\") "
+    "2) agregá forceExit: true en jest.config.js; 3) corré run_tests(path=\"~/PROYECTOS IA/Medicos\") "
     "y si falla, corregí el error concreto que reporte; 4) run_build al final. Empezá con read_file de los 2 archivos."
 )
 

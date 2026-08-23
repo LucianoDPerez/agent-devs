@@ -414,7 +414,7 @@ def test_trace_component_dedupe_by_component_ignores_project():
     E2E real: trace_component sin project + con slug inventado = 2 llamadas."""
     dedupe = ToolCallDedupe(max_repeats=1)
     k1 = dedupe.key("trace_component", {"component": "HandleClickUseCase"})
-    k2 = dedupe.key("trace_component", {"component": "HandleClickUseCase", "project": "venture-ueno-ads"})
+    k2 = dedupe.key("trace_component", {"component": "HandleClickUseCase", "project": "demo-ads-platform"})
     assert k1 == k2, "la key debe ignorar el project"
 
     # con max_repeats=1 la segunda llamada queda marcada como repetida

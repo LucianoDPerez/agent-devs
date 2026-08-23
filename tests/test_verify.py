@@ -370,7 +370,7 @@ def test_run_npm_script_rejects_non_node_stack(tmp_path):
     """Corrección 4: en un repo Python/Go, run_npm_script debe RECHAZARSE de
     forma firme (excepción GraphBubbleUp que corta el turno y redirige) y no
     devolver un string ignorable. El modelo local ignoraba el string y repetía
-    la llamada con 'install'/'uv sync' en pr-coe-genai-spec-kitti (Python),
+    la llamada con 'install'/'uv sync' en demo-spec-kitti (Python),
     quemando el presupuesto sin instalar nada."""
     from orchestration.tool_dedupe import ToolBudgetExceeded
     from tools import verify as v

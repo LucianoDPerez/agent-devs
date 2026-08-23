@@ -1,7 +1,7 @@
 """Prueba end-to-end del orquestador multicapa de AgentDevs.
 
 Testea clasificador (instantáneo), session flow con role switching, y
-ejecución real del agente contra venture-api-academy.
+ejecución real del agente contra demo-academy.
 
 SCRIPT MANUAL — NO es un test de pytest: necesita llama-server corriendo en
 LLM_BASE_URL y el repo target existente. Todo el flujo vive en main() bajo el
@@ -14,7 +14,7 @@ import sys
 import time
 from pathlib import Path
 
-REPO_PATH = "/Users/luciano.perez/itti/venture-api-academy"
+REPO_PATH = "~/demo/demo-academy"
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import LLM_BASE_URL, LLM_MODEL_NAME

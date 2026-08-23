@@ -1,14 +1,14 @@
 [
   {
     "label": "go build compila",
-    "cmd": "cd /Users/luciano.perez/itti/pr-coe-genai-spec-kitti/telemetry && go build ./cmd/spec-kitti-telemetry/ && echo BUILD_OK",
+    "cmd": "cd ~/demo/demo-spec-kdemo/telemetry && go build ./cmd/spec-kitti-telemetry/ && echo BUILD_OK",
     "exit": 0,
     "ok": true,
     "tail": "BUILD_OK\n"
   },
   {
     "label": "go.mod sin deps externas",
-    "cmd": "cd /Users/luciano.perez/itti/pr-coe-genai-spec-kitti/telemetry && grep -c 'require' go.mod; test $(grep -c 'require' go.mod) -le 0",
+    "cmd": "cd ~/demo/demo-spec-kdemo/telemetry && grep -c 'require' go.mod; test $(grep -c 'require' go.mod) -le 0",
     "exit": 0,
     "ok": true,
     "tail": "0\n"

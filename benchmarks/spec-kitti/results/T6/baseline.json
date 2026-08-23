@@ -1,14 +1,14 @@
 [
   {
     "label": "build-darwin-arm64 funciona",
-    "cmd": "cd /Users/luciano.perez/itti/pr-coe-genai-spec-kitti/telemetry && make build-darwin-arm64 NR_API_KEY=test NR_ACCOUNT_ID=123 && ls dist/spec-kitti-telemetry-darwin-arm64 && echo BUILD_OK",
+    "cmd": "cd ~/demo/demo-spec-kdemo/telemetry && make build-darwin-arm64 NR_API_KEY=test NR_ACCOUNT_ID=123 && ls dist/spec-kitti-telemetry-darwin-arm64 && echo BUILD_OK",
     "exit": 2,
     "ok": false,
     "tail": "make: *** No rule to make target `build-darwin-arm64'.  Stop.\n"
   },
   {
     "label": "sin vars falla claro",
-    "cmd": "cd /Users/luciano.perez/itti/pr-coe-genai-spec-kitti/telemetry && make build-darwin-arm64 2>&1 | grep -iE 'NR_API_KEY|NR_ACCOUNT_ID|required|error' | head -2 && echo VARS_CHECKED",
+    "cmd": "cd ~/demo/demo-spec-kdemo/telemetry && make build-darwin-arm64 2>&1 | grep -iE 'NR_API_KEY|NR_ACCOUNT_ID|required|error' | head -2 && echo VARS_CHECKED",
     "exit": 0,
     "ok": true,
     "tail": "VARS_CHECKED\n"

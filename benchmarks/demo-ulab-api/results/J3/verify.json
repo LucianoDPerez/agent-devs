@@ -1,0 +1,9 @@
+[
+  {
+    "label": "basura staged para borrar o fuera del index",
+    "cmd": "cd ~/demo/demo-ulab-api && STAGED=$(git diff --cached --name-only --diff-filter=D | grep -cE 'RN-5|routeWebhook|routerService.route' || true); TRACKED=$(git ls-files | grep -cE 'RN-5|routeWebhook|routerService.route' || true); test \"$TRACKED\" = \"0\" -o \"$STAGED\" -ge 5",
+    "exit": 0,
+    "ok": true,
+    "tail": ""
+  }
+]

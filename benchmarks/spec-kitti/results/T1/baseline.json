@@ -1,14 +1,14 @@
 [
   {
     "label": "go build compila",
-    "cmd": "cd /Users/luciano.perez/itti/pr-coe-genai-spec-kitti/telemetry && go build ./cmd/spec-kitti-telemetry/ && echo BUILD_OK",
+    "cmd": "cd ~/demo/demo-spec-kdemo/telemetry && go build ./cmd/spec-kitti-telemetry/ && echo BUILD_OK",
     "exit": 1,
     "ok": false,
-    "tail": "stat /Users/luciano.perez/itti/pr-coe-genai-spec-kitti/telemetry/cmd/spec-kitti-telemetry: directory not found\n"
+    "tail": "stat ~/demo/demo-spec-kdemo/telemetry/cmd/spec-kitti-telemetry: directory not found\n"
   },
   {
     "label": "go.mod sin deps externas",
-    "cmd": "cd /Users/luciano.perez/itti/pr-coe-genai-spec-kitti/telemetry && grep -c 'require' go.mod; test $(grep -c 'require' go.mod) -le 0",
+    "cmd": "cd ~/demo/demo-spec-kdemo/telemetry && grep -c 'require' go.mod; test $(grep -c 'require' go.mod) -le 0",
     "exit": 2,
     "ok": false,
     "tail": "grep: go.mod: No such file or directory\ngrep: go.mod: No such file or directory\n/bin/sh: line 0: test: -le: unary operator expected\n"

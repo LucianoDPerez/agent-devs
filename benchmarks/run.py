@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-REPO = "/Users/luchop/PROYECTOS IA/Medicos"
+REPO = "~/PROYECTOS IA/Medicos"
 RESULTS_DIR = ROOT / "benchmarks" / "results"
 TASKS_FILE = ROOT / "benchmarks" / "tasks.json"
 SUMMARY = RESULTS_DIR / "summary.jsonl"

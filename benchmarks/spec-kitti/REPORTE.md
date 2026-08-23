@@ -1,6 +1,6 @@
 # Benchmark Spec-Kitti — Reporte Final
 
-**Fecha**: 2026-08-17/18 · **Repositorio objetivo**: `/Users/luciano.perez/itti/pr-coe-genai-spec-kitti` (Spec-Kitti CLI Python + binario Go de telemetría New Relic) · **Rama**: `benchmark/spec-kitti-telemetry-v1` (creada desde main, SIN push) · **LLM**: Qwen3.6-35B-A3B (config optimizada: t4, fa auto, q8_0, poll 0) · **Tareas**: tomadas TAL CUAL del RTF del usuario (`/Users/luciano.perez/Desktop/Spec-kitti-TASKS.rtf`)
+**Fecha**: 2026-08-17/18 · **Repositorio objetivo**: `~/demo/demo-spec-kitti` (Spec-Kitti CLI Python + binario Go de telemetría New Relic) · **Rama**: `benchmark/spec-kitti-telemetry-v1` (creada desde main, SIN push) · **LLM**: Qwen3.6-35B-A3B (config optimizada: t4, fa auto, q8_0, poll 0) · **Tareas**: tomadas TAL CUAL del RTF del usuario (`~/Desktop/Spec-kitti-TASKS.rtf`)
 
 ## Resultado: 4/9 cierres autónomos · 7/9 con verificación externa OK
 

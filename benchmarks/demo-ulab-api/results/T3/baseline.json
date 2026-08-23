@@ -1,0 +1,16 @@
+[
+  {
+    "label": "dirs corruptos eliminados",
+    "cmd": "test ! -d 'src/main/java/py/com/demo.ms' && test ! -d 'src/main/java/py/comitti'",
+    "exit": 1,
+    "ok": false,
+    "tail": ""
+  },
+  {
+    "label": "build pasa",
+    "cmd": "./gradlew build -x test --console=plain -q 2>&1",
+    "exit": 0,
+    "ok": true,
+    "tail": ""
+  }
+]

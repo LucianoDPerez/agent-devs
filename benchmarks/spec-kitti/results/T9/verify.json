@@ -1,14 +1,14 @@
 [
   {
     "label": "suite go completa verde",
-    "cmd": "cd /Users/luciano.perez/itti/pr-coe-genai-spec-kitti/telemetry && go vet ./... && go test ./... && echo SUITE_OK",
+    "cmd": "cd ~/demo/demo-spec-kdemo/telemetry && go vet ./... && go test ./... && echo SUITE_OK",
     "exit": 0,
     "ok": true,
     "tail": "ok  \tspec-kitti-telemetry/cmd/spec-kitti-telemetry\t(cached)\nok  \tspec-kitti-telemetry/internal/gitconfig\t(cached)\nok  \tspec-kitti-telemetry/internal/nr\t(cached)\nSUITE_OK\n"
   },
   {
     "label": "smoke start/end",
-    "cmd": "cd /Users/luciano.perez/itti/pr-coe-genai-spec-kitti/telemetry && go build -o /tmp/st-smoke ./cmd/spec-kitti-telemetry/ && /tmp/st-smoke start spec-kitti.refactor --template /dev/null > /tmp/st-session.txt 2>&1; /tmp/st-smoke end spec-kitti.refactor > /tmp/st-end.txt 2>&1; test ! -f /tmp/spec-kitti-telemetry-session && echo SMOKE_OK; rm -f /tmp/st-smoke",
+    "cmd": "cd ~/demo/demo-spec-kdemo/telemetry && go build -o /tmp/st-smoke ./cmd/spec-kitti-telemetry/ && /tmp/st-smoke start spec-kitti.refactor --template /dev/null > /tmp/st-session.txt 2>&1; /tmp/st-smoke end spec-kitti.refactor > /tmp/st-end.txt 2>&1; test ! -f /tmp/spec-kitti-telemetry-session && echo SMOKE_OK; rm -f /tmp/st-smoke",
     "exit": 0,
     "ok": true,
     "tail": "SMOKE_OK\n"

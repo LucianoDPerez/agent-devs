@@ -1,9 +1,9 @@
 [
   {
     "label": "go vet + test de nr",
-    "cmd": "cd /Users/luciano.perez/itti/pr-coe-genai-spec-kitti/telemetry && go vet ./internal/nr/ && go test ./internal/nr/ && echo TESTS_OK",
+    "cmd": "cd ~/demo/demo-spec-kdemo/telemetry && go vet ./internal/nr/ && go test ./internal/nr/ && echo TESTS_OK",
     "exit": 1,
     "ok": false,
-    "tail": "no Go files in /Users/luciano.perez/itti/pr-coe-genai-spec-kitti/telemetry/internal/nr\n"
+    "tail": "no Go files in ~/demo/demo-spec-kdemo/telemetry/internal/nr\n"
   }
 ]

@@ -4,7 +4,7 @@
     "cmd": "npm run test -w backend",
     "exit": 127,
     "ok": false,
-    "tail": "\n> medica-backend@0.1.0 test\n> jest\n\nsh: jest: command not found\nnpm error Lifecycle script `test` failed with error:\nnpm error code 127\nnpm error path /Users/luchop/PROYECTOS IA/Medicos/backend\nnpm error workspace medica-backend@0.1.0\nnpm error location /Users/luchop/PROYECTOS IA/Medicos/backend\nnpm error command failed\nnpm error command sh -c jest\n"
+    "tail": "\n> medica-backend@0.1.0 test\n> jest\n\nsh: jest: command not found\nnpm error Lifecycle script `test` failed with error:\nnpm error code 127\nnpm error path ~/PROYECTOS IA/Medicos/backend\nnpm error workspace medica-backend@0.1.0\nnpm error location ~/PROYECTOS IA/Medicos/backend\nnpm error command failed\nnpm error command sh -c jest\n"
   },
   {
     "label": "build backend",

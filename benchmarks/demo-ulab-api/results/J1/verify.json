@@ -1,0 +1,9 @@
+[
+  {
+    "label": "test nuevo compila y pasa",
+    "cmd": "./gradlew test --tests '*BaseController*' --tests '*AuthenticationController*' --console=plain -q 2>&1",
+    "exit": 1,
+    "ok": false,
+    "tail": "0-03:00  INFO 89884 --- [ionShutdownHook] o.s.b.w.embedded.netty.GracefulShutdown  : Commencing graceful shutdown. Waiting for active requests to complete\n2026-08-17T13:11:00.977-03:00  INFO 89884 --- [ netty-shutdown] o.s.b.w.embedded.netty.GracefulShutdown  : Graceful shutdown complete\n2026-08-17T13:11:03.076-03:00  INFO 89884 --- [ionShutdownHook] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Shutdown initiated...\n2026-08-17T13:11:03.076-03:00  INFO 89884 --- [ionShutdownHook] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Shutdown completed.\n2026-08-17T13:11:03.085-03:00  INFO 89884 --- [ionShutdownHook] o.s.b.w.embedded.netty.GracefulShutdown  : Commencing graceful shutdown. Waiting for active requests to complete\n2026-08-17T13:11:03.086-03:00  INFO 89884 --- [ netty-shutdown] o.s.b.w.embedded.netty.GracefulShutdown  : Graceful shutdown complete\n2026-08-17T13:11:05.174-03:00  INFO 89884 --- [ionShutdownHook] com.zaxxer.hikari.HikariDataSource       : HikariPool-2 - Shutdown initiated...\n2026-08-17T13:11:05.175-03:00  INFO 89884 --- [ionShutdownHook] com.zaxxer.hikari.HikariDataSource       : HikariPool-2 - Shutdown completed.\n\n8 tests completed, 8 failed\n\nFAILURE: Build failed with an exception.\n\n* What went wrong:\nExecution failed for task ':test'.\n> There were failing tests. See the report at: file://~/demo/demo-ulab-api/build/reports/tests/test/index.html\n\n* Try:\n> Run with --scan to get full insights.\n\nBUILD FAILED in 19s\n"
+  }
+]

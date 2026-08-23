@@ -1,6 +1,6 @@
 # Benchmark Medicos — Hallazgos, Correcciones y Evidencia
 
-**Fecha**: 2026-08-16/17 · **Repositorio objetivo**: `/Users/luchop/PROYECTOS IA/Medicos` (no se modifica desde acá: todo cambio lo ejecuta el agente AgentDevs) · **Harness**: `/Users/luchop/agent-lucho`
+**Fecha**: 2026-08-16/17 · **Repositorio objetivo**: `~/PROYECTOS IA/Medicos` (no se modifica desde acá: todo cambio lo ejecuta el agente AgentDevs) · **Harness**: `~/agent-lucho`
 
 ## Estado del benchmark (15 tareas: J1-J5 junior, S1-S5 semi-senior, T1-T5 senior)
 

@@ -68,3 +68,12 @@ benchmarks/**/results/*/git_pre.txt
 benchmarks/**/results/*/git_post.txt
 benchmarks/**/results/*/prompt.txt
 benchmarks/**/results/*/pre_snapshot/
+
+# Logs crudos y evidencia con paths de máquinas (privacidad)
+benchmarks/**/run.log
+benchmarks/**/retry.log
+benchmarks/**/results/**/run.log
+benchmarks/**/results/**/retry.log
+benchmarks/**/git_pre.txt
+benchmarks/**/git_post.txt
+benchmarks/**/prompt.txt

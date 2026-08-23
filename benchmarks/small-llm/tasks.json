@@ -1,5 +1,5 @@
 {
-  "repo": "/Users/luchop/PROYECTOS IA/Medicos",
+  "repo": "~/PROYECTOS IA/Medicos",
   "objetivo": "Comparativa de modelos chicos (4B vs 9B) en tareas reales mixtas sobre Medicos: analyze / plan / execute / review.",
   "contexto": "Mismo repo, mismas tools, mismo verification pipeline; solo cambia el modelo servido por llama.cpp en :8080. Métricas: éxito (criterio), tokens, tool calls, retries, tiempo.",
   "tasks": [

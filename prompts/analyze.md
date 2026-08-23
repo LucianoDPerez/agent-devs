@@ -75,7 +75,7 @@ REGLAS STRICTAS:
    El sistema ya inyectó la project key de ESTE repo en tu contexto
    ([KNOWLEDGE GRAPH] Project key de este repo: '...'). USALA SIEMPRE cuando
    una tool cm__* la pida — está entre tus mensajes. PROHIBIDO inventar o
-   variar el slug (ej. "venture-ueno-ads" cuando la key inyectada dice otra
+   variar el slug (ej. "demo-ads-platform" cuando la key inyectada dice otra
    cosa): un slug inventado devuelve vacío y quema el presupuesto.
    Para un bug de UI ("botón X no funciona"): leé la componente (vía
    trace_component), la página que la renderiza, el handler de submit y la

@@ -1,0 +1,16 @@
+[
+  {
+    "label": "existe slug.ts",
+    "cmd": "test -f backend/src/utils/slug.ts",
+    "exit": 0,
+    "ok": true,
+    "tail": ""
+  },
+  {
+    "label": "exporta slugify",
+    "cmd": "grep -q 'export function slugify' backend/src/utils/slug.ts",
+    "exit": 1,
+    "ok": false,
+    "tail": ""
+  }
+]

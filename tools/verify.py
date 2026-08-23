@@ -125,7 +125,7 @@ def _python_uses_uv(root: Path) -> bool:
 
     Los proyectos modernos con uv (pyproject.toml + uv.lock) NO se pueden
     verificar con `pytest`/`ruff` planos del PATH — sus deps viven en el
-    entorno uv. El harness fallaba E2E real: pr-coe-genai-spec-kitti usa uv y
+    entorno uv. El harness fallaba E2E real: demo-spec-kitti usa uv y
     el agente no lograba verificar porque run_tests corría `pytest` plano (sin
     deps) → loop infinito. Si hay uv.lock, usamos `uv run` / `uv sync`.
     """

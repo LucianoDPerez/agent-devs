@@ -13,22 +13,22 @@ import time
 import urllib.request
 import urllib.error
 
-REPO_PATH = "/Users/luciano.perez/itti/venture-api-academy"
-AGENT_DIR = "/Users/luciano.perez/agent-lucho"
+REPO_PATH = "~/demo/demo-academy"
+AGENT_DIR = "~/agent-lucho"
 
 MODELS = {
     "Agents-A1-4B": {
-        "model": "/Users/luciano.perez/.cache/huggingface/hub/models--InternScience--Agents-A1-4B-Q4_K_M-GGUF/snapshots/d92b02e27074b27542384f72bc0e72203c970f0f/Agents-A1-4B-Q4_K_M.gguf",
-        "mmproj": "/Users/luciano.perez/.cache/huggingface/hub/models--InternScience--Agents-A1-4B-Q4_K_M-GGUF/snapshots/d92b02e27074b27542384f72bc0e72203c970f0f/Agents-A1-4B-mmproj.gguf",
+        "model": "~/.cache/huggingface/hub/models--InternScience--Agents-A1-4B-Q4_K_M-GGUF/snapshots/d92b02e27074b27542384f72bc0e72203c970f0f/Agents-A1-4B-Q4_K_M.gguf",
+        "mmproj": "~/.cache/huggingface/hub/models--InternScience--Agents-A1-4B-Q4_K_M-GGUF/snapshots/d92b02e27074b27542384f72bc0e72203c970f0f/Agents-A1-4B-mmproj.gguf",
         "alias": "agents-a1-4b",
     },
     "Qwythos-9B": {
-        "model": "/Users/luciano.perez/.cache/huggingface/hub/models--empero-ai--Qwythos-9B-v2-GGUF/snapshots/97c11b03687f194b300efbdb4760d9bc4021b759/Qwythos-9B-v2-MTP-Q4_K_M.gguf",
-        "mmproj": "/Users/luciano.perez/.cache/huggingface/hub/models--empero-ai--Qwythos-9B-v2-GGUF/snapshots/97c11b03687f194b300efbdb4760d9bc4021b759/mmproj-Qwythos-9B-v2-BF16.gguf",
+        "model": "~/.cache/huggingface/hub/models--empero-ai--Qwythos-9B-v2-GGUF/snapshots/97c11b03687f194b300efbdb4760d9bc4021b759/Qwythos-9B-v2-MTP-Q4_K_M.gguf",
+        "mmproj": "~/.cache/huggingface/hub/models--empero-ai--Qwythos-9B-v2-GGUF/snapshots/97c11b03687f194b300efbdb4760d9bc4021b759/mmproj-Qwythos-9B-v2-BF16.gguf",
         "alias": "qwythos-9b",
     },
     "Falcon-H1R-7B": {
-        "model": "/Users/luciano.perez/.cache/huggingface/hub/models--tiiuae--Falcon-H1R-7B-GGUF/snapshots/2dc053e015a9e3c5b954aa81e00aaed24bef830f/Falcon-H1R-7B-Q4_K_M.gguf",
+        "model": "~/.cache/huggingface/hub/models--tiiuae--Falcon-H1R-7B-GGUF/snapshots/2dc053e015a9e3c5b954aa81e00aaed24bef830f/Falcon-H1R-7B-Q4_K_M.gguf",
         "alias": "falcon-h1r-7b",
     },
 }
@@ -101,7 +101,7 @@ def tool_call_test(model_alias):
         "model": model_alias,
         "messages": [
             {"role": "system", "content": "Sos un asistente que usa herramientas cuando corresponde."},
-            {"role": "user", "content": "Listame los archivos del directorio src/main/java del proyecto /Users/luciano.perez/itti/venture-api-academy"}
+            {"role": "user", "content": "Listame los archivos del directorio src/main/java del proyecto ~/demo/demo-academy"}
         ],
         "tools": [{
             "type": "function",
@@ -161,7 +161,7 @@ def test_basic_chat(model_alias):
     log(f"[BASIC CHAT] Preguntando sobre el repo...")
     resp = chat_completion(
         "Describime la arquitectura de este proyecto Java en 3 lineas maximas. "
-        "El proyecto está en /Users/luciano.perez/itti/venture-api-academy",
+        "El proyecto está en ~/demo/demo-academy",
         model=model_alias,
         max_tokens=512,
     )

@@ -5,7 +5,7 @@ reales: 5 de análisis/plan + 2 de ejecución con criterio objetivo (el
 archivo creado existe y valida).
 
 Bancos: `benchmarks/small-llm/` (4B, 9B, 12B sobre Medicos) y
-`benchmarks/venture-ueno-ads/` (35B sobre ueno-ads). Misma estructura de
+`benchmarks/demo-ads-platform/` (35B sobre ueno-ads). Misma estructura de
 tareas, mismos criterios de verify, mismo runner.
 
 ## Resultados

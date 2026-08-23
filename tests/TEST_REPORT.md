@@ -1,7 +1,7 @@
 # Informe de Pruebas — AgentDevs Orquestador Multicapa
 
 **Fecha:** 2026-08-02
-**Repo probado:** `/Users/luciano.perez/itti/venture-api-academy`
+**Repo probado:** `~/demo/demo-academy`
 **Modelo:** `agents-a1-4b` (Agents-A1-4B Q4_K_M) vía llama-server en `http://localhost:8080/v1`
 **Python:** 3.14.6
 
@@ -88,7 +88,7 @@ El clasificador analiza el mensaje del usuario y lo mapea a una intención sin l
 
 ---
 
-## 3. E2E Orquestador contra venture-api-academy (43/43 = 100%)
+## 3. E2E Orquestador contra demo-academy (43/43 = 100%)
 
 ### Paso 1: Core domain — enums, mapeos, tools, prompts (15 tests)
 
@@ -116,7 +116,7 @@ Todos los 15 mensajes de prueba clasificados correctamente (ver sección 2).
 
 ### Paso 3: Session — flujo con LLM real (13 tests)
 
-5 turnos consecutivos contra el repositorio `venture-api-academy` (14,910 nodos, 50,208 edges en el knowledge graph):
+5 turnos consecutivos contra el repositorio `demo-academy` (14,910 nodos, 50,208 edges en el knowledge graph):
 
 | Turno | Rol detectado | Mensaje | Tokens out | Tiempo | |
 |-------|---------------|---------|-----------|--------|--|

@@ -1,9 +1,0 @@
-[
-  {
-    "label": "test exception handler pasa",
-    "cmd": "./gradlew test --tests '*ExceptionHandler*' --console=plain -q 2>&1",
-    "exit": 1,
-    "ok": false,
-    "tail": "cation: class CorrelationIdWebFilterTest\n/Users/luciano.perez/itti/venture-api-ulab/src/test/java/py/com/itti/ms/base/common/config/CorrelationIdWebFilterTest.java:86: error: cannot find symbol\n        appender.setContext(logger.getContext());\n                                  ^\n  symbol:   method getContext()\n  location: variable logger of type Logger\n/Users/luciano.perez/itti/venture-api-ulab/src/test/java/py/com/itti/ms/base/common/config/CorrelationIdWebFilterTest.java:98: error: cannot find symbol\n            java.util.List<LogEvent> logList = appender.getList();\n                           ^\n  symbol:   class LogEvent\n  location: class CorrelationIdWebFilterTest\n/Users/luciano.perez/itti/venture-api-ulab/src/test/java/py/com/itti/ms/base/common/config/CorrelationIdWebFilterTest.java:100: error: cannot find symbol\n            LogEvent lastLog = logList.get(logList.size() - 1);\n            ^\n  symbol:   class LogEvent\n  location: class CorrelationIdWebFilterTest\nNote: Some input files use or override a deprecated API.\nNote: Recompile with -Xlint:deprecation for details.\nNote: Some input files use unchecked or unsafe operations.\nNote: Recompile with -Xlint:unchecked for details.\n5 errors\n\nFAILURE: Build failed with an exception.\n\n* What went wrong:\nExecution failed for task ':compileTestJava'.\n> Compilation failed; see the compiler error output for details.\n\n* Try:\n> Run with --info option to get more log output.\n> Run with --scan to get full insights.\n\nBUILD FAILED in 10s\n"
-  }
-]
