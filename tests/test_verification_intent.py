@@ -41,3 +41,15 @@ def test_is_verification_only():
     assert _is_verification_only("confirmá que los tests pasan") is True
     assert _is_verification_only("verificá y arreglá el bug") is False
     assert _is_verification_only("implementá el endpoint") is False
+
+
+@pytest.mark.parametrize("prompt", [
+    "verifica si estas tasks ya fueron implementadas, si no implementalas",
+    "verificar si la Task 5 esta implementada, si no hacela",
+    "verificá si el endpoint existe, si no crealo",
+])
+def test_verificacion_con_fallback_accion_ruta_execute(prompt):
+    """'Verifica si X, SI NO implementala' → EXECUTE (trabajo condicional real).
+    El 'no implementalas' se neutralizaba por _NEGATED_ACTION_RE y el check
+    si-no moría: hay que evaluarlo sobre el prefix ORIGINAL."""
+    assert classify_intent(None, prompt) == Intent.EXECUTE

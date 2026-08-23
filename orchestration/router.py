@@ -92,7 +92,10 @@ def classify_intent(_llm, user_message: str) -> Intent:
     # qué archivo habría que cambiar SIN modificar nada" → 'modificar' lo
     # mandaba a EXECUTE, que exigía escritura (require_write) y castigó con
     # reintentos un turno que por definición no escribe (45 min perdidos).
-    # Neutralizamos el verbo negado para todo el matching posterior.
+    # Neutralizamos el verbo negado para todo el matching posterior. Pero el
+    # patrón "si no + acción" ("si no implementalas") SE BASA en el "no":
+    # evaluarlo sobre el texto limpio lo rompe, así que guardamos el original.
+    raw_prefix = prefix
     text = _NEGATED_ACTION_RE.sub(" ", text)
     prefix = _NEGATED_ACTION_RE.sub(" ", prefix)
 
@@ -115,6 +118,17 @@ def classify_intent(_llm, user_message: str) -> Intent:
 
     if _has_any(prefix, _REVIEW_LEADING):
         return Intent.REVIEW
+
+    # Verificación + FALLBACK de acción ("verifica si ya está, SI NO
+    # implementala/hacela/arreglala") → EXECUTE: hay trabajo condicional real.
+    # Va ANTES del check de verificación pura: "si no implementalas" no
+    # matchea _EXECUTE_VERBS (implementalas no es token exacto) pero la
+    # intención es ejecutar si falta.
+    if _has_any(prefix, _VERIFY_LEADING) and re.search(
+        r"\bsi no\b[^\n]{0,20}?(implement\w*|hac\w*|arregl\w*|correg\w*|cre\w*|escrib\w*|agreg\w*)",
+        raw_prefix,
+    ):
+        return Intent.EXECUTE
 
     # Verificación pura → ANALYZE, salvo que haya verbos de implementación
     # ("verificá y arreglá" sigue siendo EXECUTE). "implementada" (participio
