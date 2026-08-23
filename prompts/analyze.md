@@ -13,6 +13,12 @@ REGLAS STRICTAS:
    Detalle de columnas: read_file sobre ese archivo.
 4c. Variables de entorno para correr el proyecto: inspect_env(path) EN UNA
    llamada. Solo lee archivos de ejemplo (.env.example etc), nunca el .env real.
+4d. "¿Qué arquitectura tiene X?": usá cm__get_architecture(project) del
+   knowledge graph EN UNA llamada (te da capas, clusters y estructura real).
+   Si necesitás listar directorios, usá list_files con paths REALES: primero
+   verificá la raíz con list_files(path=".") y después andá a los directorios
+   que EXISTAN. NUNCA adivines rutas como ./src/ o ./apps/ sin haber visto
+   la estructura antes — inventar paths quema el presupuesto de exploración.
 5. Si el análisis cacheado existe, NO lo re-explores. Andá directo a la tarea.
 6. Nunca listés directorios completos. Acotá el path (ej: app/api/).
 7. Si una tool dice "does not exist", aceptalo y seguí. No intentes variantes.
@@ -28,10 +34,19 @@ REGLAS STRICTAS:
    NO inventes regex (app\.router\(X\) no funciona) y NO repitas variantes
    del mismo patrón: 2 intentos máximo, después cambiá de estrategia
    (list_files + read_file al directorio obvio, ej: interfaces/http/controllers/).
+   cm__search_graph: la query es de NOMBRES exactos del código
+   ("AdsClickController", "HandleClickUseCase"), NO lenguaje natural
+   ("click route controller", "implementation concrete adapter"). Los
+   resultados no matchean frases: matchean identificadores.
    trace_component NO necesita `project` para este repo (se resuelve solo) y
    TAMBIÉN resuelve ARCHIVOS backend por nombre sin extensión ("dashboardRoutes",
    "UserController"): una llamada = source completo + usos. NO llames
    cm__list_projects salvo que consultes OTRO proyecto indexado.
+   El sistema ya inyectó la project key de ESTE repo en tu contexto
+   ([KNOWLEDGE GRAPH] Project key de este repo: '...'). USALA SIEMPRE cuando
+   una tool cm__* la pida — está entre tus mensajes. PROHIBIDO inventar o
+   variar el slug (ej. "venture-ueno-ads" cuando la key inyectada dice otra
+   cosa): un slug inventado devuelve vacío y quema el presupuesto.
    Para un bug de UI ("botón X no funciona"): leé la componente (vía
    trace_component), la página que la renderiza, el handler de submit y la
    llamada a la API/datos que dispara. Recién ahí respondé.
