@@ -145,6 +145,16 @@ AgentDevs is designed for small models and works well on bounded tasks, but it h
 - **`cm__*` tools missing** → codebase-memory-mcp is missing; the doctor installs it on macOS/Linux.
 - **Want another port/model** → edit `LLM_BASE_URL` and `LLM_MODEL_NAME` in `config.py`.
 
+## Contact
+
+Want to contribute, report something, or talk about the project?
+
+- **GitHub**: [LucianoDPerez](https://github.com/LucianoDPerez)
+- **Email**: [lucianoperezvic84@gmail.com](mailto:lucianoperezvic84@gmail.com)
+- **LinkedIn**: [Luciano David Perez](https://www.linkedin.com/in/luciano-david-perez-6172a11a0/)
+
+For large contributions, email first to coordinate scope.
+
 ## How it works (the short version)
 
 Every message goes through a **router** that picks the right role. Each role has a bounded tool subset: `analyze` only reads, `execute` writes but is subject to a **verification gate** (lint/tests/build) before closing, and `review` compares against the diff. The MCP knowledge graph gives architectural vision; the SQLite cache gives memory across sessions; tool-call budgets prevent infinite loops.

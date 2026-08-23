@@ -68,6 +68,13 @@ Mapa completo de capas, roles, tools y decisiones de diseño: **[docs/ARCHITECTU
 
 En corto: `main.py` (CLI/TUI) → `orchestration/` (router, sesión, presupuestos) → `tools/` (filesystem, git, verify) → `core/` (roles, intents) + `display/` (consola y TUI Textual).
 
+## Contacto
+
+Para coordinar contribuciones grandes o preguntas que no sean issues:
+
+- Email: lucianoperezvic84@gmail.com
+- LinkedIn: https://www.linkedin.com/in/luciano-david-perez-6172a11a0/
+
 ## Reportar vulnerabilidades
 
 **No abras un issue público.** Seguí [SECURITY.md](SECURITY.md).

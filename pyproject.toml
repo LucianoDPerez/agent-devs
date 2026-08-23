@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "agent-devs"
 version = "0.1.0"
 description = "AgentDevs — agente de desarrollo con LLM local (llama.cpp), multi-rol y knowledge graph MCP"
+authors = [{ name = "Luciano D. Perez", email = "lucianoperezvic84@gmail.com" }]
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

@@ -157,6 +157,16 @@ ver `benchmarks/ANALISIS.md`):
 - **Tiempo > capacidad**: en hardware local, los execute largos pueden exceder
   40 min; el límite por turno es configurable (`--turn-timeout`).
 
+## Contacto
+
+¿Querés contribuir, reportar algo o charlar sobre el proyecto?
+
+- **GitHub**: [LucianoDPerez](https://github.com/LucianoDPerez)
+- **Email**: [lucianoperezvic84@gmail.com](mailto:lucianoperezvic84@gmail.com)
+- **LinkedIn**: [Luciano David Perez](https://www.linkedin.com/in/luciano-david-perez-6172a11a0/)
+
+Para contribuciones grandes, escribí antes por email para coordinar el alcance.
+
 ## Cómo funciona (la versión corta)
 
 Cada mensaje pasa por un **router** que elige el rol apropiado. Cada rol tiene su subset de herramientas acotadas: `analyze` solo lee, `execute` escribe pero queda sometido a una **compuerta de verificación** (lint/tests/build) antes de cerrar, y `review` compara contra el diff. El knowledge graph MCP le da vista arquitectural; el cache SQLite le da memoria entre sesiones; los presupuestos de tool calls evitan loops infinitos.
