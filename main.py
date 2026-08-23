@@ -228,8 +228,8 @@ def run_fullscreen(session) -> None:
         # respuestas del agente (blanco default).
         from rich.markup import escape
         console.print()
-        console.print("[bold bright_magenta]🧑 vos ›[/bold bright_magenta]")
-        console.print(f"[bright_magenta]{escape(text)}[/bright_magenta]")
+        console.print("[bold dark_orange]🧑 vos ›[/bold dark_orange]")
+        console.print(f"[dark_orange]{escape(text)}[/dark_orange]")
         console.print()
         session.run_turn(text)
 
