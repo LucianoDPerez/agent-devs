@@ -53,6 +53,15 @@ _FETCH_CALL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# BASE_URL / VITE_API_URL del frontend: si la base ya incluye el prefijo
+# (ej. 'http://localhost:3000/api'), los literales '/api/...' están
+# DUPLICANDO el prefijo (path final BASE/api/api/x). El detector debe saber
+# que la base existe para corregir por EXCESO, no por falta.
+_BASE_URL_RE = re.compile(
+    r"""(?:BASE_URL|VITE_API_URL|API_BASE|baseURL|base_url)\s*[:=]\s*["']([^"']+)["']""",
+    re.IGNORECASE,
+)
+
 # Montajes de routers: app.use('/api', apiRoutes) / router.use('/pacientes', ...)
 _MOUNT_RE = re.compile(
     r"(?:app|router)\.use\s*\(\s*[\"'\`]([^\"'\`]+)[\"'\`]",
@@ -117,7 +126,7 @@ def detect_path_mismatches(repo_path: str, *, max_findings: int = 5) -> str:
     root = Path(repo_path)
     if not root.is_dir():
         return ""
-    frontend_paths, backend_routes, backend_mounts, backend_resources = (
+    frontend_paths, backend_routes, backend_mounts, backend_resources, base_has_api = (
         _collect_repo_info(root)
     )
     if not backend_resources or not frontend_paths:
@@ -125,24 +134,30 @@ def detect_path_mismatches(repo_path: str, *, max_findings: int = 5) -> str:
     findings = _compute_findings(
         frontend_paths, backend_routes, backend_mounts, backend_resources,
         max_findings=max_findings,
+        frontend_base_has_api=base_has_api,
     )
     if not findings:
         return ""
     return _format_findings(findings)
 
 
-def _collect_repo_info(root: Path) -> tuple[list, set, list, set]:
-    """(frontend_paths, backend_routes, backend_mounts, backend_resources)."""
+def _collect_repo_info(root: Path) -> tuple[list, set, list, set, bool]:
+    """(frontend_paths, backend_routes, backend_mounts, backend_resources,
+    frontend_base_has_api)."""
     frontend_paths: list[tuple[str, str, int]] = []  # (path_literal, file, line)
     backend_routes: set[str] = set()
     backend_mounts: list[str] = []
     backend_resources: set[str] = set()
+    frontend_base_has_api = False
 
     for p, rel in _iter_code_files(root):
         text = _read_text(p)
         if not text:
             continue
         if _is_frontend_file(rel):
+            for m in _BASE_URL_RE.finditer(text):
+                if "/api" in (m.group(1) or ""):
+                    frontend_base_has_api = True
             for m in _FETCH_CALL_RE.finditer(text):
                 literal = m.group(1).strip()
                 if literal.startswith("/") and "://" not in literal:
@@ -177,7 +192,7 @@ def _collect_repo_info(root: Path) -> tuple[list, set, list, set]:
 
     for m in backend_mounts:
         backend_resources.update(_resource_words(m))
-    return frontend_paths, backend_routes, backend_mounts, backend_resources
+    return frontend_paths, backend_routes, backend_mounts, backend_resources, frontend_base_has_api
 
 
 def _compute_findings(
@@ -186,6 +201,7 @@ def _compute_findings(
     backend_mounts: list[str],
     backend_resources: set[str],
     max_findings: int = 5,
+    frontend_base_has_api: bool = False,
 ) -> list[dict]:
     """Findings estructurados: {literal, rel, line, target}.
 
@@ -231,13 +247,16 @@ def _compute_findings(
         seen.add(key)
         if not fn.startswith("/") or fn == "/":
             continue
-        # ¿Ya es correcto? Con prefijos montados → ruta resuelta; sin
-        # prefijos → match directo contra los literales del router.
+        # ¿La base del frontend YA aporta el prefijo? Un literal que empieza
+        # con el mismo prefijo (ej. '/api/...' con base '.../api') está
+        # DUPLICANDO: el path final sería BASE/api/api/x. El fix correcto es
+        # QUITAR el prefijo del literal. Va ANTES del check de 'ya correcto'
+        # porque _norm(/api/pacientes?x) == /api/pacientes == ruta resuelta
+        # (el doble prefijo se disfraza de ruta válida).
         if api_prefixes:
-            # PREFIJO DUPLICADO: '/api/api/pacientes' empieza con '/api' y el
-            # check startswith() lo daba por correcto (bug real: 9 líneas
-            # rotas en Medicos invisibles para el detector). Corregir a
-            # '/api/pacientes' si el resto queda grounded.
+            # CASO A — PREFIJO DUPLICADO en el literal: '/api/api/pacientes'
+            # (bug real Medicos: startswith('/api') lo daba por correcto).
+            # Corregir a '/api/pacientes' si el resto queda grounded.
             dup_corrected = None
             for p in api_prefixes:
                 if fn.startswith(p) and fn[len(p):].startswith(p):
@@ -260,10 +279,37 @@ def _compute_findings(
                 if len(findings) >= max_findings:
                     break
                 continue
-            if fn in resolved_routes:
-                continue
-            if any(fn.startswith(p) for p in api_prefixes):
-                continue
+            # CASO B — la base del frontend YA aporta el prefijo
+            # (BASE_URL='.../api'): el literal CORRECTO es la ruta del router
+            # SIN prefijo ('/pacientes'), porque BASE + '/pacientes' =
+            # '/api/pacientes'. Un literal '/api/...' aquí está DUPLICANDO.
+            if frontend_base_has_api:
+                if any(fn.startswith(p) for p in api_prefixes):
+                    stripped = literal
+                    for pr in api_prefixes:
+                        if stripped.startswith(pr):
+                            stripped = stripped[len(pr):]
+                            break
+                    target_norm = _norm(stripped)
+                    if stripped.startswith("/") and target_norm in backend_routes:
+                        findings.append({
+                            "literal": literal,
+                            "rel": rel,
+                            "line": line,
+                            "target": stripped,
+                        })
+                        if len(findings) >= max_findings:
+                            break
+                        continue
+                elif fn in backend_routes:
+                    # correcto: sin prefijo, la base lo aporta
+                    continue
+            else:
+                # Sin base /api en el frontend (comportamiento original).
+                if fn in resolved_routes:
+                    continue
+                if any(fn.startswith(p) for p in api_prefixes):
+                    continue
         else:
             if fn in backend_routes:
                 continue
@@ -291,26 +337,6 @@ def _compute_findings(
         if len(findings) >= max_findings:
             break
     return findings
-
-
-def detect_path_mismatches(repo_path: str, *, max_findings: int = 5) -> str:
-    """Compara paths del frontend con rutas del backend. Devuelve el bloque
-    de hallazgos listo para inyectar en el mensaje EXECUTE (o '' si no hay)."""
-    root = Path(repo_path)
-    if not root.is_dir():
-        return ""
-    frontend_paths, backend_routes, backend_mounts, backend_resources = (
-        _collect_repo_info(root)
-    )
-    if not backend_resources or not frontend_paths:
-        return ""
-    findings = _compute_findings(
-        frontend_paths, backend_routes, backend_mounts, backend_resources,
-        max_findings=max_findings,
-    )
-    if not findings:
-        return ""
-    return _format_findings(findings)
 
 
 def _format_findings(findings: list[dict]) -> str:
@@ -344,7 +370,7 @@ def apply_mismatch_fixes(repo_path: str, *, max_findings: int = 25) -> str:
     root = Path(repo_path)
     if not root.is_dir():
         return ""
-    frontend_paths, backend_routes, backend_mounts, backend_resources = (
+    frontend_paths, backend_routes, backend_mounts, backend_resources, base_has_api = (
         _collect_repo_info(root)
     )
     if not backend_resources or not frontend_paths:
@@ -352,6 +378,7 @@ def apply_mismatch_fixes(repo_path: str, *, max_findings: int = 25) -> str:
     findings = _compute_findings(
         frontend_paths, backend_routes, backend_mounts, backend_resources,
         max_findings=max_findings,
+        frontend_base_has_api=base_has_api,
     )
     applied: list[str] = []
     for f in findings:
