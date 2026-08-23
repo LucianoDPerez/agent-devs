@@ -1,0 +1,13 @@
+Creá src/shared/utils/slug.ts exportando la función slugify(text: string): string (lowercase, sin acentos, espacios a guiones) siguiendo el estilo TypeScript del proyecto: named export, function declaration, single quotes y semicolons como en src/shared/utils/map-pool.ts.
+
+BASELINE (estado del repo ANTES de que arranques — el sistema ya lo verificó):
+- existe slug.ts: FALLA (exit=1)
+- exporta slugify: FALLA (exit=2)
+
+⚠️  El baseline YA fallaba en estos criterios. Dos casos DISTINTOS:
+    - AUSENCIA (el tail dice 'No tests found', 'No such file', etc.): NO es heredado.
+      Es EXACTAMENTE lo que tu tarea debe crear. Si al final sigue fallando igual,
+      contará como error tuyo.
+    - Error CONDUCTUAL (build/test falla en código existente): es HEREDADO si el
+      verify final falla por lo MISMO y no tocaste el archivo del error. Documentalo
+      (archivo/clase) y NO entres en loop intentando arreglarlo.

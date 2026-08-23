@@ -1,0 +1,151 @@
+╭───────────────────────────────── AgentDevs ──────────────────────────────────╮
+│ 🔌 LLM: http://localhost:8080/v1                                             │
+│ 📁 Repo: /Users/luciano.perez/itti/venture-ueno-ads  🌿 main                 │
+│ ⚡ Modelo: qwen3.6-35b-a3b | Temp: 0.2 | Max: 3584                           │
+│ 🛠️  Tools: 23 locales + 14 graph (cm__*)                                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+📚 Análisis cacheado encontrado. No se re-explora.
+💡 Decime qué querés hacer (implementá, planificá, revisá, analizá…).
+
+› 🎯 intent=analyze → rol=analyzer
+
+[🔍 Análisis] Tools: 14 locales + 14 graph
+💭 Razonando…
+
+────────────────────────────────────────
+
+  🔧 inspect_env{"path":"/Users/luciano.perez/itti/venture-ueno-ads"}
+  🔧 read_file{"path":"/Users/luciano.perez/itti/venture-ueno-ads/docker-compose.yml"}
+## Variables de Entorno — `venture-ueno-ads`
+
+Fuente: `.env.example` + `docker-compose.yml`.
+
+---
+
+### 🐘 PostgreSQL (obligatorio para levantar)
+
+| Variable | Valor default | Oblig? |
+|----------|---------------|--------|
+| `POSTGRES_USER` | `ueno_ads` | ✅ (`:?` en docker-compose) |
+| `POSTGRES_PASSWORD` | `ueno_ads_dev` | ✅ |
+| `POSTGRES_DB` | `ueno_ads` | ✅ |
+| `POSTGRES_PORT` | `5433` | — (puoto mapeado al host) |
+| `DATABASE_URL` | `postgresql://ueno_ads:ueno_ads_dev@localhost:5433/ueno_ads` | derivada |
+
+---
+
+### 🔴 Redis
+
+| Variable | Valor default | Oblig? |
+|----------|---------------|--------|
+| `REDIS_PORT` | `6380` | — |
+| `REDIS_URL` | `redis://localhost:6380/0` | — (cache hot-path, ADR-013) |
+
+---
+
+### 🪣 LocalStack / S3
+
+| Variable | Valor default | Oblig? |
+|----------|---------------|--------|
+| `LOCALSTACK_PORT` | `4567` | — |
+| `AWS_ENDPOINT_URL` | `http://localhost:4567` | — |
+| `AWS_REGION` | `sa-east-1` | — |
+| `AWS_ACCESS_KEY_ID` | `test` | — |
+| `AWS_SECRET_ACCESS_KEY` | `test` | — |
+| `UENO_ADS_S3_BUCKET` | `ueno-ads-dev` | — |
+| `LOCALSTACK_DEBUG` | `0` | — |
+
+> Solo se arranca LocalStack con el servicio `s3` habilitado (MVP, sin SQS). Ver `docker-compose.yml:28`.
+
+---
+
+### 📧 SMTP / Mailpit
+
+| Variable | Valor default | Oblig? |
+|----------|---------------|--------|
+| `SMTP_HOST` | `localhost` | — |
+| `SMTP_PORT` | `1025` | — (puoto de Mailpit) |
+| `SMTP_FROM` | `noreply@ueno-ads.local` | — |
+
+---
+
+### 🔐 AuthGuard / SSO
+
+| Variable | Valor default | Oblig? |
+|----------|---------------|--------|
+| `AUTHGUARD_BASE_URL` | `https://authguard.example.com` | ✅ (runtime) |
+| `AUTHGUARD_CLIENT_ID` | `your-client-id` | ✅ |
+| `AUTHGUARD_CLIENT_SECRET` | `your-client-secret` | ✅ |
+| `AUTHGUARD_TENANT` | `your-tenant` | ✅ |
+| `AUTHGUARD_TIMEOUT_MS` | `5000` | — |
+| `AUTH_COOKIE_SECURE` | `false` | dev |
+
+---
+
+### 📊 Data Lab (sync de segmentos)
+
+| Variable | Valor default | Oblig? |
+|----------|---------------|--------|
+| `DATA_LAB_SYNC_ENABLED` | `true` | — |
+| `DATA_LAB_SYNC_CRON` | `0 * * * *` | — |
+| `DATA_LAB_SYNC_TIMEZONE` | `America/Asuncion` | — |
+| `DATA_LAB_API_BASE_URL` | `https://delivery.data-lab-use1.ueno.c...` | ✅ (si sync enabled) |
+| `DATA_LAB_API_KEY` | *(vacío)* | ✅ |
+| `DATA_LAB_API_TIMEOUT_MS` | `10000` | — |
+| `DATA_LAB_SYNC_CONCURRENCY` | `5` | — |
+
+---
+
+### 🖼️ HUP Banner (sync externo)
+
+| Variable | Valor default | Oblig? |
+|----------|---------------|--------|
+| `HUP_BANNER_SYNC_ENABLED` | `false` | — |
+| `HUP_BANNER_API_BASE_URL` | `https://hup-banner-api.example.com` | ✅ (si enabled) |
+| `HUP_BANNER_API_KEY` | `your-api-key-here` | ✅ |
+| `HUP_BANNER_API_TIMEOUT_MS` | `5000` | — |
+
+---
+
+### 🌐 App / API (global)
+
+| Variable | Valor default | Oblig? |
+|----------|---------------|--------|
+| `NODE_ENV` | `development` | — |
+| `APP_PORT` | `3000` | — |
+| `LOG_LEVEL` | `debug` | — |
+| `API_BASE_URL` | `http://localhost:3001` | — |
+| `API_PORT` | `3001` | — |
+| `PORTAL_BASE_URL` | `http://localhost:3000` | — |
+
+---
+
+### 📡 Ad Serving (feature flag)
+
+| Variable | Valor default | Oblig? |
+|----------|---------------|--------|
+| `AD_SERVING_ENABLED` | `false` | — |
+
+---
+
+### Resumen de obligatorias mínimas para levantar dev local:
+
+1. **Postgres**: `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` (validadas por docker-compose con `:?`)
+2. **Redis**: `REDIS_URL` (o al menos `REDIS_PORT`)
+3. **AuthGuard**: `AUTHGUARD_BASE_URL`, `AUTHGUARD_CLIENT_ID`, `AUTHGUARD_CLIENT_SECRET`, `AUTHGUARD_TENANT`
+4. **LocalStack/S3** (si usás S3 en dev): `AWS_ENDPOINT_URL`, `UENO_ADS_S3_BUCKET`
+
+El resto son configurables con los defaults del `.env.example` y pueden dejarse tal cual para el entorno de desarrollo.
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 193.7s | 12,402 tokens (in 9,565 + out 2,837, 8,705             │
+│ reutilizados)                                                                │
+│ 📊 Sesión: 193.7s | 12,402 tokens (in 9,565 + out 2,837)                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› 
+👋 ¡Hasta luego!
+
+=== STDERR ===
+level=info msg=mem.init budget_mb=12288 total_ram_mb=24576
+level=info msg=mem.init budget_mb=12288 total_ram_mb=24576

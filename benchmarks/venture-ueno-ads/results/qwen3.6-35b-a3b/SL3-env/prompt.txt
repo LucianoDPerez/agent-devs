@@ -1,0 +1,1 @@
+¿Qué variables de entorno necesito configurar para correr el proyecto completo (API NestJS en apps/api y frontend Next.js en app/)? Usá .env.example, ENV.md y docker-compose.yml como guía. Listalas agrupadas por servicio (Postgres, Redis, LocalStack/S3, SMTP, AuthGuard/SSO, Data Lab, HUP Banner) y marcá cuáles son obligatorias.

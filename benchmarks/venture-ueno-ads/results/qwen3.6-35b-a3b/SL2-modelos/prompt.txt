@@ -1,0 +1,1 @@
+¿Qué modelos de datos existen en el proyecto, cómo se relacionan entre sí y dónde están definidos? Fijate en prisma/schema.prisma (Company, User, Campaign, Flight, Pauta, AudienceSegment, ImpressionEvent, ClickEvent, TransactionMirror, etc.) y en los objetos de dominio TS de src/modules/.

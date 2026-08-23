@@ -1,0 +1,87 @@
+╭───────────────────────────────── AgentDevs ──────────────────────────────────╮
+│ 🔌 LLM: http://localhost:8080/v1                                             │
+│ 📁 Repo: /Users/luciano.perez/itti/venture-ueno-ads  🌿 main                 │
+│ ⚡ Modelo: qwen3.6-35b-a3b | Temp: 0.2 | Max: 3584                           │
+│ 🛠️  Tools: 23 locales + 14 graph (cm__*)                                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+📚 Análisis cacheado encontrado. No se re-explora.
+💡 Decime qué querés hacer (implementá, planificá, revisá, analizá…).
+
+› 🎯 intent=plan → rol=planner
+
+[📋 Planificación] Tools: 13 locales + 14 graph
+💭 Razonando…
+
+────────────────────────────────────────
+
+  🔧 inspect_routes{"path":"/Users/luciano.perez/itti/venture-ueno-ads"}
+### Endpoints NestJS (`/v1`) agrupados por Controller:
+
+#### 1. Ad Serving
+| Método | Ruta | Archivo |
+|--------|------|---------|
+| `GET`   | `/click` | `apps/api/src/modules/ad-serving/ads-click.controller.ts` |
+| `GET`   | `/:pautaId` | `apps/api/src/modules/ad-serving/click-pauta.controller.ts` |
+
+#### 2. Campaign Management — Cache Diag
+| Método | Ruta | Archivo |
+|--------|------|---------|
+| `GET`   | `/presign/:id` | `apps/api/src/modules/campaign-management/cache-diag.controller.ts` |
+| `GET`   | `/cache` | `apps/api/src/modules/campaign-management/cache-diag.controller.ts` |
+
+#### 3. Campaign Management — Catálogos
+| Método | Ruta | Archivo |
+|--------|------|---------|
+| `GET`   | `/apps` | `apps/api/src/modules/campaign-management/catalogs.controller.ts` |
+| `GET`   | `/categories` | `apps/api/src/modules/campaign-management/catalogs.controller.ts` |
+
+#### 4. Campaign Management — Creativos
+| Método | Ruta | Archivo |
+|--------|------|---------|
+| `GET`   | `/:id/image` | `apps/api/src/modules/campaign-management/creatives.controller.ts` |
+
+#### 5. Campaign Management — Dashboard
+| Método | Ruta | Archivo |
+|--------|------|---------|
+| `GET`   | `/hierarchy` | `apps/api/src/modules/campaign-management/dashboard.controller.ts` |
+
+#### 6. Campaign Management — Pautas Export
+| Método | Ruta | Archivo |
+|--------|------|---------|
+| `GET`   | `/export` | `apps/api/src/modules/campaign-management/pautas-export.controller.ts` |
+
+#### 7. Campaign Management — Pautas Has Any
+| Método | Ruta | Archivo |
+|--------|------|---------|
+| `GET`   | `/has-any` | `apps/api/src/modules/campaign-management/pautas-has-any.controller.ts` |
+
+#### 8. Identity — Auth
+| Método | Ruta | Archivo |
+|--------|------|---------|
+| `POST`  | `/register` | `apps/api/src/modules/identity/auth.controller.ts` |
+| `POST`  | `/login` | `apps/api/src/modules/identity/auth.controller.ts` |
+| `POST`  | `/logout` | `apps/api/src/modules/identity/auth.controller.ts` |
+| `GET`   | `/me` | `apps/api/src/modules/identity/auth.controller.ts` |
+| `GET`   | `/sso/login-url` | `apps/api/src/modules/identity/auth.controller.ts` |
+| `GET`   | `/sso/callback` | `apps/api/src/modules/identity/auth.controller.ts` |
+
+#### 9. Identity — Registration Requests
+| Método | Ruta | Archivo |
+|--------|------|---------|
+| `GET`   | `/:id` | `apps/api/src/modules/identity/registration-requests.controller.ts` |
+| `POST`  | `/:id/approve` | `apps/api/src/modules/identity/registration-requests.controller.ts` |
+| `POST`  | `/:id/reject` | `apps/api/src/modules/identity/registration-requests.controller.ts` |
+
+**Total:** 17 endpoints NestJS en 9 controladores. Todos bajo el prefijo global `/v1`.
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ⚡ Pregunta: 74.3s | 8,281 tokens (in 7,020 + out 1,261, 6,473 reutilizados) │
+│ 📊 Sesión: 74.3s | 8,281 tokens (in 7,020 + out 1,261)                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+› 
+👋 ¡Hasta luego!
+
+=== STDERR ===
+level=info msg=mem.init budget_mb=12288 total_ram_mb=24576
+level=info msg=mem.init budget_mb=12288 total_ram_mb=24576

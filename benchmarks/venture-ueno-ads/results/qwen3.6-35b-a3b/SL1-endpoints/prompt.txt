@@ -1,0 +1,1 @@
+¿Qué endpoints expone la API NestJS del proyecto y en qué archivos viven? Listá agrupado por controller. La API arranca en apps/api/src/main.ts, usa prefijo global /v1 (excluyendo /health), y los controllers viven en apps/api/src/modules/ y apps/api/src/health/.

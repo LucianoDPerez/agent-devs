@@ -1,0 +1,46 @@
+
+======================================================================
+▶ SL1-endpoints [junior] Endpoints de la API agrupados por controller con archivos
+======================================================================
+BASELINE: ✅ verde
+✅ PASÓ — 77.2s
+
+======================================================================
+▶ SL2-modelos [junior] Modelos de datos, relaciones y ubicación
+======================================================================
+BASELINE: ✅ verde
+✅ PASÓ — 499.3s
+
+======================================================================
+▶ SL3-env [junior] Variables de entorno necesarias para correr
+======================================================================
+BASELINE: ✅ verde
+✅ PASÓ — 196.5s
+
+======================================================================
+▶ SL4-debug500 [senior] Causa raíz del record-impression sin autenticación (sin modificar)
+======================================================================
+BASELINE: ✅ verde
+✅ PASÓ — 141.3s
+
+======================================================================
+▶ SL5-plan-softdelete [medio] Plan de soft-delete en Pautas sin implementar
+======================================================================
+BASELINE: ✅ verde
+✅ PASÓ — 370.0s
+
+======================================================================
+▶ SL6-healthcheck [junior] Crear script healthcheck.sh nuevo
+======================================================================
+BASELINE: ❌ ya fallaba — ver baseline.json
+✅ PASÓ — 1943.0s
+   verify[existe healthcheck.sh]: exit=0 ✅
+   verify[sintaxis bash válida]: exit=0 ✅
+
+======================================================================
+▶ SL7-slugify [medio] Crear util slug.ts con función pura exportada
+======================================================================
+BASELINE: ❌ ya fallaba — ver baseline.json
+❌ FALLÓ — 2400.0s
+   verify[existe slug.ts]: exit=0 ✅
+   verify[exporta slugify]: exit=0 ✅
