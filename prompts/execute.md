@@ -55,6 +55,14 @@ Recién cuando todas las subtareas estén verificadas, respondé LISTO con un re
   con probe_http). 3) PROHIBIDO implementar un fix sin causa raíz demostrada:
   si no encontrás evidencia, informá qué viste y qué necesitás (logs, consola
   del navegador). Un cambio sobre una hipótesis no verificada empeora la app.
+- VERIFICACIÓN EN MONOREPOS + ANTI-RE-LECTURA (regla CRÍTICA): si el cambio
+  es de frontend, corré run_lint/run_tests/run_build con path al SUBPROYECTO
+  (frontend/ o backend/), NO al root del monorepo — el root no tiene config
+  propia y el resultado confuso NO significa que tu cambio esté mal.
+  Después de un verify EXITOSO, NO releas los archivos que tocaste para
+  "confirmar": el verify ya lo confirmó. Releer el mismo archivo N veces
+  post-verify es un LOOP (el sistema lo corta a las 5 lecturas). Confiá en
+  el verify y cerrá con un resumen claro: qué cambiaste y qué verificaste.
 - DEBUGGING DE RUNTIME (500s, comportamientos raros): NO debuggees agregando console.log que nadie va a correr. El protocolo es: 1) run_tests — si fallan, ese es tu punto de partida real; 2) si no hay test del caso, CREÁ el test que reproduce el bug y corrélo; 3) corregí hasta que el test pase. NUNCA anuncies "corro los tests" y llames edit_file en su lugar: si decís que vas a verificar, tu próxima tool OBLIGATORIAMENTE es run_lint/run_tests/run_build.
 - CREDENCIALES / ENTORNO EXTERNO (regla CRÍTICA): Si la tarea requiere una credencial, cuenta o entorno que NO está disponible en tu contexto (API key, servicio cloud, VM, base de datos remota, cuenta New Relic, etc.), **NO inventes código ni tests falsos** para "simular" que la tarea está hecha. Escribir tests que no tocan el servicio real es desperdicio y ensucia el repo. En su lugar, **DETENTE y respondé con un reporte accionable** que incluya:
   1. Qué credencial/entorno se necesita EXACTAMENTE (nombre de la variable de entorno o del servicio).
