@@ -536,6 +536,23 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
             "Do not call edit_file on this path again."
         )
 
+    # GUARD ANTI-BORRADO DE FUNCIONES: edit_file con new_str VACÍO que
+    # pretende borrar una función/def/class completa es destructivo y
+    # sospechoso (E2E real: el modelo intentó borrar countTokens con
+    # new_str="" para 'arreglar' un truncado inexistente). Borrar código
+    # sin reemplazo no es un fix quirúrgico.
+    if (
+        not new_str.strip()
+        and re.search(r"^\s*(func |def |function |class |const \w+ = \()", old_str, re.MULTILINE)
+    ):
+        return (
+            "⛔ edit_file con new_str VACÍO intenta BORRAR una función/class "
+            "completa — eso es destructivo y casi nunca es el fix correcto.\n"
+            "Si creés que el archivo está corrupto/truncado, leelo COMPLETO "
+            "con read_file(path) SIN start_line (el archivo casi seguro está "
+            "bien). Si realmente hay que borrar, hacelo por partes pequeñas."
+        )
+
     # GUARD ANTI-NOOP: el modelo descubre que "escribir algo" satisface la
     # presión del harness y hace edit_file con old_str == new_str en loop
     # (E2E real Task 8 batch ya-completo: 20+ no-ops hasta agotar budget).

@@ -281,6 +281,32 @@ _SELFCONTAINED_ERROR_RE = re.compile(
 _SELFCONTAINED_CODE_RE = re.compile(r"(```|<\w+[\s>]|=>|\{[^}]*\}|=\s*['\"]|;)")
 
 
+_VERIFY_ONLY_RE = re.compile(r"\b(verific|confirm|comprob|cheque|asegur|revis)\w*", re.I)
+_IMPL_VERBS_RE = re.compile(r"\b(escrib|cre[áa]|agreg|edit|modific|arregl|correg|refactor|fix|migr|refactoriz)\w*", re.I)
+# "implement" SOLO si NO es participio pasado ("implementada/implementado" =
+# ya está hecha → verificación, no orden de implementar).
+_IMPL_STEM_RE = re.compile(r"\bimplement(?!ad[oa])", re.I)
+
+
+def _is_verification_only(text: str) -> bool:
+    """True si la orden es SOLO verificar (no escribir).
+
+    E2E real: 'verifica que este implementada correctamente Task 5' cayó en
+    EXECUTE, el modelo verificó PERFECTO (lint/tests/build + criterios) y
+    EXECUTE_REQUIRE_WRITE lo castigó con no-write retry → el modelo inventó
+    un 'main.go truncado' inexistente y casi borra countTokens para
+    satisfacer la presión de escritura.
+    """
+    t = text.strip().lower()
+    if not _VERIFY_ONLY_RE.search(t):
+        return False
+    if _IMPL_VERBS_RE.search(t):
+        return False
+    if _IMPL_STEM_RE.search(t):
+        return False
+    return True
+
+
 def _is_selfcontained_analysis(user_input: str) -> bool:
     """True si la pregunta trae el error y código suficiente inline para
     responder sin explorar el repo."""
@@ -1501,6 +1527,10 @@ class Session:
                 and EXECUTE_REQUIRE_WRITE
                 and REASONING_RETRY_ENABLED
                 and not self._bulk_task_hash
+                # Verificación pura: el turno no debe escribir; castigarlo
+                # con no-write retry empuja al modelo a inventar fixes
+                # destructivos (E2E real: 'main.go truncado' inexistente).
+                and not _is_verification_only(user_input)
             ) or (
                 attempt > 0
                 and REASONING_RETRY_ENABLED

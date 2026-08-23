@@ -50,6 +50,18 @@ _CHAT_LEADING = [
     "chau", "adiós", "adios", "nos vemos",
 ]
 
+# Verificación PURA: "verificá/confirmá que X está implementada" — no es
+# EXECUTE (no hay que escribir) ni REVIEW (no es un PR). E2E real: la tarea
+# de verificación cayó en EXECUTE por "implementada" (participio) y el
+# no-write retry castigó un turno que respondió correctamente.
+_VERIFY_LEADING = [
+    "verificá", "verifica", "verificar", "verificación", "verificacion",
+    "confirmá", "confirma", "confirmar", "comprobá", "comprueba", "comprobar",
+    "chequeá", "chequea", "chequear",
+    "asegurate", "asegúrate", "asegurate que", "asegúrate que",
+    "está implementada", "esta implementada", "están implementadas", "estan implementadas",
+]
+
 # (sin|no) + verbo de acción → el verbo NO cuenta como intención
 _NEGATED_ACTION_RE = re.compile(
     r"\b(?:sin|no)\s+(?:modific\w*|edit\w*|implement\w*|escrib\w*|cre\w*|"
@@ -96,8 +108,19 @@ def classify_intent(_llm, user_message: str) -> Intent:
 
     # LEADING INTENT: user's own command (first ~120 chars) takes priority
     # over keywords found in pasted completion reports/checklists.
+    # "revisá + verbo de acción" ("revisá y corregí los errores") → EXECUTE:
+    # hay algo que hacer, no solo mirar. Mismo patrón que el combo post-review.
+    if _has_any(prefix, _REVIEW_LEADING) and _has_any(prefix, _EXECUTE_VERBS):
+        return Intent.EXECUTE
+
     if _has_any(prefix, _REVIEW_LEADING):
         return Intent.REVIEW
+
+    # Verificación pura → ANALYZE, salvo que haya verbos de implementación
+    # ("verificá y arreglá" sigue siendo EXECUTE). "implementada" (participio
+    # pasado, ya hecha) NO activa EXECUTE.
+    if _has_any(prefix, _VERIFY_LEADING) and not _has_any(prefix, _EXECUTE_VERBS):
+        return Intent.ANALYZE
 
     if _has_any(prefix, _PLAN_LEADING):
         return Intent.PLAN
@@ -159,7 +182,12 @@ def _has_any(text: str, patterns: list[str]) -> bool:
         # Stem (ends mid-word intentionally) → prefix at token start
         if p in {
             "planific", "planifi", "diseñ", "revis", "crític", "critic",
-            "implement", "aplic", "correg",
+            # "implement" está EXCLUIDO a propósito: su stem matchea
+            # "implementada/implementado" (participio = YA está hecha, no es
+            # una orden de implementar) y mandaba verificaciones a EXECUTE.
+            # El imperativo "implementá/implementa/implementar" matchea como
+            # token exacto más abajo.
+            "aplic", "correg",
         }:
             if re.search(rf"(?<!\w){re.escape(p)}\w*", text):
                 return True

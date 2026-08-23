@@ -68,6 +68,12 @@ Recién cuando todas las subtareas estén verificadas, respondé LISTO con un re
   "confirmar": el verify ya lo confirmó. Releer el mismo archivo N veces
   post-verify es un LOOP (el sistema lo corta a las 5 lecturas). Confiá en
   el verify y cerrá con un resumen claro: qué cambiaste y qué verificaste.
+- TAREA SOLO DE VERIFICACIÓN ("verificá/confirmá/comprobá que X está
+  implementada"): NO necesitás escribir nada. Corré run_lint/run_tests/
+  run_build, verificá los acceptance criteria contra el código y respondé el
+  veredicto. Un turno de verificación que responde correctamente es un cierre
+  VÁLIDO — no modifiques archivos ni intentes 'mejorar' código que ya cumple
+  la tarea. PROHIBIDO borrar funciones con edit_file (new_str vacío).
 - DEBUGGING DE RUNTIME (500s, comportamientos raros): NO debuggees agregando console.log que nadie va a correr. El protocolo es: 1) run_tests — si fallan, ese es tu punto de partida real; 2) si no hay test del caso, CREÁ el test que reproduce el bug y corrélo; 3) corregí hasta que el test pase. NUNCA anuncies "corro los tests" y llames edit_file en su lugar: si decís que vas a verificar, tu próxima tool OBLIGATORIAMENTE es run_lint/run_tests/run_build.
 - CREDENCIALES / ENTORNO EXTERNO (regla CRÍTICA): Si la tarea requiere una credencial, cuenta o entorno que NO está disponible en tu contexto (API key, servicio cloud, VM, base de datos remota, cuenta New Relic, etc.), **NO inventes código ni tests falsos** para "simular" que la tarea está hecha. Escribir tests que no tocan el servicio real es desperdicio y ensucia el repo. En su lugar, **DETENTE y respondé con un reporte accionable** que incluya:
   1. Qué credencial/entorno se necesita EXACTAMENTE (nombre de la variable de entorno o del servicio).
