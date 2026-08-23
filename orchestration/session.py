@@ -592,6 +592,7 @@ class Session:
                     self.cached_analysis, self._tools, self._dedupe,
                     self._explore_budget, self._analyze_budget,
                     tool_call_logger=self._called_tools,
+                    graph_project=self._graph_project,
                 )
             )
         finally:
@@ -659,6 +660,7 @@ class Session:
                     read_cache=self._read_cache,
                     no_explore=no_explore,
                     tool_call_logger=self._called_tools,
+                    graph_project=self._graph_project,
                 )
             )
             self._agent_no_explore = no_explore

@@ -88,6 +88,7 @@ async def build_agent(
     force_tool_calls: bool = False,
     tool_call_logger: set | None = None,
     allow_overwrite_escalation: bool | None = None,
+    graph_project: str = "",
 ) -> tuple:
     """Construye un agente LangChain con tools y prompt del rol indicado.
 
@@ -200,6 +201,16 @@ async def build_agent(
             "Respondé TU ANÁLISIS/PLAN AHORA en texto plano usando el contexto "
             "y el código que ya leíste (inyectado abajo). No intentes explorar "
             "ni leer más.\n"
+        )
+    if graph_project:
+        # La key del knowledge graph va en el SYSTEM PROMPT (no solo en el
+        # mensaje del usuario): el modelo chico tiende a usar slugs recordados
+        # de sesiones previas en vez del inyectado (E2E real: inventó
+        # 'venture-ueno-segmentacion' y quemó 3 llamadas del presupuesto).
+        extra_context += (
+            f"\n\n[KNOWLEDGE GRAPH] Project key de ESTE repo para las tools "
+            f"cm__*: '{graph_project}'. USALA SIEMPRE — nunca inventes ni "
+            f"reutilices slugs de otras sesiones."
         )
     system_prompt = prompt_template.format(
         repo_path=repo_path,
