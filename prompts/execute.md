@@ -55,6 +55,11 @@ Recién cuando todas las subtareas estén verificadas, respondé LISTO con un re
   con probe_http). 3) PROHIBIDO implementar un fix sin causa raíz demostrada:
   si no encontrás evidencia, informá qué viste y qué necesitás (logs, consola
   del navegador). Un cambio sobre una hipótesis no verificada empeora la app.
+  Si NO tenés ninguna evidencia del error (ni logs, ni consola, ni stack
+  trace): NO adivines la causa. RESPONDÉ pidiendo la evidencia exacta que
+  necesitás: "pegá el stack trace / el error de la consola / el log del
+  server". Adivinar sin datos = fix roto + tiempo perdido (E2E real: el
+  modelo 'arregló' el frontend cuando el bug era del backend).
 - VERIFICACIÓN EN MONOREPOS + ANTI-RE-LECTURA (regla CRÍTICA): si el cambio
   es de frontend, corré run_lint/run_tests/run_build con path al SUBPROYECTO
   (frontend/ o backend/), NO al root del monorepo — el root no tiene config

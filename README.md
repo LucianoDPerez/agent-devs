@@ -128,8 +128,9 @@ El límite de contexto se **detecta del server** (`/props` de llama.cpp): cuando
 | llama.cpp (`llama-server`) | build reciente (b5000+; b6200+ si usás MTP/spec-draft) escuchando en `:8080` | detecta e instruye según tu OS |
 | codebase-memory-mcp | 0.8+ | sí (macOS/Linux); Windows: manual |
 
-> **Nota Windows**: `install.ps1` está provisto, pero el flujo fue verificado en
-> macOS/Linux. Si encontrás algún problema en Windows, abrí un issue.
+> **Nota Windows**: `install.ps1` está provisto y revisado (execution policy,
+> paths con espacios, UTF-8), pero no fue probado en hardware Windows real.
+> Si encontrás algún problema, abrí un issue.
 
 ## Solución de problemas
 

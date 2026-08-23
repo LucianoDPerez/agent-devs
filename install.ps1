@@ -10,6 +10,9 @@
 # + doctor final.
 $ErrorActionPreference = "Stop"
 
+# Emojis/UTF-8 en consolas Windows (PS 5.1 default es otra codificación)
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+
 $repoUrl = if ($env:AGENTDEVS_REPO_URL) { $env:AGENTDEVS_REPO_URL } else { "https://github.com/LucianoDPerez/agent-devs.git" }
 
 if ((Test-Path "./pyproject.toml") -and (Select-String -Path ./pyproject.toml -Pattern 'name = "agent-devs"' -Quiet)) {
@@ -42,7 +45,12 @@ if (-not (Test-Path ".venv")) {
     Write-Host "🔧 Creando venv (.venv)…"
     python -m venv .venv
 }
-.\.venv\Scripts\Activate.ps1
+# Activar el venv tolerando Execution Policy restrictiva (default en PS5.1)
+try {
+    .\.venv\Scripts\Activate.ps1
+} catch {
+    & .\.venv\Scripts\Activate.ps1 -ExecutionPolicy Bypass
+}
 Write-Host "🔧 Instalando AgentDevs editable + dependencias…"
 pip install --upgrade pip -q
 pip install -e .
@@ -55,7 +63,7 @@ $repoDir = (Get-Location).Path
 $shim = Join-Path $binDir "agent-devs.cmd"
 @"
 @echo off
-"$repoDir\.venv\Scripts\agent-devs.exe" %*
+call "$repoDir\.venv\Scripts\agent-devs.exe" %*
 "@ | Set-Content -Encoding ASCII $shim
 Write-Host "✅ Comando global: $shim -> $repoDir\.venv\Scripts\agent-devs.exe"
 

@@ -84,6 +84,7 @@ from orchestration.path_mismatch import apply_mismatch_fixes, detect_path_mismat
 from orchestration.runtime_diagnostics import runtime_status
 from orchestration.router import _extract_command_prefix, classify_intent
 from orchestration.tool_dedupe import (
+    EXPLORE_TOOL_NAMES,
     ExploreBudget,
     ToolBudgetExceeded,
     ToolCallDedupe,
@@ -1645,6 +1646,36 @@ class Session:
                     console.print(
                         "\n[dim]↻ Verificando los cambios (lint/tests/build)…[/dim]\n"
                     )
+                    continue
+                # GUARD PLAN-EXPLORA: el rol PLAN debe EXPLORAR antes de
+                # planificar (E2E real: los 3 modelos respondían del análisis
+                # cacheado con 0 tools → planes sin archivos concretos). Si el
+                # turno terminó sin ninguna llamada de exploración y quedan
+                # intentos, forzamos un retry que pide explícitamente
+                # explorar antes de redactar.
+                if (
+                    new_role == Role.PLAN
+                    and not self._no_explore_retry
+                    and not (self._called_tools & EXPLORE_TOOL_NAMES)
+                    and attempt + 1 < max_attempts
+                ):
+                    attempt += 1
+                    console.print(
+                        "\n[yellow]📋 PLAN sin exploración: reintentando con "
+                        "exigencia de explorar (list_files/read_file/inspect) "
+                        "antes de redactar el plan…[/yellow]\n"
+                    )
+                    retry_plan = (
+                        user_input
+                        + "\n\n⛔ Tu plan anterior salió SIN explorar el código "
+                        "(0 tool calls de exploración). Un plan válido REQUIERE "
+                        "evidencia: 1) list_files de la estructura relevante, "
+                        "2) read_file de los archivos clave, 3) inspect_routes/"
+                        "inspect_models si aplica. Recién DESPUÉS de explorar, "
+                        "redactá el plan con archivos concretos."
+                    )
+                    self._messages.append(HumanMessage(retry_plan))
+                    messages_for_agent = list(self._messages)
                     continue
                 break
             except KeyboardInterrupt:

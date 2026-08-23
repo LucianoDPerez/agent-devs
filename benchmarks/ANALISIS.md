@@ -68,3 +68,22 @@ tareas, mismos criterios de verify, mismo runner.
   con la misma estructura de tareas; los de los chicos sobre Medicos.
 - Métricas re-computadas desde logs (el extractor por stdout se perdía en
   turnos largos); evidencia completa en `results/` de cada banco.
+## Trabajo futuro: escalar el benchmark
+
+El estudio actual es n=1 por modelo (7 tareas × 1 corrida). Para darle
+significancia estadística a la tesis, el plan es:
+
+1. **Ampliar el banco a 15-20 tareas** por categoría: bug sencillo, feature
+   pequeña, refactor multi-archivo, agregar tests, tarea de arquitectura,
+   tarea con dependencias entre componentes.
+2. **n≥3 corridas por (modelo, tarea)**: el runner ya persiste todas las
+   corridas en summary.jsonl (no pisa); `reporte.py` puede promediar y
+   reportar varianza (desviación estándar de tiempo/tokens/éxito).
+3. **Un solo banco para los 4 modelos** (hoy: chicos en Medicos, 35B en
+   ueno-ads) — para comparativa apples-to-apples real.
+4. **Ablación**: mismo banco con/sin codebase-memory, con/sin guards, para
+   aislar cuánto aporta cada pieza de la arquitectura.
+
+Estimación: ~15 tareas × 3 corridas × 4 modelos ≈ 180 corridas × ~10-25 min
+cada una ≈ 30-75 horas de cómputo en una máquina. Ejecutable en paralelo
+si se reparte entre las máquinas disponibles.
