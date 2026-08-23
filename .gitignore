@@ -60,3 +60,4 @@ Thumbs.db
 opencode.json
 cache.db
 benchmarks/**/.DS_Store
+benchmarks/**/pre_snapshot/
