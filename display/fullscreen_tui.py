@@ -16,6 +16,7 @@ Text.from_ansi. ESC cancela el turno; Enter envía; ⌥+Enter salto; Ctrl+C sale
 from __future__ import annotations
 
 import subprocess
+import sys
 import threading
 import traceback
 
@@ -219,6 +220,11 @@ class FullscreenTUI(App):
         Binding("alt+enter", "input_newline"),
         Binding("ctrl+shift+c", "copy_selection"),
         Binding("ctrl+y", "copy_selection"),
+        # macOS: Cmd+C lo intercepta la terminal (copia del sistema, nunca
+        # llega a la app) — el atajo de copia REAL en terminal es Option+C
+        # (alt+c), que SÍ se transmite. Cmd+C igual sirve: la terminal copia
+        # lo seleccionado visible.
+        Binding("alt+c", "copy_selection"),
     ]
 
     def __init__(self, status_provider, on_submit):
@@ -388,9 +394,16 @@ class FullscreenTUI(App):
             excess = len(self._pane_text.plain) - _MAX_PANE_CHARS
             self._pane_text = Text(self._pane_text.plain[excess:], style="dim")
         self.query_one("#pane_text", Static).update(self._pane_text)
-        # auto-follow: si estamos pegados al fondo, scrollear
+        # Auto-follow CONDICIONAL: solo scrollear al fondo si el usuario ya
+        # está pegado al fondo (como tail -f). Si el usuario scrolleó hacia
+        # arriba para leer mientras el agente escribe, NO lo movemos —
+        # esa era la queja: el streaming lo clavaba al fondo siempre.
+        # is_scroll_end no existe en Textual 8.x → comparación manual de
+        # scroll_offset.y contra max_scroll_y.
         try:
-            self.query_one("#pane", VerticalScroll).scroll_end(animate=False)
+            pane = self.query_one("#pane", VerticalScroll)
+            if pane.scroll_offset.y >= pane.max_scroll_y:
+                pane.scroll_end(animate=False)
         except Exception:
             pass
 
@@ -419,7 +432,8 @@ class FullscreenTUI(App):
             (f" 📁 {repo}", "blue"),
             (busy, "magenta"),
             ("   Enter=envía · ⌥Enter=salto · rueda=scroll · "
-             "Selección+⌘C/⌃Y=copiar · ESC=cancela · Ctrl+C=salir", "bright_black"),
+             + ("Selección+⌥C=copiar · " if sys.platform == "darwin" else "Selección+Ctrl+Shift+C=copiar · ")
+             + "ESC=cancela · Ctrl+C=salir", "bright_black"),
         )
         self.query_one("#toolbar", Static).update(txt)
 
