@@ -558,6 +558,26 @@ class Session:
                 self._graph_project = loop.run_until_complete(
                     _resolve_project_key(by_name, self.repo_path)
                 )
+                if not self._graph_project:
+                    # El store del harness no tiene el repo indexado (difiere
+                    # del MCP del editor): indexarlo UNA vez y re-resolver.
+                    # Sin esto la fuzzy match inventaba keys (medicos-sandbox)
+                    # y ningún cm__search_code encontraba nada.
+                    idx = by_name.get("cm__index_repository")
+                    if idx is not None:
+                        console.print(
+                            "\n[yellow]🧠 Indexando el repo en el knowledge graph "
+                            "(primera vez — puede tardar 1-2 min)…[/yellow]"
+                        )
+                        try:
+                            loop.run_until_complete(
+                                idx.ainvoke({"repo_path": self.repo_path, "mode": "moderate"})
+                            )
+                            self._graph_project = loop.run_until_complete(
+                                _resolve_project_key(by_name, self.repo_path)
+                            )
+                        except Exception:
+                            pass
             except Exception:
                 pass
             self.current_role = Role.ANALYZE

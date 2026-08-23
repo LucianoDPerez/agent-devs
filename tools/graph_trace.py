@@ -73,7 +73,12 @@ async def _resolve_project_key(
     import os
     basename = os.path.basename(repo_norm).lower()
     for p in projects:
-        if basename and basename in (p.get("root_path") or "").lower():
+        # match EXACTO de basename, nunca 'contains': 'medicos-sandbox' NO es
+        # el repo 'Medicos' (E2E real: la key equivocada se inyectaba al modelo
+        # y cm__search_code devolvía vacío → el modelo 'necesitaba'
+        # cm__list_projects como muleta).
+        rp = (p.get("root_path") or "").rstrip("/")
+        if basename and os.path.basename(rp).lower() == basename:
             return p.get("name", "")
     return ""
 
