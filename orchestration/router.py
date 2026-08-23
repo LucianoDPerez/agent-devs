@@ -84,9 +84,11 @@ def _extract_command_prefix(text: str, max_chars: int = 120) -> str:
     # (tasks, logs, salidas). E2E real: "verificar si estas tasks ya están
     # implementadas" + pegote de Task 4 (que dice "Implementar...") caía en
     # EXECUTE porque el verbo del texto pegado entraba en los 120 chars.
-    m = re.search(r"\n[─—\-]{3,}", prefix)
+    # El separador puede venir precedido de un \n o de un ESPACIO (como en
+    # el paste real: '...correctamente ————— Task 4:') — cortar en ambos.
+    m = re.search(r"[\s\n][─—\-]{3,}", prefix)
     if m:
-        prefix = prefix[: m.start()]
+        prefix = prefix[: m.start() + 1]
     return prefix.strip().lower()
 
 

@@ -70,3 +70,15 @@ def test_verificacion_con_tasks_pegadas_ruta_analyze():
 
 def test_orden_con_implementar_real_sigue_execute():
     assert classify_intent(None, "implementá el endpoint /dashboard") == Intent.EXECUTE
+
+
+def test_verificacion_con_pegote_separado_por_espacio_ruta_analyze():
+    """El separador de guiones en el paste real viene tras un ESPACIO, no un
+    newline ('...correctamente ————— Task 4:'). El corte debe funcionar en
+    ambos — el verbo 'Implementar' del pegote no puede activar EXECUTE."""
+    prompt = (
+        "verificar si estas tasks ya estan implementadas correctamente "
+        "————————————————— Task 4: Implementar CLI principal (start/end)\n"
+        "Resumen: Implementar el entry point del binario."
+    )
+    assert classify_intent(None, prompt) == Intent.ANALYZE
