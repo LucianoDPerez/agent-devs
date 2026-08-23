@@ -55,6 +55,8 @@ _CHAT_LEADING = [
 # de verificación cayó en EXECUTE por "implementada" (participio) y el
 # no-write retry castigó un turno que respondió correctamente.
 _VERIFY_LEADING = [
+    "analizá", "analiza", "analizar", "analizá si", "analiza si", "analizá si estas",
+    "analiza si estas", "análisis", "analisis",
     "verificá", "verifica", "verificar", "verificación", "verificacion",
     "confirmá", "confirma", "confirmar", "comprobá", "comprueba", "comprobar",
     "chequeá", "chequea", "chequear",
@@ -89,6 +91,18 @@ def _extract_command_prefix(text: str, max_chars: int = 120) -> str:
     m = re.search(r"[\s\n][─—\-]{3,}", prefix)
     if m:
         prefix = prefix[: m.start() + 1]
+    # Tasks PEGADAS sin separador ("Analiza si estas tasks están hechas
+    # correctamente \n\nTask 4: Implementar...") — el "Implementar" del
+    # pegote entra en los 120 chars y activa EXECUTE. Cortar en "Task N:"
+    # / "Tarea N:" / "Resumen:" / "Descripción:" (marcadores de documento).
+    m2 = re.search(
+        r"\b(tasks?|tareas?)\s*\d+:|\bresumen:|\bdescripción:|\bdescripcion:|"
+        r"\bacceptance criteria:",
+        prefix,
+        re.IGNORECASE,
+    )
+    if m2:
+        prefix = prefix[: m2.start()]
     return prefix.strip().lower()
 
 

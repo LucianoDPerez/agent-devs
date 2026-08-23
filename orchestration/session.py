@@ -281,7 +281,7 @@ _SELFCONTAINED_ERROR_RE = re.compile(
 _SELFCONTAINED_CODE_RE = re.compile(r"(```|<\w+[\s>]|=>|\{[^}]*\}|=\s*['\"]|;)")
 
 
-_VERIFY_ONLY_RE = re.compile(r"\b(verific|confirm|comprob|cheque|asegur|revis)\w*", re.I)
+_VERIFY_ONLY_RE = re.compile(r"\b(analiz|verific|confirm|comprob|cheque|asegur|revis)\w*", re.I)
 _IMPL_VERBS_RE = re.compile(r"\b(escrib|cre[áa]|agreg|edit|modific|arregl|correg|refactor|fix|migr|refactoriz)\w*", re.I)
 # "implement" SOLO si NO es participio pasado ("implementada/implementado" =
 # ya está hecha → verificación, no orden de implementar).

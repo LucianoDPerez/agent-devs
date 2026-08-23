@@ -82,3 +82,26 @@ def test_verificacion_con_pegote_separado_por_espacio_ruta_analyze():
         "Resumen: Implementar el entry point del binario."
     )
     assert classify_intent(None, prompt) == Intent.ANALYZE
+
+
+def test_analiza_si_tasks_pegadas_sin_separador_ruta_analyze():
+    """Prompt REAL del usuario: 'Analiza si estas tasks ya estan hechas
+    correctamente' + pegote que empieza 'Task 4: Implementar...' SIN
+    separador. Dos bugs: 'Analiza' no estaba en _VERIFY_LEADING, y el
+    'Implementar' del pegote entraba en los 120 chars del prefix.
+    Fix: analiza en verify + corte en 'Task N:'/'Resumen:'/'Descripción:'."""
+    prompt = (
+        "Analiza si estas tasks ya estan hechas correctamente \n\n"
+        "Task 4: Implementar CLI principal (start/end)\n\n"
+        "Resumen: Implementar el entry point del binario con comandos start y end.\n\n"
+        "Descripción:\n- Implementar telemetry/cmd/spec-kitti-telemetry/main.go"
+    )
+    assert classify_intent(None, prompt) == Intent.ANALYZE
+
+
+def test_analiza_puro_ruta_analyze():
+    assert classify_intent(None, "analizá el código y decime qué falla") == Intent.ANALYZE
+
+
+def test_analiza_con_accion_ruta_execute():
+    assert classify_intent(None, "analizá y arreglá el bug") == Intent.EXECUTE
