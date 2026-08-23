@@ -26,6 +26,7 @@ from .git import (
 from .routes import inspect_routes
 from .models import inspect_models
 from .env import inspect_env
+from .runtime_probe import capture_dev_server, probe_http
 from .search import search_code
 from .verify import run_build, run_install, run_lint, run_npm_script, run_tests
 
@@ -42,7 +43,7 @@ _GIT_WRITE = [stage_files, create_commit, push, create_pr]
 _VERIFY = [run_install, run_lint, run_tests, run_build]
 
 # Subsets por rol de agente. Read-only evita que compile modificadores.
-ANALYZER_TOOLS = [list_files, read_file, search_code, inspect_routes, inspect_models, inspect_env, *_READONLY_GIT]
+ANALYZER_TOOLS = [list_files, read_file, search_code, inspect_routes, inspect_models, inspect_env, probe_http, capture_dev_server, *_READONLY_GIT]
 PLANNER_TOOLS = [list_files, read_file, search_code, inspect_routes, inspect_models, inspect_env, write_file, *_READONLY_GIT]
 # EXECUTE: SOLO las esenciales. 35 tools (21 locales + 14 MCP) diluía la
 # atención del modelo 4B — "olvidaba" que tenía edit_file y se escondía en
@@ -52,8 +53,9 @@ EXECUTOR_TOOLS = [
     search_code, inspect_routes,
     run_lint, run_tests, run_build, run_npm_script,
     stage_files, create_commit, push, git_restore,
+    probe_http, capture_dev_server,
 ]
-REVIEWER_TOOLS = [list_files, read_file, search_code, inspect_routes, inspect_models, inspect_env, *_READONLY_GIT, *_VERIFY]
+REVIEWER_TOOLS = [list_files, read_file, search_code, inspect_routes, inspect_models, inspect_env, probe_http, *_READONLY_GIT, *_VERIFY]
 
 # Retry de EXECUTE tras loop de lectura: SOLO escritura + git-write + verify.
 # TRULY write-only: SIN read_file (el modelo se escondía ahí) — el contenido
