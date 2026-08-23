@@ -689,6 +689,9 @@ class Session:
         sobrescribir de memoria destruye aunque haya lecturas acotadas.
         """
         self.current_role = Role.EXECUTE
+        # Agente RESTRINGIDO (write-only): una orden NUEVA debe reconstruirlo
+        # completo, no reutilizar este subconjunto crippleado.
+        self._agent_no_explore = True
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -743,6 +746,9 @@ class Session:
         actúe (read_file → edit_file) y no monologue.
         """
         self.current_role = Role.EXECUTE
+        # Agente RESTRINGIDO (compuerta): una orden NUEVA debe reconstruirlo
+        # completo, no reutilizar este subconjunto.
+        self._agent_no_explore = True
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
