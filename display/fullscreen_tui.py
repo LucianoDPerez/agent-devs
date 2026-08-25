@@ -417,11 +417,19 @@ class FullscreenTUI(App):
         repo = (st.get("repo") or "-").rstrip("/").split("/")[-1]
         spin = _SPINNER[int(__import__("time").monotonic() * 4) % len(_SPINNER)]
         busy = f" {spin} trabajando…" if self._busy else ""
-        # El % de contexto se quitó: la estimación sobre _messages no refleja
-        # la sesión real del usuario (quedaba fija en ~8%). Los tokens son la
-        # medición CLIENTE del API (difiere del total procesado por llama.cpp
-        # por retries/cache) — por eso se etiqueta (API). El aviso real de
-        # contexto sigue siendo el del session (80% → /compact).
+        # Confirmación de write pendiente (EXECUTE_CONFIRM_WRITES): el prompt
+        # va al pane (scrollable y puede quedar fuera de vista) — el toolbar
+        # y el placeholder del input dan el aviso visible SIEMPRE, para que el
+        # usuario responda sí/no a tiempo y el turno no venza por no verlo.
+        confirming = bool(st.get("confirm_pending"))
+        try:
+            self.query_one("#input", TextArea).placeholder = (
+                "❓ Escribí sí / no y Enter para aprobar o rechazar"
+                if confirming
+                else ""
+            )
+        except Exception:
+            pass
         txt = Text.assemble(
             (" 🌿 " + str(st.get("branch", "-")), "green"),
             ("  ·  ", "dim"),
@@ -435,6 +443,11 @@ class FullscreenTUI(App):
              + ("Selección+⌥C=copiar · " if sys.platform == "darwin" else "Selección+Ctrl+Shift+C=copiar · ")
              + "ESC=cancela · Ctrl+C=salir", "bright_black"),
         )
+        if confirming:
+            txt = Text(
+                " ⚠️  CONFIRMACIÓN PENDIENTE — respondé sí / no en el input  ",
+                style="bold black on yellow",
+            ) + txt
         self.query_one("#toolbar", Static).update(txt)
 
     # ── acciones ───────────────────────────────────────────────────────

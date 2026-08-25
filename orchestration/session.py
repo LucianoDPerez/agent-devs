@@ -61,6 +61,7 @@ from config import (
 )
 from core.intents import Intent
 from core.roles import Role, role_for_intent
+from core.textutil import normalize
 from display.console import console, print_role_switch, print_turn_summary, stream_agent_turn, ReasoningOnlyResponse, ToolCallLimitExceeded
 from tools import BUDGET_RETRY_TOOLS, GATE_RETRY_TOOLS
 
@@ -1258,7 +1259,7 @@ class Session:
         except (EOFError, KeyboardInterrupt):
             console.print()
             return
-        if answer not in ("y", "yes", "s", "si", "sí"):
+        if normalize(answer) not in ("y", "yes", "s", "si"):
             console.print("[dim]OK, no se commitea.[/dim]")
             return
 
@@ -2392,6 +2393,7 @@ class Session:
             "repo": self.repo_path,
             "tools": f"{self._local_count}+{self._mcp_count}",
             "session_id": self.session_id,
+            "confirm_pending": self.confirm_pending(),
         }
 
     def close(self):
