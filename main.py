@@ -208,6 +208,14 @@ def run_fullscreen(session) -> None:
             return
         if not text.strip():
             return
+        # Confirmación de write pendiente (EXECUTE_CONFIRM_WRITES): el input
+        # resuelve la aprobación en vez de lanzar un turno nuevo.
+        if session.confirm_pending():
+            if stripped in ("s", "si", "sí", "y", "yes", "aprob", "ok", "dale"):
+                session.resolve_confirm(True)
+            else:
+                session.resolve_confirm(False)
+            return
         if stripped == "/new":
             session.reset()
             session._fullscreen = True  # reset() no debe apagar el modo

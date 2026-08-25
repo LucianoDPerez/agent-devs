@@ -4,6 +4,7 @@ import asyncio
 import re
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from typing import Any
@@ -23,6 +24,8 @@ from config import (
     ANALYZE_EXPLORE_BUDGET,
     ANALYZE_MAX_READS_AFTER_EXPLORE,
     EXECUTE_ASK_COMMIT,
+    EXECUTE_CONFIRM_WRITES,
+    EXECUTE_CONFIRM_TIMEOUT,
     PATH_FIX_ENABLED,
     EXECUTE_EXPLORE_BUDGET,
     LLM_BASE_URL,
@@ -580,6 +583,15 @@ class Session:
         # sin EscWatcher (ESC vía request_cancel) y sin prompts interactivos
         # de input() a mitad del turno (commit/credenciales).
         self._fullscreen: bool = False
+        # Confirmación de writes (EXECUTE_CONFIRM_WRITES): el wrapper de tools
+        # pausa write/edit/delete hasta que el usuario aprueba. En TUI el turno
+        # corre en un thread aparte, así que el callback espera este Event y la
+        # TUI lo resuelve desde su input box (main.py on_submit). Sin TUI no se
+        # registra callback → fail-open.
+        self._confirm_writes: bool = False
+        self._confirm_event: threading.Event | None = None
+        self._confirm_answer: bool | None = None
+        self._confirm_timeout: float = EXECUTE_CONFIRM_TIMEOUT
         # Cancel del turno EN CURSO: lo setea run_turn; lo llama la TUI con ESC.
         self._turn_cancel = None
         # Límite de contexto VIVO: se detecta del server en start() (GET /props).
@@ -731,6 +743,11 @@ class Session:
                     no_explore=no_explore,
                     tool_call_logger=self._called_tools,
                     graph_project=self._graph_project,
+                    confirm_callback=(
+                        self._confirm_write_cb
+                        if EXECUTE_CONFIRM_WRITES and role == Role.EXECUTE
+                        else None
+                    ),
                 )
             )
             self._agent_no_explore = no_explore
@@ -777,6 +794,9 @@ class Session:
                     read_cache=self._read_cache,
                     tool_call_logger=self._called_tools,
                     allow_overwrite_escalation=False,
+                    confirm_callback=(
+                        self._confirm_write_cb if EXECUTE_CONFIRM_WRITES else None
+                    ),
                 )
             )
         finally:
@@ -833,6 +853,9 @@ class Session:
                     tools_override=GATE_RETRY_TOOLS,
                     force_tool_calls=True,
                     tool_call_logger=self._called_tools,
+                    confirm_callback=(
+                        self._confirm_write_cb if EXECUTE_CONFIRM_WRITES else None
+                    ),
                 )
             )
         finally:
@@ -2280,18 +2303,80 @@ class Session:
         """Devuelve los últimos N turnos del repo (de cualquier sesión)."""
         return load_recent_turns(self.repo_path, limit=limit)
 
-    def request_cancel(self) -> None:
-        """Cancela el turno en curso (lo llama la TUI full-screen con ESC).
-
-        El callback usa call_soon_threadsafe, así que es seguro invocarlo
-        desde el hilo de la UI mientras run_turn corre en otro thread.
-        """
+    def _cancel_turn(self) -> None:
+        """Cancela el turno en curso (thread-safe, mismo camino que ESC)."""
         cb = self._turn_cancel
         if cb is not None:
             try:
                 cb()
             except Exception:
                 pass
+
+    def request_cancel(self) -> None:
+        """Cancela el turno en curso (lo llama la TUI full-screen con ESC).
+
+        El callback usa call_soon_threadsafe, así que es seguro invocarlo
+        desde el hilo de la UI mientras run_turn corre en otro thread.
+        """
+        # Si hay una confirmación de write pendiente, desbloquearla como
+        # RECHAZO: ESC significa "no aprobás nada", no dejar el thread del
+        # turno colgado esperando la respuesta.
+        self.resolve_confirm(False)
+        self._cancel_turn()
+
+    def _confirm_write_cb(self, name: str, kwargs: dict) -> bool:
+        """Callback del wrapper de tools: pedir aprobación antes de ejecutar.
+
+        Se llama desde el wrapper (orchestration/tool_dedupe) para
+        write_file/edit_file/delete_file, ANTES de ejecutar. Corre en un
+        thread aparte (asyncio.to_thread), así que esperar el Event no
+        congela el event loop del grafo.
+
+        Fail-open sin TUI interactiva (tests/scripts): no hay usuario que
+        responder, mismo criterio que EXECUTE_ASK_COMMIT.
+        """
+        if not EXECUTE_CONFIRM_WRITES or not self._fullscreen:
+            return True
+        path = kwargs.get("path", "?")
+        console.print(
+            f"\n[bold yellow]❓ ¿Aprobás {name} sobre '{path}'?[/bold yellow]\n"
+            "[dim]Escribí 'sí'/'no' (o 's'/'n') en el input y Enter. "
+            f"Sin respuesta en {int(self._confirm_timeout)}s se cancela el turno.[/dim]"
+        )
+        self._confirm_answer = None
+        self._confirm_event = threading.Event()
+        try:
+            answered = self._confirm_event.wait(self._confirm_timeout)
+        finally:
+            self._confirm_event = None
+        if not answered or self._confirm_answer is None:
+            console.print(
+                "[yellow]⏱️  Confirmación vencida — se cancela el turno.[/yellow]"
+            )
+            self._cancel_turn()
+            return False
+        if self._confirm_answer:
+            console.print("[green]✅ Aprobado.[/green]")
+            return True
+        console.print("[red]⛔ Rechazado — se cancela el turno.[/red]")
+        self._cancel_turn()
+        return False
+
+    def confirm_pending(self) -> bool:
+        """True si hay una confirmación de write esperando respuesta."""
+        return self._confirm_event is not None and not self._confirm_event.is_set()
+
+    def resolve_confirm(self, answer: bool) -> None:
+        """Resuelve la confirmación pendiente (lo llama la TUI desde su input).
+
+        Un RECHAZO cancela el turno (semántica igual a ESC): no seguimos
+        trabajando tras un "no" del usuario. La aprobación solo desbloquea.
+        """
+        if self._confirm_event is not None:
+            self._confirm_answer = bool(answer)
+            self._confirm_event.set()
+        if not answer:
+            self._cancel_turn()
 
     def context_usage_pct(self) -> float:
         """% del ctx_limit consumido por la sesión actual (para /compact, TUI)."""

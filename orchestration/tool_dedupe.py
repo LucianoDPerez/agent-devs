@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -70,6 +71,12 @@ VERIFY_TOOL_NAMES = frozenset({"run_lint", "run_tests", "run_build", "run_instal
 # Tools que cuentan como "producto final" para evitar max_tools_before_write
 # (REVIEW nunca escribe; estos son sus outputs válidos)
 PRODUCTIVE_TOOL_NAMES = READISH_TOOL_NAMES | VERIFY_TOOL_NAMES
+
+# Tools de archivo que REQUIEREN confirmación del usuario antes de ejecutarse
+# (EXECUTE_CONFIRM_WRITES): el harness pausa la tool hasta que el usuario
+# aprueba. stage_files/create_commit NO van acá: el commit ya tiene su propio
+# prompt post-turno (EXECUTE_ASK_COMMIT).
+CONFIRM_TOOL_NAMES = frozenset({"write_file", "edit_file", "delete_file"})
 
 
 class ToolCallDedupe:
@@ -424,6 +431,7 @@ def wrap_tools_with_dedupe(
     repo_path: str | None = None,
     tool_call_logger: set | None = None,
     allow_overwrite_escalation: bool = True,
+    confirm_callback=None,
 ) -> list:
     """Envuelve tools: dedupe idéntico + (opcional) explore/write guard.
 
@@ -462,6 +470,7 @@ def wrap_tools_with_dedupe(
             _wrap_one(
                 t, dedupe, explore_budget, read_cache, repo_path,
                 tool_call_logger, edit_rejections, allow_overwrite_escalation,
+                confirm_callback,
             )
         )
     return wrapped
@@ -538,6 +547,7 @@ def _wrap_one(
     tool_call_logger: set | None = None,
     edit_rejections: dict | None = None,
     allow_overwrite_escalation: bool = True,
+    confirm_callback=None,
 ) -> BaseTool:
     name = tool.name
 
@@ -670,11 +680,28 @@ def _wrap_one(
             if isinstance(result, str) and comp:
                 read_cache[f"[trace:{comp}]"] = result
 
+    def _rejected_message(kwargs: dict[str, Any]) -> str:
+        """Mensaje que ve el modelo cuando el usuario rechaza un write/edit/delete."""
+        path = kwargs.get("path", "?")
+        return (
+            f"⛔ EL USUARIO RECHAZÓ la operación {name} sobre '{path}'. "
+            "NO la ejecutes. No insistas con este cambio: pedí permiso de nuevo "
+            "solo si vas a hacer algo distinto, o explicá en texto por qué lo "
+            "necesitabas y esperá instrucciones."
+        )
+
+    async def _confirm_async(kwargs: dict[str, Any]) -> bool:
+        """Pide confirmación al usuario sin bloquear el event loop del grafo."""
+        return await asyncio.to_thread(confirm_callback, name, kwargs)
+
     def _invoke(**kwargs):
         kwargs = _resolve_kwargs(kwargs)
         action, value = _policy(kwargs)
         if action == "return":
             return value
+        if confirm_callback is not None and name in CONFIRM_TOOL_NAMES:
+            if not confirm_callback(name, kwargs):
+                return _rejected_message(kwargs)
         if tool_call_logger is not None:
             tool_call_logger.add(name)
         result = tool.invoke(kwargs)
@@ -693,6 +720,9 @@ def _wrap_one(
         action, value = _policy(kwargs)
         if action == "return":
             return value
+        if confirm_callback is not None and name in CONFIRM_TOOL_NAMES:
+            if not await _confirm_async(kwargs):
+                return _rejected_message(kwargs)
         if tool_call_logger is not None:
             tool_call_logger.add(name)
         result = await tool.ainvoke(kwargs)

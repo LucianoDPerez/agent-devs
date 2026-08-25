@@ -120,6 +120,7 @@ async def build_agent(
     tool_call_logger: set | None = None,
     allow_overwrite_escalation: bool | None = None,
     graph_project: str = "",
+    confirm_callback=None,
 ) -> tuple:
     """Construye un agente LangChain con tools y prompt del rol indicado.
 
@@ -213,6 +214,7 @@ async def build_agent(
             all_tools, dedupe, budget, read_cache,
             repo_path=repo_path, tool_call_logger=tool_call_logger,
             allow_overwrite_escalation=allow_overwrite_escalation,
+            confirm_callback=confirm_callback,
         )
 
     prompt_template = load_prompt(role)

@@ -181,6 +181,15 @@ EXECUTE_MAX_REASONING_SECONDS = 90
 # scripts), se omite la pregunta.
 EXECUTE_ASK_COMMIT = True
 
+# EXECUTE: antes de EJECUTAR write_file/edit_file/delete_file, consultar al
+# usuario (no automático). La tool se bloquea hasta que el usuario aprueba o
+# rechaza; un rechazo devuelve el mensaje al modelo (puede intentar otra vía
+# sin matar el turno). Sin TUI interactiva (tests/scripts) se omite: fail-open.
+EXECUTE_CONFIRM_WRITES = True
+# Si el usuario no responde en N segundos, el write se RECHAZA (fail-close:
+# nunca ejecutar sin aprobación explícita). ESC también desbloquea.
+EXECUTE_CONFIRM_TIMEOUT = 180
+
 # Codemod determinístico de paths frontend↔backend al arrancar EXECUTE: corrige
 # automáticamente mismatches de imports/rutas (PATH FIX). Es modificador de
 # código REAL del usuario: el mensaje lo disclosia, y este flag permite
