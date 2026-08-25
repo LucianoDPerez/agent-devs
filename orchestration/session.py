@@ -60,6 +60,33 @@ from core.intents import Intent
 from core.roles import Role, role_for_intent
 from display.console import console, print_role_switch, print_turn_summary, stream_agent_turn, ReasoningOnlyResponse, ToolCallLimitExceeded
 from tools import BUDGET_RETRY_TOOLS, GATE_RETRY_TOOLS
+
+
+def _is_llama_connection_error(exc: BaseException) -> bool:
+    """Detecta errores de conexión a llama-server sin importar el wrapper."""
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        name = type(cur).__name__
+        msg = str(cur).lower()
+        if name in ("APIConnectionError", "ConnectError"):
+            return True
+        if "all connection attempts failed" in msg or "connection error" in msg:
+            return True
+        if "failed to connect" in msg:
+            return True
+        nxt = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+        cur = nxt if isinstance(nxt, BaseException) else None
+    return False
+
+
+def _llama_down_console_msg() -> None:
+    from config import LLM_BASE_URL as _BASE
+    console.print(f"\n[red]❌ llama.cpp está apagado — no se pudo conectar a {_BASE}[/red]")
+    console.print("[yellow]   Encendelo antes de seguir, por ejemplo:[/yellow]")
+    console.print("[dim]     llama-server -hf unsloth/Qwen3-6B-GGUF --port 8080[/dim]")
+    console.print("[dim]   Verificá con: agent-devs --doctor[/dim]\n")
 from display.esc_watcher import EscWatcher
 from llm_wrapper import LocalLLM, get_usage, reset_turn_usage
 from orchestration.agent_builder import build_agent, init_mcp
@@ -1253,8 +1280,35 @@ class Session:
 
     def run_turn(self, user_input: str, status: str | None = None) -> None:
         """Clasifica, cambia rol, ejecuta con historial, persiste en SQLite."""
+        # Chequeo rápido: si llama.cpp está apagado, no intentar clasificar
+        # (también usa LLM). Evita 60s de timeout + traceback crudo.
+        try:
+            import urllib.request
+            from config import LLM_BASE_URL as _BU
+            _base = _BU.split("/v1")[0]
+            _alive = False
+            for _p in ("/health", "/v1/models"):
+                try:
+                    with urllib.request.urlopen(_base + _p, timeout=1.0) as _r:
+                        if _r.status == 200:
+                            _alive = True
+                            break
+                except Exception:
+                    continue
+            if not _alive:
+                _llama_down_console_msg()
+                return
+        except Exception:
+            pass
+
         self._no_explore_retry = False
-        intent = classify_intent(self.llm, user_input)
+        try:
+            intent = classify_intent(self.llm, user_input)
+        except BaseException as e:
+            if _is_llama_connection_error(e):
+                _llama_down_console_msg()
+                return
+            raise
         new_role = role_for_intent(intent)
         # Instrumentación de routing: el benchmark necesita auditar por qué un
         # prompt cayó en un rol (E2E: 'Creá el archivo' llegó como Análisis).
@@ -1840,6 +1894,11 @@ class Session:
                 messages_for_agent = self._enter_budget_retry(retry_msg)
                 continue
             except Exception as e:
+                if _is_llama_connection_error(e):
+                    _llama_down_console_msg()
+                    turn_failed = True
+                    interrupted = True
+                    break
                 name = type(e).__name__
                 err_text = str(e)
                 # Error de GRAMMAR de llama.cpp (peg-gemma4): el modelo emitió

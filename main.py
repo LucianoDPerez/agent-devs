@@ -54,6 +54,10 @@ def _ensure_analysis(llm: LocalLLM, repo_path: str, status: str | None = None) -
             return cached
         if is_poison:
             print("⚠️  Análisis cacheado inválido; se regenera.\n", flush=True)
+    # Chequeo rápido antes de esperar 420s de timeout si el server está caído
+    alive, _ = _llama_server_alive(timeout=1.5)
+    if not alive:
+        _llama_down_exit()
     if status:
         print(status, flush=True)
     try:
@@ -61,6 +65,12 @@ def _ensure_analysis(llm: LocalLLM, repo_path: str, status: str | None = None) -
     except FileNotFoundError as e:
         print(f"❌ {e}")
         sys.exit(1)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException as e:
+        if _is_llama_connection_error(e):
+            _llama_down_exit()
+        raise
     save_analysis(repo_path, snapshot=result["snapshot"], language=result["language"],
                   tech_stack=result["tech_stack"], analysis=result["analysis"])
     print("\n\n✅ Análisis guardado en el caché.")
@@ -314,6 +324,38 @@ def _llama_server_alive(timeout: float = 2.0) -> tuple[bool, str]:
     return False, base
 
 
+def _is_llama_connection_error(exc: BaseException) -> bool:
+    """Detecta errores de conexión a llama-server (httpx/httpcore/openai)."""
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        name = type(cur).__name__
+        msg = str(cur).lower()
+        if name in ("APIConnectionError", "ConnectError"):
+            return True
+        if "all connection attempts failed" in msg or "connection error" in msg:
+            return True
+        # openai.APIConnectionError suele tener mensaje "Connection error."
+        if "failed to connect" in msg:
+            return True
+        # recorrer causa y contexto
+        nxt = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+        cur = nxt if isinstance(nxt, BaseException) else None
+    return False
+
+
+def _llama_down_exit() -> None:
+    """Mensaje amigable cuando llama.cpp no está levantado. Nunca hace traceback."""
+    # No re-chequear con timeout largo: LLM_BASE_URL ya es la fuente de verdad
+    print(f"\n❌ llama.cpp está apagado — no se pudo conectar a {LLM_BASE_URL}", flush=True)
+    print("   Encendelo antes de ejecutar agent-devs, por ejemplo:", flush=True)
+    print("     llama-server -hf unsloth/Qwen3-6B-GGUF --port 8080", flush=True)
+    print("   Si ya está corriendo en otro puerto/host, revisá config.py → LLM_BASE_URL", flush=True)
+    print("   Verificá el estado con: agent-devs --doctor\n", flush=True)
+    sys.exit(1)
+
+
 def _locate_install_repo() -> Path | None:
     """Repo del cual esta instalación corre.
 
@@ -523,15 +565,33 @@ def main():
     # bad_root_path=. en la máquina del otro usuario).
     repo_path = str(Path(args.repo or os.getcwd()).expanduser().resolve()).strip()
 
+    # Fail-fast: si llama.cpp no responde, salir con mensaje amigable antes de
+    # intentar cualquier llamada LLM (evita el traceback de httpx/openai).
+    alive, _ = _llama_server_alive(timeout=1.5)
+    if not alive:
+        _llama_down_exit()
+
     reset_turn_usage()
-    cached = _ensure_analysis(
-        _make_llm(max_tokens=1024, temperature=0.4),
-        repo_path,
-        status="🤔 Analizando el repositorio... (puede tardar 1-2 min). Ctrl+C para cancelar.",
-    )
+    try:
+        cached = _ensure_analysis(
+            _make_llm(max_tokens=1024, temperature=0.4),
+            repo_path,
+            status="🤔 Analizando el repositorio... (puede tardar 1-2 min). Ctrl+C para cancelar.",
+        )
+    except SystemExit:
+        raise
+    except BaseException as e:
+        if _is_llama_connection_error(e):
+            _llama_down_exit()
+        raise
 
     session = Session(_make_llm(), repo_path, cached_analysis=_format_cached_context(cached))
-    session.start()
+    try:
+        session.start()
+    except BaseException as e:
+        if _is_llama_connection_error(e):
+            _llama_down_exit()
+        raise
 
     # TUI siempre que haya terminal interactiva. Sin tty (pipe/script) el
     # fallback al input simple evita que Textual reviente — no es un modo
@@ -590,8 +650,21 @@ def main():
                         console.print()
                     console.print()
                 continue
-            from display.status_bar import run_turn_with_sticky_bar
-            run_turn_with_sticky_bar(session, user_input)
+            try:
+                from display.status_bar import run_turn_with_sticky_bar
+                run_turn_with_sticky_bar(session, user_input)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as e:
+                if _is_llama_connection_error(e):
+                    console.print(
+                        f"\n[red]❌ llama.cpp está apagado — no se pudo conectar a {LLM_BASE_URL}[/red]\n"
+                        "[yellow]   Encendelo antes de seguir, por ejemplo:[/yellow]\n"
+                        "[dim]     llama-server -hf unsloth/Qwen3-6B-GGUF --port 8080[/dim]\n"
+                        "[dim]   Verificá con: agent-devs --doctor[/dim]\n"
+                    )
+                    continue
+                raise
     finally:
         session.close()
 
