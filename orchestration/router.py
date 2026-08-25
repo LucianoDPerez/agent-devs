@@ -162,12 +162,16 @@ def classify_intent(_llm, user_message: str) -> Intent:
     if _has_any(prefix, _PLAN_LEADING):
         return Intent.PLAN
 
-    if _has_any(prefix, _CHAT_LEADING):
-        return Intent.CHAT
-
-    # EXECUTE gana si hay verbo de acción en el comando del usuario
+    # EXECUTE gana si hay verbo de acción en el comando del usuario. DEBE ir
+    # ANTES del check de CHAT: un texto a escribir puede contener saludos
+    # ("agregá al README: 'Hola Soy Agent-Devs'") y 'hola'/'chau' están en
+    # _CHAT_LEADING — si CHAT evaluara primero, la orden de implementar caía
+    # en chat y el turno nunca llegaba a EXECUTE.
     if _has_any(prefix, _EXECUTE_VERBS):
         return Intent.EXECUTE
+
+    if _has_any(prefix, _CHAT_LEADING):
+        return Intent.CHAT
 
     # Fallback: full text search (for messages without clear command prefix)
     if _has_any(text, _EXECUTE_VERBS):

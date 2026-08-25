@@ -25,6 +25,24 @@ def test_implementar_correcciones_with_review_paste_is_execute():
     assert classify_intent(None, msg) == Intent.EXECUTE
 
 
+def test_implementar_con_texto_saludo_en_el_contenido_is_execute():
+    """'implementa ... "Hola Soy Agent-Devs"' NO debe ir a CHAT: el verbo de
+    acción explícito gana sobre el saludo que va DENTRO del texto a escribir.
+    Bug real: 'hola'/'chau' están en _CHAT_LEADING y se evaluaban antes que
+    _EXECUTE_VERBS → el turno nunca llegaba a EXECUTE."""
+    assert classify_intent(
+        None,
+        'implementa en el README.md agregar al final una lina que diga "Hola Soy Agent-Devs"',
+    ) == Intent.EXECUTE
+    assert classify_intent(
+        None,
+        'implementar: en el README.md agregar al final una lina que diga "Chau Mundo"',
+    ) == Intent.EXECUTE
+    assert classify_intent(None, "hola, implementá esto por favor") == Intent.EXECUTE
+    assert classify_intent(None, "hola") == Intent.CHAT
+    assert classify_intent(None, "hola cómo estás") == Intent.CHAT
+
+
 def test_implementar_observaciones_del_review_is_execute():
     """'implementar las ... del review' NO debe ir a REVIEW — es corrección post-review."""
     assert classify_intent(None, "implementar las observaciones del review") == Intent.EXECUTE
