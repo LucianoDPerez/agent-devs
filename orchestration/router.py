@@ -19,6 +19,14 @@ _EXECUTE_VERBS = [
     "creá un pr", "crea un pr", "abrí un pr",
     "write file", "create file", "edit file",
     "agregá un endpoint", "agrega un endpoint",
+    "agregá", "agrega", "agregar", "añadí", "añade", "añadir",
+    "eliminá", "elimina", "eliminar", "borrá", "borra", "borrar",
+    "quitá", "quita", "quitar", "remové", "remueve", "remover",
+    "actualizá", "actualiza", "actualizar",
+    "renombrá", "renombra", "renombrar",
+    "mové", "mueve", "mover",
+    "reemplazá", "reemplaza", "reemplazar",
+    "cambiá", "cambia", "cambiar",
     "aplicá", "aplica", "aplicar",
     "corregí", "corrige", "corregir",
     "solucioná", "soluciona", "solucionar",
@@ -67,8 +75,31 @@ _VERIFY_LEADING = [
 # (sin|no) + verbo de acción → el verbo NO cuenta como intención
 _NEGATED_ACTION_RE = re.compile(
     r"\b(?:sin|no)\s+(?:modific\w*|edit\w*|implement\w*|escrib\w*|cre\w*|"
-    r"arregl\w*|correg\w*|aplic\w*|toc\w*|code\w*)\b"
+    r"arregl\w*|correg\w*|aplic\w*|toc\w*|code\w*|elimin\w*|agreg\w*|"
+    r"actualiz\w*|renombr\w*|mov\w*|borr\w*|quit\w*|remov\w*)\b"
 )
+
+# Coordinación imperativa: "analizá Y arreglá el bug" / "revisá y corregí".
+# El verbo de análisis/plan es leading pero la acción COORDINADA con "y/e"
+# es una orden de ejecución → sube a EXECUTE. Sin esto, "analizá y arreglá"
+# caería en ANALYZE (análisis) cuando el usuario quiere que ARREGLE.
+_COORDINATED_EXECUTE_RE = re.compile(
+    r"\b(?:y|e)\s+(?:implement\w*|escrib\w*|cre\w*|gener\w*|modific\w*|"
+    r"edit\w*|elimin\w*|agreg\w*|añad\w*|actualiz\w*|renombr\w*|mov\w*|"
+    r"reemplaz\w*|quit\w*|borr\w*|remov\w*|cambi\w*|arregl\w*|correg\w*|"
+    r"aplic\w*|fix\w*|repar\w*|solucion\w*|resolv\w*)"
+)
+
+# Pregunta de planificación: "qué archivos hay que eliminar", "decime qué
+# habría que agregar", "cómo implementar X" → PLAN (el usuario pregunta qué
+# hacer, no lo está haciendo). Estos patrones NO son órdenes de ejecución.
+_PLANNING_LEADING = [
+    "qué archivos", "que archivos", "qué archivo", "que archivo",
+    "qué pasos", "que pasos", "qué habría que", "qué hay que",
+    "cómo implementar", "como implementar", "qué se necesita",
+    "qué se debería", "cómo hacer para", "como hacer para",
+    "cuáles archivos", "cuales archivos", "cuál archivo", "cual archivo",
+]
 
 
 def _extract_command_prefix(text: str, max_chars: int = 120) -> str:
@@ -153,13 +184,19 @@ def classify_intent(_llm, user_message: str) -> Intent:
     ):
         return Intent.EXECUTE
 
-    # Verificación pura → ANALYZE, salvo que haya verbos de implementación
-    # ("verificá y arreglá" sigue siendo EXECUTE). "implementada" (participio
-    # pasado, ya hecha) NO activa EXECUTE.
-    if _has_any(prefix, _VERIFY_LEADING) and not _has_any(prefix, _EXECUTE_VERBS):
+    # Verificación/análisis puro → ANALYZE (prioridad del PRIMER verbo).
+    # "analizá cómo eliminar un endpoint" → ANALYZE aunque "eliminar" sea un
+    # verbo de acción: está subordinado al análisis, no es una orden.
+    # Excepción: COORDINACIÓN imperativa — "analizá y arreglá el bug" → EXECUTE
+    # (el usuario quiere que ARREGLE, no solo que analice).
+    if _has_any(prefix, _VERIFY_LEADING) and not _COORDINATED_EXECUTE_RE.search(prefix):
         return Intent.ANALYZE
 
-    if _has_any(prefix, _PLAN_LEADING):
+    # Pregunta de planificación: "qué archivos hay que eliminar", "decime qué
+    # habría que agregar", "cómo implementar X" → PLAN (el usuario pregunta
+    # QUÉ hacer, no lo está haciendo). DEBE ir antes de EXECUTE: el verbo en
+    # infinitivo subordinado a "qué/habría que/hay que/cómo" no es una orden.
+    if _has_any(prefix, _PLAN_LEADING) or _has_any(prefix, _PLANNING_LEADING):
         return Intent.PLAN
 
     # EXECUTE gana si hay verbo de acción en el comando del usuario. DEBE ir
