@@ -99,11 +99,16 @@ def list_files(path: str, recursive: bool = False) -> str:
             break
 
         rel = entry.relative_to(root)
-        if entry.is_dir():
-            results.append(f"📁 {rel}/")
-        elif entry.is_file():
-            size = entry.stat().st_size
-            results.append(f"📄 {rel} ({size:,} bytes)")
+        try:
+            if entry.is_dir():
+                results.append(f"📁 {rel}/")
+            elif entry.is_file():
+                size = entry.stat().st_size
+                results.append(f"📄 {rel} ({size:,} bytes)")
+        except OSError:
+            # symlink roto (ej. node_modules/.bin/.rimraf-XXX de un npm install
+            # interrumpido): is_dir/is_file/stat lanzan FileNotFoundError.
+            continue
         count += 1
 
     if not results:

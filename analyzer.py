@@ -60,20 +60,93 @@ _EXT_LANG = {
 
 
 def _excluded(path: Path) -> bool:
+    """True si el path cae en un directorio/archivo de NO-proyecto conocido.
+
+    Cubre dependencias, builds, caches y VCS de cualquier ecosistema
+    (EXCLUDED_DIRS/EXCLUDED_FILES en config). No es suficiente solo: los
+    binarios que no estén listados los atrapa _is_binary().
+    """
     return bool(set(path.parts) & EXCLUDED_DIRS) or path.name in EXCLUDED_FILES
+
+
+# Firmas binarias universales (magic bytes al inicio del archivo). Lista
+# finita y estable, independiente del lenguaje/ecosistema: cubre ejecutables,
+# archivos comprimidos, imágenes, clases, DBs y fuentes de CUALQUIER stack.
+_BINARY_MAGIC = (
+    b"\x7fELF",          # linux/mac ELF
+    b"MZ",               # windows PE/exe/dll
+    b"PK\x03\x04",       # zip / jar / apk / docx
+    b"PK\x05\x06",       # zip vacío
+    b"\x89PNG\r\n\x1a\n",  # png
+    b"\xff\xd8\xff",     # jpeg
+    b"GIF8",             # gif
+    b"BM",               # bmp
+    b"RIFF",             # wav / avi / webp
+    b"\xca\xfe\xba\xbe", # java class
+    b"SQLite format 3\x00",  # sqlite
+    b"\x00\x01\x00\x00", # ttf
+    b"\x00\x00\x00\x00", # pyc / dmg / otros
+    b"7z\xbc\xaf",       # 7z
+    b"\x1f\x8b",         # gzip / tar.gz
+    b"BZh",              # bzip2
+    b"x\x9c",            # zlib
+)
+
+
+def _is_binary(path: Path, _head: int = 4096) -> bool:
+    """True si el archivo es BINARIO, detectado por contenido, no por extensión.
+
+    Escalable a cualquier lenguaje (Go/Java/PHP/JS/TS/Rust/C#…) sin hardcodear
+    extensiones. Dos señales complementarias:
+      1. Magic bytes al inicio (firmas binarias universales).
+      2. Densidad de bytes no-imprimibles/no-UTF8 en la cabecera (un archivo
+         binario sin firma conocida — comprimido, serializado, etc.).
+
+    El código fuente de cualquier lenguaje es UTF-8 imprimible → nunca se
+    marca como binario. Tolerante a errores: un path ilegible o un symlink
+    roto se trata como binario (no se analiza) en vez de reventar.
+    """
+    try:
+        with open(path, "rb") as f:
+            chunk = f.read(_head)
+    except OSError:
+        return True  # ilegible / symlink roto → no es código de proyecto
+    if not chunk:
+        return False  # archivo vacío no es binario
+    if b"\x00" in chunk:
+        return True
+    head = chunk[:64]
+    if any(head.startswith(m) for m in _BINARY_MAGIC):
+        return True
+    non_text = sum(1 for byte in chunk if byte < 9 or (13 < byte < 32) or byte == 127 or byte > 126)
+    return non_text / len(chunk) > 0.30
+
+
+def _is_project_file(path: Path) -> bool:
+    """Único punto de verdad: ¿este archivo merece análisis?
+
+    Regla: NO se analizan binarios ni artefactos de dependencias — SOLO
+    archivos de proyecto. Combina la lista conocida (directorios/archivos
+    excluidos) con la detección de binarios por contenido, y descarta
+    symlinks (rotos o no: un symlink roto revienta stat()).
+    """
+    if _excluded(path):
+        return False
+    if path.is_symlink():
+        return False
+    if not path.is_file():
+        return False
+    return not _is_binary(path)
 
 
 def _file_tree(root: Path, limit: int = 200) -> str:
     lines = []
     count = 0
     for p in sorted(root.rglob("*")):
-        if _excluded(p):
+        if not _is_project_file(p):
             continue
         rel = p.relative_to(root).as_posix()
-        if p.is_dir():
-            lines.append(f"  {rel}/")
-        else:
-            lines.append(f"  {rel} ({p.stat().st_size:,}b)")
+        lines.append(f"  {rel} ({p.stat().st_size:,}b)")
         count += 1
         if count >= limit:
             lines.append("  ... (truncado)")
@@ -131,11 +204,25 @@ def build_context(repo_path: str) -> str:
     if readme:
         sections.append(readme)
     
-    # 4. Top 10 archivos por tamaño (cualquier extension, genérico)
-    files = sorted(root.rglob("*"), key=lambda p: p.stat().st_size, reverse=True)[:10]
+    # 4. Top 10 archivos por tamaño (solo archivos de proyecto, sin binarios)
+    # Se usa _is_project_file (único punto de verdad): filtra directorios
+    # de dependencias/build de cualquier ecosistema + binarios por contenido
+    # + symlinks rotos (ej. node_modules/.bin/.rimraf-XXX de un npm install
+    # interrumpido, que reventaba el análisis con FileNotFoundError).
+    files = []
+    for p in root.rglob("*"):
+        if not _is_project_file(p):
+            continue
+        try:
+            size = p.stat().st_size
+        except OSError:
+            continue
+        if size > 0:
+            files.append(p)
+    files.sort(key=lambda p: p.stat().st_size, reverse=True)
     sections.append("# Archivos más grandes")
-    for f in files:
-        if f.is_file() and f.suffix:
+    for f in files[:10]:
+        if f.suffix:
             sections.append(f"📄 {f.relative_to(root).as_posix()} ({f.stat().st_size//1024}kb)")
     
     context = "\n\n".join(sections)
@@ -147,7 +234,9 @@ def detect_language(repo_path: str) -> str:
     manifest_lang = None
     ext_counts: Counter = Counter()
     for p in root.rglob("*"):
-        if _excluded(p) or not p.is_file():
+        # Solo archivos de proyecto: excluye dependencias/build de cualquier
+        # ecosistema, binarios (por contenido) y symlinks (rotos o no).
+        if not _is_project_file(p):
             continue
         if p.name in _MANIFEST_LANG and manifest_lang is None:
             manifest_lang = _MANIFEST_LANG[p.name]

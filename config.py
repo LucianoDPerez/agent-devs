@@ -231,13 +231,37 @@ WRITE_FILE_OVERWRITE_MAX_LINES = 5
 MAX_FILE_READ_BYTES = 50_000
 MAX_LIST_RESULTS = 100
 
+# Directorios que NUNCA se analizan: dependencias, builds, caches y control
+# de versiones de CUALQUIER ecosistema (escalable a Go/Java/PHP/JS/TS/Rust/
+# C#/Ruby/Elixir…). Esta lista cubre lo CONOCIDO; los binarios que no caigan
+# acá los atrapa el detector de contenido (analyzer._is_binary).
 EXCLUDED_DIRS = {
-    ".git", "node_modules", "__pycache__", ".venv", "venv",
-    ".env", ".mypy_cache", ".pytest_cache", "dist", "build",
-    ".next", ".nuxt", "target", ".gradle", ".idea", ".vscode",
-    ".wwebjs_session", ".wwebjs_cache", "https:",
+    # control de versiones
+    ".git", ".svn", ".hg",
+    # node / js / ts
+    "node_modules", ".next", ".nuxt", ".output", ".svelte-kit", ".pnpm-store",
+    # python
+    "__pycache__", ".venv", "venv", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox",
+    # java / jvm / gradle / maven
+    "target", ".gradle", ".mvn", "out", "obj", "classes",
+    # go / rust / cargo
+    "vendor", "target",
+    # builds / distributables (JS, Python, etc.)
+    "dist", "build",
+    # php / composer
+    "vendor",
+    # ruby / bundle
+    ".bundle", "vendor",
+    # elixir
+    "_build", "deps", ".beam",
+    # swift / xcode
+    "DerivedData", ".build", ".swiftpm",
+    # dart / flutter
+    ".dart_tool", ".pub-cache",
+    # misc
+    ".env", ".idea", ".vscode", ".terraform", ".venv", ".wwebjs_session",
+    ".wwebjs_cache", "https:", "Pods", ".cargo", ".cache",
 }
-
 EXCLUDED_FILES = {
     ".DS_Store", "Thumbs.db", ".env", ".log", ".tmp",
     "tsconfig.tsbuildinfo",
