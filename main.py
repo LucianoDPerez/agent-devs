@@ -20,6 +20,7 @@ from pathlib import Path
 
 from cache import list_repos, load_analysis, snapshot_hash, save_analysis
 from config import LLM_BASE_URL, LLM_MAX_TOKENS, LLM_MODEL_NAME, LLM_TEMPERATURE
+from core.textutil import normalize
 from llm_wrapper import LocalLLM, get_usage, reset_turn_usage
 from orchestration.session import Session
 from analyzer import run_analysis
@@ -209,9 +210,10 @@ def run_fullscreen(session) -> None:
         if not text.strip():
             return
         # Confirmación de write pendiente (EXECUTE_CONFIRM_WRITES): el input
-        # resuelve la aprobación en vez de lanzar un turno nuevo.
+        # resuelve la aprobación en vez de lanzar un turno nuevo. Se normaliza
+        # el texto (minúsculas + sin acentos) para aceptar sí/SÍ/si por igual.
         if session.confirm_pending():
-            if stripped in ("s", "si", "sí", "y", "yes", "aprob", "ok", "dale"):
+            if normalize(text) in ("s", "si", "y", "yes", "aprob", "ok", "dale"):
                 session.resolve_confirm(True)
             else:
                 session.resolve_confirm(False)
@@ -627,7 +629,7 @@ def main():
             except (EOFError, KeyboardInterrupt):
                 print("\n👋 ¡Hasta luego!")
                 break
-            stripped = user_input.strip().lower()
+            stripped = normalize(user_input)
             if stripped in ("exit", "quit", "salir", "q"):
                 print("👋 ¡Hasta luego!")
                 break
