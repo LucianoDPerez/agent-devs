@@ -176,6 +176,12 @@ MAX_EDIT_REJECTIONS_BEFORE_OVERWRITE = 2
 # tool call; 90s por bloque corta runaway sin afectar el flujo normal.
 EXECUTE_MAX_REASONING_SECONDS = 90
 
+# Generación continua de CONTENIDO: si el modelo lleva > N segundos generando
+# texto SIN tool calls, no emitió EOS y está en loop (genera su resumen y
+# sigue hasta el límite de max_tokens — turnos de 10+ min colgados). El
+# idle_timeout no lo atrapa (nunca es idle). 90s cubre resúmenes largos.
+EXECUTE_MAX_CONTENT_SECONDS = 90
+
 # Tras un turno EXECUTE con cambios sin commitear, preguntar al usuario si
 # quiere commitear (nunca commit automático). Si el stdin no es un tty (tests,
 # scripts), se omite la pregunta.

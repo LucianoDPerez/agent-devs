@@ -35,6 +35,7 @@ from config import (
     EXECUTE_MAX_WRITES_BEFORE_VERIFY,
     EXECUTE_RECURSION_LIMIT,
     EXECUTE_MAX_REASONING_SECONDS,
+    EXECUTE_MAX_CONTENT_SECONDS,
     EXECUTE_REQUIRE_WRITE,
     EXECUTE_BULK_MIN_FILES,
     JUDGE_BASE_URL,
@@ -1689,6 +1690,11 @@ class Session:
                         else MAX_TOOL_CALLS_PER_TURN
                     ),
                     require_write=require_write,
+                    max_content_seconds=(
+                        EXECUTE_MAX_CONTENT_SECONDS
+                        if new_role == Role.EXECUTE
+                        else None
+                    ),
                 )
             )
 

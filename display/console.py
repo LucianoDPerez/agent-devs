@@ -74,7 +74,8 @@ class ToolCallLimitExceeded(ReasoningOnlyResponse):
 async def stream_agent_turn(agent, messages, config, idle_timeout: float | None = 120.0,
                             max_reasoning_seconds: float | None = None,
                             max_tool_calls: int | None = None,
-                            require_write: bool = False):
+                            require_write: bool = False,
+                            max_content_seconds: float | None = None):
     """Ejecuta el agente con streaming. Reasoning en dim, response normal.
 
     Retorna el texto completo de la respuesta (sin razonamiento) para persistencia.
@@ -85,6 +86,13 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
 
     ``max_tool_calls``: límite duro de tool calls (contados por nombre) en toda
     la conversación del turno. Si se supera, corta el stream.
+
+    ``max_content_seconds``: si el modelo lleva generando CONTENIDO (texto)
+    continuamente más tiempo que este límite sin emitir una tool call, corta.
+    El 4B a veces no emite EOS: termina su resumen final y SIGUE generando
+    texto nuevo hasta el límite de max_tokens del servidor (turnos de 10+
+    min colgados). El idle_timeout NO lo atrapa (el modelo sigue emitiendo
+    chunks — nunca es idle).
 
     ``require_write`` (EXECUTE retry): si el turno termina sin haber hecho
     NINGÚN write_file/edit_file/delete_file, levanta ReasoningOnlyResponse.
@@ -106,6 +114,16 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
     last_emitted: str | None = None
     # Segmento markdown ABIERTO (marcadores MD_BEGIN/MD_END para la TUI).
     md_open = False
+    # Detección de LOOP DE TEXTO: el 4B a veces repite el MISMO bloque
+    # infinitamente ("Would you like me to commit this change?" ×17). El
+    # idle_timeout NO lo atrapa (el modelo sigue emitiendo chunks — nunca
+    # es idle). Se detecta por sufijo repetido en el texto acumulado.
+    loop_detected = False
+    # Duración de generación continua de CONTENIDO (sin tool calls): el 4B
+    # a veces no emite EOS y sigue generando texto nuevo indefinidamente.
+    # Timer por bloque de contenido: arranca con el primer chunk de texto y
+    # se resetea al emitir una tool call o razonamiento.
+    content_since: float | None = None
 
     WRITE_NAMES = frozenset({"write_file", "edit_file", "delete_file", "stage_files", "create_commit"})
 
@@ -153,6 +171,8 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                     if not reasoning_started:
                         reasoning_started = True
                         console.print("💭 [dim]Razonando…[/dim]")
+                # Empezó a razonar → reset del timer de contenido continuo.
+                content_since = None
                 if max_reasoning_seconds is not None:
                     elapsed = time.monotonic() - reasoning_since
                     if elapsed > max_reasoning_seconds:
@@ -176,10 +196,48 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                     if not md_open:
                         _md_begin()
                         md_open = True
+                    # Timer de generación continua de contenido: arranca con
+                    # el primer chunk y se resetea al razonar o emitir tool.
+                    # Si el modelo lleva > max_content_seconds generando texto
+                    # SIN tool calls, no emitió EOS (loop de generación).
+                    if content_since is None:
+                        content_since = time.monotonic()
+                    elif max_content_seconds is not None:
+                        elapsed = time.monotonic() - content_since
+                        if elapsed > max_content_seconds:
+                            console.print(
+                                f"\n[dim]↻ Modelo generando texto continuo sin "
+                                f"tool calls ({elapsed:.0f}s). Se corta.[/dim]"
+                            )
+                            break
                     console.print(escape(chunk.content), end="", highlight=False, soft_wrap=True)
                     last_emitted = "content"
                     response_parts.append(str(chunk.content))
                     produced_output = True
+                    # Loop de texto: si el MISMO bloque de ~TEXT_REPEAT_WINDOW
+                    # chars se repite N veces CONSECUTIVAS, cortar. Se comparan
+                    # bloques completos de tamaño fijo en posiciones contiguas
+                    # (el 4B repite el mismo párrafo textualmente).
+                    text_so_far = "".join(response_parts)
+                    # Loop de texto: el 4B repite el MISMO párrafo infinitamente
+                    # ("Would you like me to commit this change?" ×17 en E2E).
+                    # Detección por SUFIJO: el último bloque de ~N chars del
+                    # texto acumulado que ya apareció 2+ veces ANTES = el modelo
+                    # está re-emitiendo el mismo contenido. Ventanas múltiples
+                    # para cubrir párrafos cortos y largos.
+                    if len(text_so_far) >= 512:
+                        loop_detected = False
+                        for w in (64, 128, 256):
+                            window = text_so_far[-w:]
+                            if text_so_far[:-w].count(window) >= 2:
+                                console.print(
+                                    "\n\n[dim]↻ Modelo repitiendo el mismo texto "
+                                    "(loop). Se corta el turno.[/dim]"
+                                )
+                                loop_detected = True
+                                break
+                        if loop_detected:
+                            break
 
                 for tc in chunk.tool_call_chunks or []:
                     if tc.get("name"):
@@ -190,6 +248,9 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                         total_tool_calls += 1
                         if tc["name"] in WRITE_NAMES:
                             wrote_something = True
+                        # Tool call = el modelo volvió a la acción: reset del
+                        # timer de contenido continuo.
+                        content_since = None
                         # Cada tool call va en SU PROPIA línea (el \n acá cubre
                         # texto→tool y tool→tool). El cierre a fin de args lo
                         # hace la transición tool→texto / el final del stream.
