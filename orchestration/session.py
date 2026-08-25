@@ -1187,6 +1187,54 @@ class Session:
         turno extra de verificación aunque el modelo YA había verificado."""
         return bool(self._called_tools & VERIFY_TOOL_NAMES)
 
+    def _changed_files(self) -> list[str]:
+        """Archivos realmente modificados en el working tree (git, determinístico).
+
+        NO se le cree al modelo: si git no ve cambios, la tarea no se anuncia
+        como hecha. Fail-open: cualquier error devuelve [] (no rompe el turno).
+        """
+        try:
+            import subprocess
+            proc = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=self.repo_path, capture_output=True, text=True, timeout=5,
+            )
+            if proc.returncode != 0:
+                return []
+            files = []
+            for ln in proc.stdout.splitlines():
+                # "?? path" (untracked) y " M path" (modificado) — el path es
+                # desde la columna 4 (tras "XY ").
+                if len(ln) >= 4:
+                    files.append(ln[3:].strip())
+            return files
+        except Exception:
+            return []
+
+    def _deterministic_close(self) -> str:
+        """Resumen de cierre determinístico del SISTEMA (no del modelo).
+
+        Anuncia la tarea realizada con EVIDENCIA REAL: archivos modificados
+        (git) + verificación corrida (tools llamadas). El modelo 4B alucina
+        "Archivo creado ✅" sin haber creado nada; acá el sistema verifica
+        en disco antes de decir que está hecho.
+        """
+        files = self._changed_files()
+        verified = self._verify_tools_called()
+        if files:
+            head = f"✅ Tarea realizada: {len(files)} archivo(s) modificado(s)"
+            detail = "   · " + "\n   · ".join(files[:8])
+            if len(files) > 8:
+                detail += f"\n   · …y {len(files) - 8} más"
+            verify_line = (
+                "   Verificación: lint/tests/build ✅" if verified
+                else "   Verificación: no se corrió (podés pedirla con 'revisá los cambios')"
+            )
+            return f"{head}\n{detail}\n{verify_line}"
+        if verified:
+            return "✅ Turno completado (verificación corrida, sin cambios en disco)."
+        return "↻ El turno terminó sin cambios detectados en disco."
+
     def _closing_message(self, base: str) -> str:
         """Mensaje de cierre contexto-dependiente: si el entorno fue chequeado
         y está SANO, y el turno no logró escribir, la conclusión honesta es
@@ -1857,6 +1905,16 @@ class Session:
                     )
                     messages_for_agent = list(self._messages)
                     continue
+                # GUARD "ya escribió": si el intento anterior YA tuvo un write
+                # efectivo (write/edit/delete), el trabajo está hecho — NO
+                # reintentar write-only (re-escribiría lo mismo y volvería a
+                # pedir aprobación). El 4B a veces no sabe cerrar el turno y
+                # sigue llamando tools (git_status/lint) hasta agotar el
+                # budget; re-escribir es destructivo y duplica el trabajo.
+                # El cierre determinístico lo imprime el bloque post-turno.
+                if self._called_tools & WRITE_TOOL_NAMES:
+                    self._last_response = self._deterministic_close()
+                    break
                 messages_for_agent = self._enter_budget_retry(
                     "Presupuesto de exploración agotado. Reintentando "
                     "con lectura acotada + escritura…"
@@ -2107,6 +2165,12 @@ class Session:
         # sin pasar la compuerta de verificación → NO se ofrece commit
         # (E2E: JSX corrupto commiteado tras recursion limit).
         # En tareas bulk se pregunta SOLO al cerrar el último batch.
+        # Cierre determinístico: el SISTEMA anuncia la tarea realizada con
+        # evidencia real (git) en vez de creerle al resumen del modelo (el 4B
+        # alucina "Archivo creado ✅"). En dim para no duplicar la narrativa
+        # del LLM — el sistema verifica, el modelo narra.
+        if new_role == Role.EXECUTE and not interrupted and not turn_failed:
+            console.print(f"\n[dim]{self._deterministic_close()}[/dim]")
         _bulk_more_pending = (
             _bulk_chain is not None
             and next_pending_batch(_bulk_chain[0]) is not None
