@@ -644,6 +644,92 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
     return f"✅ Replaced block in {path}"
 
 
+@tool
+def apply_patch(path: str, edits: str) -> str:
+    """
+    Apply multiple SEARCH/REPLACE edits to a file atomically in one approval.
+    Use this when you need 2+ edits to the SAME file (e.g. 5 fields of a
+    type) — it counts as ONE approval instead of N.
+
+    `edits` is a JSON array of {old_string, new_string} objects. Each old_string
+    must match exactly (with 2-5 lines of context, like edit_file). All edits
+    are validated before any write: if any old_string is not found, nothing is
+    written and you get an error per edit.
+
+    Example:
+    apply_patch(path="src/a.ts", edits='[{"old_string":"type Foo = {\\n  x: string;","new_string":"type Foo = {\\n  x: string;\\n  y: number;"}]')
+    """
+    import json as _json
+
+    if _is_protected_task_path(path):
+        return (
+            f"⛔ '{path}' es un archivo de PLANIFICACIÓN PROHIBIDO. "
+            "NO lo toques: es tu fuente de verdad."
+        )
+    p = Path(path)
+    if not p.exists():
+        return f"File does not exist: {path}. Create it with write_file first."
+    if p.is_dir():
+        return f"'{path}' is a directory, not a file."
+    try:
+        parsed = _json.loads(edits) if isinstance(edits, str) else edits
+    except Exception as e:
+        return f"⛔ edits must be a JSON array of {{old_string, new_string}}: {e}"
+    if not isinstance(parsed, list) or not parsed:
+        return "⛔ edits must be a non-empty JSON array of {old_string, new_string}."
+    # Idempotence: if every new_string already in file and no old_string found, skip.
+    try:
+        content = p.read_text(encoding="utf-8")
+    except OSError as e:
+        return f"⛔ Failed to read {path}: {e}"
+    # Fast idempotence: if every new_string already in file, skip.
+    # (old_str may still be substring of new_str, e.g. new = old + "\n  b;")
+    if all(
+        (e.get("new_string") or e.get("new_str") or "").strip() in content
+        for e in parsed
+    ):
+        return (
+            f"All {len(parsed)} edits already applied in {path} — no changes needed. "
+            "Run verification and finish."
+        )
+    # Validate each edit has required keys and size guard
+    for idx, e in enumerate(parsed):
+        old = e.get("old_string") if "old_string" in e else e.get("old_str", "")
+        new = e.get("new_string") if "new_string" in e else e.get("new_str", "")
+        if old is None or new is None:
+            return f"⛔ Edit #{idx+1} missing old_string/new_string."
+        if old.strip() == new.strip() and old.strip():
+            return f"⛔ Edit #{idx+1} is NO-OP (old_string == new_string)."
+    # Apply sequentially on updated content (re-finding spans each time)
+    new_content = content
+    for idx, e in enumerate(parsed):
+        old = e.get("old_string") if "old_string" in e else e.get("old_str", "")
+        new = e.get("new_string") if "new_string" in e else e.get("new_str", "")
+        spans = _find_spans(new_content, old)
+        if not spans:
+            if new.strip() and new.strip() in new_content:
+                continue  # already applied, skip this patch
+            return (
+                f"⛔ Edit #{idx+1} old_string not found in {path} (after previous patches). "
+                f"Re-read the file and fix old_string for patch {idx+1}."
+            )
+        if len(spans) > 1:
+            return f"⛔ Edit #{idx+1} ambiguous ({len(spans)} matches) in {path} — add more context."
+        s, en = spans[0]
+        new_content = new_content[:s] + new + new_content[en:]
+    if new_content == content:
+        return f"No changes applied to {path} (all patches were no-ops)."
+    # Integrity guard for .md like edit_file
+    if p.suffix.lower() == ".md":
+        before = _md_integrity(content)
+        after = _md_integrity(new_content)
+        violation = _md_integrity_violation(before, after)
+        if violation:
+            return f"⛔ Patch RECHAZADO por integridad en {path}: {violation}."
+    p.write_text(new_content, encoding="utf-8")
+    return f"✅ Applied {len(parsed)} patch(es) to {path} atomically (1 approval)."
+
+
 def _exact_spans(content: str, needle: str) -> list[tuple[int, int]]:
     """All spans of an exact substring match.
 

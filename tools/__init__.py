@@ -9,7 +9,7 @@ Este índice reexporta todas y expone un pool por tipo de agente para que cada
 agente (analyzer, planner, executor, reviewer) use solo las que necesita.
 """
 
-from .filesystem import delete_file, edit_file, list_files, read_file, write_file
+from .filesystem import apply_patch, delete_file, edit_file, list_files, read_file, write_file
 from .git import (
     changed_files,
     create_commit,
@@ -49,7 +49,7 @@ PLANNER_TOOLS = [list_files, read_file, search_code, inspect_routes, inspect_mod
 # atención del modelo 4B — "olvidaba" que tenía edit_file y se escondía en
 # read_file infinitos. 12 tools + trace_component (compuesta, agrega agent_builder).
 EXECUTOR_TOOLS = [
-    read_file, write_file, edit_file, delete_file,
+    read_file, write_file, edit_file, apply_patch, delete_file,
     search_code, inspect_routes,
     run_lint, run_tests, run_build, run_npm_script,
     # git de LECTURA: 'hacer commit de los modificados' exige VER qué cambió
@@ -65,7 +65,7 @@ REVIEWER_TOOLS = [list_files, read_file, search_code, inspect_routes, inspect_mo
 # exacto de los archivos va inyectado en el mensaje (read_cache → anchor).
 # Sin list_files/search_code (nada que explorar) y sin run_install/create_pr.
 WRITE_ONLY_TOOLS = [
-    write_file, edit_file, delete_file,
+    write_file, edit_file, apply_patch, delete_file,
     stage_files, create_commit, push,
     run_lint, run_tests, run_build,
 ]
@@ -92,7 +92,7 @@ WRITE_RETRY_TOOLS = [
 # pressure). El contenido de lo ya leído va inyectado en el ancla; la compuerta
 # de verificación (sistema) inyecta verify después.
 BUDGET_RETRY_TOOLS = [
-    read_file, edit_file, write_file,
+    read_file, edit_file, apply_patch, write_file,
 ]
 
 # Retry de la compuerta post-escritura (error de compilación): corregir un
@@ -102,7 +102,7 @@ BUDGET_RETRY_TOOLS = [
 # el error ya viene inyectado, no hay que explorar) y SIN git-write (el fix
 # no debe volver a commiteear).
 GATE_RETRY_TOOLS = [
-    read_file, edit_file, write_file, delete_file,
+    read_file, edit_file, apply_patch, write_file, delete_file,
     *_READONLY_GIT, *_VERIFY, run_npm_script,
 ]
 

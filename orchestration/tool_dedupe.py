@@ -58,7 +58,7 @@ EXPLORE_TOOL_NAMES = (
     | MCP_EXPLORE_TOOL_NAMES
 )
 WRITE_TOOL_NAMES = frozenset({
-    "write_file", "edit_file", "delete_file", "stage_files", "create_commit", "push", "create_pr",
+    "write_file", "edit_file", "apply_patch", "delete_file", "stage_files", "create_commit", "push", "create_pr",
 })
 # Tools de lectura (no son "write" pero son acción productiva)
 READISH_TOOL_NAMES = frozenset(
@@ -76,7 +76,7 @@ PRODUCTIVE_TOOL_NAMES = READISH_TOOL_NAMES | VERIFY_TOOL_NAMES
 # (EXECUTE_CONFIRM_WRITES): el harness pausa la tool hasta que el usuario
 # aprueba. stage_files/create_commit NO van acá: el commit ya tiene su propio
 # prompt post-turno (EXECUTE_ASK_COMMIT).
-CONFIRM_TOOL_NAMES = frozenset({"write_file", "edit_file", "delete_file"})
+CONFIRM_TOOL_NAMES = frozenset({"write_file", "edit_file", "apply_patch", "delete_file"})
 
 
 class ToolCallDedupe:
@@ -735,6 +735,29 @@ def _wrap_one(
                         )
                 except OSError:
                     pass
+        if name == "apply_patch":
+            _path = kwargs.get("path", "")
+            _edits_raw = kwargs.get("edits", "")
+            if _path and _edits_raw:
+                try:
+                    import json as _json
+
+                    _parsed = _json.loads(_edits_raw) if isinstance(_edits_raw, str) else _edits_raw
+                    if isinstance(_parsed, list) and _parsed:
+                        _content = Path(_path).read_text(encoding="utf-8")
+                        if all(
+                            (e.get("new_string") or e.get("new_str") or "").strip() in _content
+                            for e in _parsed
+                        ):
+                            _refund_idempotent()
+                            return (
+                                f"All {len(_parsed)} edits already applied in {_path} — no changes needed. "
+                                "Run verification and finish."
+                            )
+                except OSError:
+                    pass
+                except Exception:
+                    pass
         if confirm_callback is not None and name in CONFIRM_TOOL_NAMES:
             if not confirm_callback(name, kwargs):
                 return _rejected_message(kwargs)
@@ -783,6 +806,29 @@ def _wrap_one(
                             "llamá AHORA run_lint/run_tests/run_build y terminá."
                         )
                 except OSError:
+                    pass
+        if name == "apply_patch":
+            _path = kwargs.get("path", "")
+            _edits_raw = kwargs.get("edits", "")
+            if _path and _edits_raw:
+                try:
+                    import json as _json2
+
+                    _parsed2 = _json2.loads(_edits_raw) if isinstance(_edits_raw, str) else _edits_raw
+                    if isinstance(_parsed2, list) and _parsed2:
+                        _content2 = Path(_path).read_text(encoding="utf-8")
+                        if all(
+                            (e.get("new_string") or e.get("new_str") or "").strip() in _content2
+                            for e in _parsed2
+                        ):
+                            _refund_idempotent_async()
+                            return (
+                                f"All {len(_parsed2)} edits already applied in {_path} — no changes needed. "
+                                "Run verification and finish."
+                            )
+                except OSError:
+                    pass
+                except Exception:
                     pass
         if confirm_callback is not None and name in CONFIRM_TOOL_NAMES:
             if not await _confirm_async(kwargs):

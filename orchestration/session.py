@@ -158,9 +158,9 @@ _EXECUTE_FORCE_WRITE_MSG = (
     "4) Si un bloque es muy grande, partí el cambio en bloques MÁS CHICOS "
     "(≤20 líneas).\n"
     "5) Si varios campos van al MISMO archivo (ej. 5 campos de una misma "
-    "interface/type), agrupalos en UN SOLO edit_file — no pidas 5 "
-    "aprobaciones para el mismo archivo.\n"
-    "NO respondas con texto: ejecutá write_file/edit_file AHORA."
+    "interface/type), usá apply_patch con todos los cambios juntos — "
+    "cuenta como 1 sola aprobación en vez de N.\n"
+    "NO respondas con texto: ejecutá write_file/edit_file/apply_patch AHORA."
 )
 
 
