@@ -157,6 +157,9 @@ _EXECUTE_FORCE_WRITE_MSG = (
     "existentes).\n"
     "4) Si un bloque es muy grande, partí el cambio en bloques MÁS CHICOS "
     "(≤20 líneas).\n"
+    "5) Si varios campos van al MISMO archivo (ej. 5 campos de una misma "
+    "interface/type), agrupalos en UN SOLO edit_file — no pidas 5 "
+    "aprobaciones para el mismo archivo.\n"
     "NO respondas con texto: ejecutá write_file/edit_file AHORA."
 )
 
@@ -1193,6 +1196,12 @@ class Session:
 
         NO se le cree al modelo: si git no ve cambios, la tarea no se anuncia
         como hecha. Fail-open: cualquier error devuelve [] (no rompe el turno).
+        Filtra artefactos de benchmarks y dirs protegidos: solo cuenta cambios
+        tracked ( M, M , A , D , R ) y untracked que NO sean basura
+        (benchmarks/, plans/, lucho-plans/, docs/integraciones/ y los dos
+        archivos que benchmarks arrastra: scripts/healthcheck.sh,
+        src/shared/utils/slug.ts). Sin este filtro el reporte contaba 6
+        archivos cuando la sesión solo tocó 2.
         """
         try:
             import subprocess
@@ -1202,12 +1211,43 @@ class Session:
             )
             if proc.returncode != 0:
                 return []
+            # Prefijos de artefactos que nunca deben contarse como "modificados
+            # por la tarea" — son basura untracked de benchmarks o dirs
+            # protegidos. Se filtra solo para ?? (untracked); los tracked se
+            # cuentan siempre (son cambios reales en el working tree).
+            _ARTIFACT_PREFIXES = (
+                "benchmarks/",
+                "plans/",
+                "lucho-plans/",
+                "docs/integraciones/",
+                ".opencode/",
+                ".claude/",
+                ".atl/",
+            )
+            _ARTIFACT_FILES = frozenset({
+                "scripts/healthcheck.sh",
+                "src/shared/utils/slug.ts",
+            })
             files = []
             for ln in proc.stdout.splitlines():
-                # "?? path" (untracked) y " M path" (modificado) — el path es
-                # desde la columna 4 (tras "XY ").
-                if len(ln) >= 4:
-                    files.append(ln[3:].strip())
+                if len(ln) < 4:
+                    continue
+                status = ln[:2]
+                path = ln[3:].strip()
+                # Solo ?? untracked se filtra como artefacto; los tracked
+                # ( M, M , A , D , R , etc.) son cambios reales del repo.
+                if status == "??":
+                    if path in _ARTIFACT_FILES or any(
+                        path.startswith(p) for p in _ARTIFACT_PREFIXES
+                    ):
+                        continue
+                    # También filtra por EXCLUDED_DIRS genérico (vendor,
+                    # node_modules, etc.) para no contar binarios/deps.
+                    from config import EXCLUDED_DIRS
+
+                    if any(part in EXCLUDED_DIRS for part in Path(path).parts):
+                        continue
+                files.append(path)
             return files
         except Exception:
             return []

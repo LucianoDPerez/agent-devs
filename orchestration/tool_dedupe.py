@@ -699,6 +699,42 @@ def _wrap_one(
         action, value = _policy(kwargs)
         if action == "return":
             return value
+        # Guarda de idempotencia ANTES de pedir aprobación: si old_str ==
+        # new_str o el new_str ya está en el archivo, es no-op. No tiene
+        # sentido pedir 6 aprobaciones idénticas ni contar el archivo como
+        # modificado. Se devuelve el mismo mensaje que filesystem.py para
+        # cortar el loop sin molestar al usuario.
+        # Nota: este check va ANTES del confirm para no molestar, pero
+        # DESPUÉS de _policy — _policy ya incrementó _writes_since_verify
+        # para WRITE_TOOL_NAMES, así que hay que hacer refund si es no-op.
+        def _refund_idempotent():
+            if explore_budget is not None and name in WRITE_TOOL_NAMES:
+                explore_budget.refund_write()
+
+        if name == "edit_file":
+            _old = kwargs.get("old_str", "")
+            _new = kwargs.get("new_str", "")
+            if _old.strip() == _new.strip() and _old.strip():
+                _refund_idempotent()
+                return (
+                    "⛔ NO-OP edit: old_str == new_str (no cambiarías NADA).\n"
+                    "Si los archivos YA cumplen la tarea, NO llames edit_file: "
+                    "corré run_lint/run_tests para verificarlo y terminá con un resumen."
+                )
+            _path = kwargs.get("path", "")
+            if _path and _new.strip():
+                try:
+                    _content = Path(_path).read_text(encoding="utf-8")
+                    if _new.strip() in _content and _old.strip() not in _content:
+                        _refund_idempotent()
+                        return (
+                            f"old_str not found in {_path} — PERO tu new_str YA ESTÁ en el "
+                            "archivo: el cambio ya está aplicado.\n"
+                            "NO repitas este edit. Si venías diciendo 'corro los tests': "
+                            "llamá AHORA run_lint/run_tests/run_build y terminá."
+                        )
+                except OSError:
+                    pass
         if confirm_callback is not None and name in CONFIRM_TOOL_NAMES:
             if not confirm_callback(name, kwargs):
                 return _rejected_message(kwargs)
@@ -720,6 +756,34 @@ def _wrap_one(
         action, value = _policy(kwargs)
         if action == "return":
             return value
+        def _refund_idempotent_async():
+            if explore_budget is not None and name in WRITE_TOOL_NAMES:
+                explore_budget.refund_write()
+
+        if name == "edit_file":
+            _old = kwargs.get("old_str", "")
+            _new = kwargs.get("new_str", "")
+            if _old.strip() == _new.strip() and _old.strip():
+                _refund_idempotent_async()
+                return (
+                    "⛔ NO-OP edit: old_str == new_str (no cambiarías NADA).\n"
+                    "Si los archivos YA cumplen la tarea, NO llames edit_file: "
+                    "corré run_lint/run_tests para verificarlo y terminá con un resumen."
+                )
+            _path = kwargs.get("path", "")
+            if _path and _new.strip():
+                try:
+                    _content = Path(_path).read_text(encoding="utf-8")
+                    if _new.strip() in _content and _old.strip() not in _content:
+                        _refund_idempotent_async()
+                        return (
+                            f"old_str not found in {_path} — PERO tu new_str YA ESTÁ en el "
+                            "archivo: el cambio ya está aplicado.\n"
+                            "NO repitas este edit. Si venías diciendo 'corro los tests': "
+                            "llamá AHORA run_lint/run_tests/run_build y terminá."
+                        )
+                except OSError:
+                    pass
         if confirm_callback is not None and name in CONFIRM_TOOL_NAMES:
             if not await _confirm_async(kwargs):
                 return _rejected_message(kwargs)
