@@ -219,24 +219,21 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                     # bloques completos de tamaño fijo en posiciones contiguas
                     # (el 4B repite el mismo párrafo textualmente).
                     text_so_far = "".join(response_parts)
-                    # Loop de texto: el 4B repite el MISMO párrafo infinitamente
-                    # ("Would you like me to commit this change?" ×17 en E2E).
-                    # Detección por SUFIJO: el último bloque de ~N chars del
-                    # texto acumulado que ya apareció 2+ veces ANTES = el modelo
-                    # está re-emitiendo el mismo contenido. Ventanas múltiples
-                    # para cubrir párrafos cortos y largos.
-                    if len(text_so_far) >= 512:
-                        loop_detected = False
-                        for w in (64, 128, 256):
-                            window = text_so_far[-w:]
-                            if text_so_far[:-w].count(window) >= 2:
-                                console.print(
-                                    "\n\n[dim]↻ Modelo repitiendo el mismo texto "
-                                    "(loop). Se corta el turno.[/dim]"
-                                )
-                                loop_detected = True
-                                break
-                        if loop_detected:
+                    # Loop de texto: el 4B a veces repite el MISMO párrafo
+                    # infinitamente (EXECUTE: "Would you like me to commit..."
+                    # ×17). Se detecta solo como 3 bloques CONSECUTIVOS
+                    # idénticos de 256 chars — imposible en una tabla legítima
+                    # donde cada fila es distinta, pero trivial en un loop real.
+                    if len(text_so_far) >= 768:
+                        w = 256
+                        if (
+                            text_so_far[-w:] == text_so_far[-2 * w : -w]  # noqa: E203
+                            == text_so_far[-3 * w : -2 * w]  # noqa: E203
+                        ):
+                            console.print(
+                                "\n\n[dim]↻ Modelo repitiendo el mismo texto "
+                                "(loop). Se corta el turno.[/dim]"
+                            )
                             break
 
                 for tc in chunk.tool_call_chunks or []:
