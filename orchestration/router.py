@@ -90,10 +90,15 @@ _COORDINATED_EXECUTE_RE = re.compile(
     r"aplic\w*|fix\w*|repar\w*|solucion\w*|resolv\w*)"
 )
 
-# Pregunta de planificación: "qué archivos hay que eliminar", "decime qué
-# habría que agregar", "cómo implementar X" → PLAN (el usuario pregunta qué
-# hacer, no lo está haciendo). Estos patrones NO son órdenes de ejecución.
+# Pregunta/creación de planificación: "qué archivos hay que eliminar",
+# "decime qué habría que agregar", "cómo implementar X", "crear tarea para
+# jira" → PLAN (el usuario pide un artefacto de planificación, no que se
+# ejecute código). Estos patrones NO son órdenes de ejecución.
 _PLANNING_LEADING = [
+    "crear una tarea", "nueva tarea", "tarea para jira", "tarea para copiar",
+    "copiar y pegar en jira", "copiarlo en jira", "copiar en jira",
+    "entregar la tarea", "entregarme la tarea",
+    "criterios de aceptación", "criterios de aceptacion",
     "qué archivos", "que archivos", "qué archivo", "que archivo",
     "qué pasos", "que pasos", "qué habría que", "qué hay que",
     "cómo implementar", "como implementar", "qué se necesita",

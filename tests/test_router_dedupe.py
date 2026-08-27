@@ -43,6 +43,23 @@ def test_implementar_con_texto_saludo_en_el_contenido_is_execute():
     assert classify_intent(None, "hola cómo estás") == Intent.CHAT
 
 
+def test_crear_tarea_para_jira_is_plan_not_execute():
+    """'crear una tarea para copiar y pegar en jira' es PLAN, no EXECUTE,
+    aunque contenga 'crear'. El artefacto es la tarea (título/descripción/AC),
+    no la implementación. Bug real: 'necesito crear una nueva tarea para jira'
+    caía en EXECUTE e intentaba editar main.go."""
+    assert classify_intent(
+        None,
+        "necesito crear una nueva tarea para copiar y pegar en jira, la tarea seria agregar el evento installation",
+    ) == Intent.PLAN
+    assert classify_intent(
+        None, "darme nueva tarea para copiar y pegar en jira con titulo y criterios"
+    ) == Intent.PLAN
+    assert classify_intent(None, "entregarme la tarea en formado md para copiarlo en jira") == Intent.PLAN
+    # Crear archivo sigue siendo EXECUTE — el contexto 'tarea/jira' es el que cambia la prioridad.
+    assert classify_intent(None, "crear un archivo de texto con hola mundo") == Intent.EXECUTE
+
+
 def test_implementar_observaciones_del_review_is_execute():
     """'implementar las ... del review' NO debe ir a REVIEW — es corrección post-review."""
     assert classify_intent(None, "implementar las observaciones del review") == Intent.EXECUTE
