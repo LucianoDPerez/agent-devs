@@ -9,6 +9,10 @@ AgentDevs es un agente de desarrollo que **analiza, planifica, implementa y revi
 
 *Sesión real: el usuario pide los endpoints expuestos; `inspect_routes` los devuelve en una llamada y la tabla sale renderizada en la TUI.*
 
+![AgentDevs — tarea completada con verificación](docs/assets/agentDevs-CompleteTask.png)
+
+*Sesión real: el usuario pide que el card "PACIENTES" navegue a `/pacientes`; el agente pide aprobación, aplica `onClick`, corre `lint/tests/build` y entrega con `✅ Tarea completada`.*
+
 ## ¿Por qué AgentDevs y no otra cosa?
 
 - **Privacidad total**: todo corre en tu hardware. Ideal para código proprietary o sensible.
