@@ -229,6 +229,24 @@ _CONTINUATION_WORDS = frozenset({
 })
 
 
+def _is_continuation(text: str) -> bool:
+    """True si el input es una continuación ('continua', 'sigue', 'si', etc.).
+
+    Robusto a acentos, mayúsculas y sufijos ('continua por favor', 'sigue con eso'):
+    normaliza y compara por token inicial o prefijo. Así 'continua' no pierde
+    contexto solo por agregar una palabra."""
+    prefix = normalize(_extract_command_prefix(text))
+    if not prefix:
+        return False
+    # exacto o primer token es continuation
+    first = prefix.split()[0] if prefix else ""
+    for w in _CONTINUATION_WORDS:
+        nw = normalize(w)
+        if prefix == nw or first == nw or prefix.startswith(nw + " "):
+            return True
+    return False
+
+
 def _is_review_correction(user_input: str) -> bool:
     """Detecta si el usuario pide corregir los hallazgos de un review previo.
     Usa el comando del usuario (primeras 120 chars) para no matchear keywords
@@ -599,6 +617,10 @@ class Session:
         self._confirm_timeout: float = EXECUTE_CONFIRM_TIMEOUT
         # Cancel del turno EN CURSO: lo setea run_turn; lo llama la TUI con ESC.
         self._turn_cancel = None
+        # Edit pendiente cuando la confirmación vence por timeout: el usuario
+        # dijo 'continua' después y espera que NO se re-explore todo. Se guarda
+        # acá y el próximo turno lo reaplica sin LLM.
+        self._pending_write: tuple[str, dict] | None = None
         # Límite de contexto VIVO: se detecta del server en start() (GET /props).
         # El config hardcodeado quedaba viejo (asumía -c 62000, había 36608) y
         # el summary automático nunca alcanzaba a disparar antes del overflow.
@@ -1415,6 +1437,16 @@ class Session:
             pass
 
         self._no_explore_retry = False
+        # ── Edit pendiente por timeout de confirmación ──────────────────
+        # Si el turno anterior quedó con un write pendiente (confirmación
+        # vencida), y el usuario dice "continua/si/dale" (exacto), reaplicar
+        # SIN re-explorar ni LLM. 'continua por favor' mantiene rol pero NO
+        # reaplica pendiente si trae instrucción extra.
+        _norm_pending = normalize(user_input)
+        _pending_exact = _norm_pending in {normalize(w) for w in _CONTINUATION_WORDS}
+        if self._pending_write is not None and _pending_exact:
+            if self._try_execute_pending_write(user_input):
+                return
         try:
             intent = classify_intent(self.llm, user_input)
         except BaseException as e:
@@ -1432,8 +1464,7 @@ class Session:
         # que estaba haciendo. Mantener el rol del turno anterior si era
         # EXECUTE o REVIEW (nunca forzar ANALYZE/PLAN).
         if intent == Intent.ANALYZE and self.current_role in (Role.EXECUTE, Role.REVIEW):
-            prefix = _extract_command_prefix(user_input).lower().strip()
-            if prefix in _CONTINUATION_WORDS:
+            if _is_continuation(user_input):
                 new_role = self.current_role
 
         # Pregunta autocontenida (error + código inline): ANALYZE no necesita
@@ -2435,6 +2466,74 @@ class Session:
         self.resolve_confirm(False)
         self._cancel_turn()
 
+    def _try_execute_pending_write(self, user_input: str) -> bool:
+        """Si hay un write pendiente por timeout, reejecutarlo sin LLM ni re-exploración.
+
+        Retorna True si se manejó (turno consumido), False si no había pendiente
+        o no era una continuación -> el caller sigue con el flujo normal."""
+        if self._pending_write is None:
+            return False
+        # 'no' explícito descarta el pendiente
+        norm = normalize(user_input)
+        if norm in ("no", "n", "nope", "cancelar", "cancela", "rechazo"):
+            console.print("[dim]Pendiente descartado.[/dim]")
+            self._pending_write = None
+            return False
+        name, kwargs = self._pending_write
+        path = kwargs.get("path", "?")
+        console.print(
+            f"\n[dim]↻ Edit pendiente detectado — reintentando {name} sobre '{path}' "
+            f"sin re-explorar (contexto del turno anterior conservado)…[/dim]"
+        )
+        # Ejecutar SIN pasar por confirmación (el usuario ya dijo 'continua/si')
+        # Usamos las tools de filesystem directamente para evitar re-confirm loop.
+        self._pending_write = None
+        try:
+            if name == "edit_file":
+                from tools.filesystem import edit_file as _ef
+                # _ef es un StructuredTool; invocar via .invoke
+                result = _ef.invoke(kwargs)  # type: ignore
+            elif name == "write_file":
+                from tools.filesystem import write_file as _wf
+                result = _wf.invoke(kwargs)  # type: ignore
+            elif name == "apply_patch":
+                from tools.filesystem import apply_patch as _ap
+                result = _ap.invoke(kwargs)  # type: ignore
+            elif name == "delete_file":
+                from tools.filesystem import delete_file as _df
+                result = _df.invoke(kwargs)  # type: ignore
+            else:
+                result = f"⛔ Tipo pendiente desconocido: {name}"
+        except Exception as e:
+            result = f"⛔ Error reejecutando pendiente: {e}"
+        console.print(f"[dim]{result}[/dim]")
+        # Persistir en historial como turno EXECUTE (sin LLM)
+        human_msg = f"[pending retry] {name} {path}"
+        from langchain_core.messages import AIMessage, HumanMessage
+        self._messages.append(HumanMessage(human_msg))
+        self._messages.append(AIMessage(str(result)))
+        # Si fue éxito, mostrar cierre determinístico y ofrecer commit
+        if isinstance(result, str) and result.strip().startswith("✅"):
+            console.print(f"\n[dim]{self._deterministic_close()}[/dim]")
+            self._maybe_ask_commit(human_msg)
+        # Guardar en SQLite para historial
+        try:
+            from cache import save_turn
+            from llm_wrapper import get_usage
+            usage = get_usage()
+            turn_tokens = usage["turn"]["prompt"] + usage["turn"]["completion"]
+            save_turn(
+                session_id=self.session_id,
+                repo_path=self.repo_path,
+                role="execute",
+                user_message=user_input,
+                assistant_message=str(result),
+                tokens_used=turn_tokens,
+            )
+        except Exception:
+            pass
+        return True
+
     def _confirm_write_cb(self, name: str, kwargs: dict) -> bool:
         """Callback del wrapper de tools: pedir aprobación antes de ejecutar.
 
@@ -2452,24 +2551,32 @@ class Session:
         console.print(
             f"\n[bold yellow]❓ ¿Aprobás {name} sobre '{path}'?[/bold yellow]\n"
             "[dim]Escribí 'sí'/'no' (o 's'/'n') en el input y Enter. "
-            f"Sin respuesta en {int(self._confirm_timeout)}s se cancela el turno.[/dim]"
+            f"Sin respuesta en {int(self._confirm_timeout)}s se venció. "
+            "Podés decir 'continua' o 'sí' para reintentarlo sin perder contexto.[/dim]"
         )
         self._confirm_answer = None
         self._confirm_event = threading.Event()
+        # Guardar pendiente ANTES de esperar: si vence, queda para 'continua'
+        self._pending_write = (name, dict(kwargs))
         try:
             answered = self._confirm_event.wait(self._confirm_timeout)
         finally:
             self._confirm_event = None
         if not answered or self._confirm_answer is None:
             console.print(
-                "[yellow]⏱️  Confirmación vencida — se cancela el turno.[/yellow]"
+                "[yellow]⏱️  Confirmación vencida — podés reintentarlo con 'continua' o 'sí' "
+                "(sin re-explorar, sin perder lo ya leído).[/yellow]"
             )
-            self._cancel_turn()
+            # NO cancelar el turno: dejar que el wrapper devuelva 'rechazado'
+            # y el turno cierre normal (interrupted=False) para que el historial
+            # y el read_cache se preserven para el próximo 'continua'.
             return False
         if self._confirm_answer:
             console.print("[green]✅ Aprobado.[/green]")
+            self._pending_write = None
             return True
         console.print("[red]⛔ Rechazado — se cancela el turno.[/red]")
+        self._pending_write = None
         self._cancel_turn()
         return False
 
