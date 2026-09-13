@@ -1314,9 +1314,11 @@ class Session:
             "\n\n⛔ El intento anterior agotó la exploración en listados y "
             "búsquedas sin leer código. Ahora SOLO tenés read_file (sin "
             "list_files ni búsqueda): la estructura ya la ubicaste arriba — "
-            "leé los 2-4 archivos CLAVE del tema y recién ahí respondé el "
-            "análisis citando archivo:línea de lo leído. Si con esas lecturas "
-            "no alcanza, decí QUÉ falta en vez de completar."
+            "leé los 2-4 ARCHIVOS clave del tema (read_file es para archivos, "
+            "NO directorios: pasar un directorio devuelve error y pierdes "
+            "tiempo) y recién ahí respondé el análisis citando archivo:línea "
+            "de lo leído. Si con esas lecturas no alcanza, decí QUÉ falta en "
+            "vez de completar."
         )
         # Sin trim: los listados del PASS1 deben quedar visibles para elegir
         # qué leer. El agente restringido no puede hacer crecer el contexto
@@ -1961,11 +1963,17 @@ class Session:
                     idle_timeout=TURN_IDLE_TIMEOUT,
                     # EXECUTE: 90s por bloque de razonamiento (el 4B razona
                     # 30-60s antes de cada tool call; si razona más, se colgó).
+                    # Retry de solo-lectura: SIN corte (None) — el 4B necesita
+                    # minutos para componer la respuesta final con evidencia
+                    # (E2E real T1: dos cortes de 180s → respuesta vacía).
                     # idle_timeout cubre un modelo realmente colgado.
                     max_reasoning_seconds=(
-                        EXECUTE_MAX_REASONING_SECONDS
-                        if new_role == Role.EXECUTE
-                        else MAX_REASONING_SECONDS
+                        None if self._readonly_retry
+                        else (
+                            EXECUTE_MAX_REASONING_SECONDS
+                            if new_role == Role.EXECUTE
+                            else MAX_REASONING_SECONDS
+                        )
                     ),
                     max_tool_calls=(
                         _bulk_budget(self._bulk_scope)["tool_calls_per_turn"]
