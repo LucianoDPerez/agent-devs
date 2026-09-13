@@ -34,6 +34,7 @@ _EXECUTE_VERBS = [
     "arreglá", "arregla", "arreglar",
     "fix", "fixeá", "fixear",
     "repará", "repara", "reparar",
+    "asegurá", "asegura", "asegurar",
 ]
 
 # Leading command patterns — detected from the first ~100 chars
@@ -46,9 +47,10 @@ _REVIEW_LEADING = [
 ]
 
 _PLAN_LEADING = [
-    "plan", "planificá", "planifica", "planificar",
+    "planificá", "planifica", "planificar",
     "diseñá", "diseña", "desglosá", "desglosa",
     "proponé", "propone", "propuesta",
+    "hacer un plan", "armar un plan", "crea un plan", "creá un plan",
 ]
 
 _CHAT_LEADING = [
@@ -73,21 +75,30 @@ _VERIFY_LEADING = [
 ]
 
 # (sin|no) + verbo de acción → el verbo NO cuenta como intención
+# cre\w* era sobre-ancho (matcheaba "cree" de creer); toc\w* igual.
+# Se acota a formas de crear/tocar código.
 _NEGATED_ACTION_RE = re.compile(
-    r"\b(?:sin|no)\s+(?:modific\w*|edit\w*|implement\w*|escrib\w*|cre\w*|"
-    r"arregl\w*|correg\w*|aplic\w*|toc\w*|code\w*|elimin\w*|agreg\w*|"
+    r"\b(?:sin|no)\s+(?:modific\w*|edit\w*|implement\w*|escrib\w*|crea\w*|crear|"
+    r"arregl\w*|correg\w*|aplic\w*|toca\w*|toques|tocar|code\w*|elimin\w*|agreg\w*|"
     r"actualiz\w*|renombr\w*|mov\w*|borr\w*|quit\w*|remov\w*)\b"
+)
+
+# Stoplist idiomática: "elimina/quita/saca dudas" no es borrar código.
+_IDIOM_NO_EXECUTE_RE = re.compile(
+    r"\b(?:elimina|elimina?r|quita|quitar|saca|sacar)\s+(?:dudas|la\s+duda|mis\s+dudas)\b"
 )
 
 # Coordinación imperativa: "analizá Y arreglá el bug" / "revisá y corregí".
 # El verbo de análisis/plan es leading pero la acción COORDINADA con "y/e"
 # es una orden de ejecución → sube a EXECUTE. Sin esto, "analizá y arreglá"
 # caería en ANALYZE (análisis) cuando el usuario quiere que ARREGLE.
+# "e" solo vale ante i/hi (diseñá e implementá); "y elimina dudas" es idiomático.
 _COORDINATED_EXECUTE_RE = re.compile(
-    r"\b(?:y|e)\s+(?:implement\w*|escrib\w*|cre\w*|gener\w*|modific\w*|"
+    r"(?:\by\s+(?:implement\w*|escrib\w*|crea\w*|crear|gener\w*|modific\w*|"
     r"edit\w*|elimin\w*|agreg\w*|añad\w*|actualiz\w*|renombr\w*|mov\w*|"
     r"reemplaz\w*|quit\w*|borr\w*|remov\w*|cambi\w*|arregl\w*|correg\w*|"
     r"aplic\w*|fix\w*|repar\w*|solucion\w*|resolv\w*)"
+    r"|\be\s+(?:implement\w*|i\w*|hi\w*))"
 )
 
 # Pregunta/creación de planificación: "qué archivos hay que eliminar",
@@ -111,22 +122,24 @@ def _extract_command_prefix(text: str, max_chars: int = 120) -> str:
     """Extract the user's command from the start of the message.
 
     Stops at pasted content markers (quotes, markdown blocks, long blocks).
+    Busca marcadores en ventana amplia (400) y recién ahí trunca a 120 para
+    matching — si no, un "si no" en char ~110 pierde su verbo.
     """
-    prefix = text[:max_chars]
+    wide = text[:400]
     # Stop at common paste boundaries
     for marker in ['"✅', '"**', '\n---', '\n\n###', '\n\n---']:
-        idx = prefix.find(marker)
+        idx = wide.find(marker)
         if idx >= 0:
-            prefix = prefix[:idx]
+            wide = wide[:idx]
     # Línea de guiones largos (———, ───, ---) = separador de contenido pegado
     # (tasks, logs, salidas). E2E real: "verificar si estas tasks ya están
     # implementadas" + pegote de Task 4 (que dice "Implementar...") caía en
     # EXECUTE porque el verbo del texto pegado entraba en los 120 chars.
     # El separador puede venir precedido de un \n o de un ESPACIO (como en
     # el paste real: '...correctamente ————— Task 4:') — cortar en ambos.
-    m = re.search(r"[\s\n][─—\-]{3,}", prefix)
+    m = re.search(r"[\s\n][─—\-]{3,}", wide)
     if m:
-        prefix = prefix[: m.start() + 1]
+        wide = wide[: m.start() + 1]
     # Tasks PEGADAS sin separador ("Analiza si estas tasks están hechas
     # correctamente \n\nTask 4: Implementar...") — el "Implementar" del
     # pegote entra en los 120 chars y activa EXECUTE. Cortar en "Task N:"
@@ -134,11 +147,12 @@ def _extract_command_prefix(text: str, max_chars: int = 120) -> str:
     m2 = re.search(
         r"\b(tasks?|tareas?)\s*\d+:|\bresumen:|\bdescripción:|\bdescripcion:|"
         r"\bacceptance criteria:",
-        prefix,
+        wide,
         re.IGNORECASE,
     )
     if m2:
-        prefix = prefix[: m2.start()]
+        wide = wide[: m2.start()]
+    prefix = wide[:max_chars]
     return prefix.strip().lower()
 
 
@@ -168,6 +182,12 @@ def classify_intent(_llm, user_message: str) -> Intent:
     )):
         return Intent.EXECUTE
 
+    # Idiomático: "elimina dudas" no es borrar código — nunca EXECUTE por esto.
+    if _IDIOM_NO_EXECUTE_RE.search(prefix):
+        # Quitar el falso verbo para el resto del matching
+        prefix = _IDIOM_NO_EXECUTE_RE.sub(" ", prefix)
+        text = _IDIOM_NO_EXECUTE_RE.sub(" ", text)
+
     # LEADING INTENT: user's own command (first ~120 chars) takes priority
     # over keywords found in pasted completion reports/checklists.
     # "revisá + verbo de acción" ("revisá y corregí los errores") → EXECUTE:
@@ -182,12 +202,27 @@ def classify_intent(_llm, user_message: str) -> Intent:
     # implementala/hacela/arreglala") → EXECUTE: hay trabajo condicional real.
     # Va ANTES del check de verificación pura: "si no implementalas" no
     # matchea _EXECUTE_VERBS (implementalas no es token exacto) pero la
-    # intención es ejecutar si falta.
+    # intención es ejecutar si falta. Ventana 40 (antes 20) para "si no ... <verbo>".
     if _has_any(prefix, _VERIFY_LEADING) and re.search(
-        r"\bsi no\b[^\n]{0,20}?(implement\w*|hac\w*|arregl\w*|correg\w*|cre\w*|escrib\w*|agreg\w*)",
+        r"\bsi no\b[^\n]{0,40}?(implement\w*|hac\w*|arregl\w*|correg\w*|crea\w*|crear|escrib\w*|agreg\w*)",
         raw_prefix,
     ):
         return Intent.EXECUTE
+
+    # Imperativo EXECUTE al inicio le gana al sustantivo "plan": "implementá el
+    # plan de migración" es EXECUTE, no PLAN. Solo si el PRIMER token es verbo.
+    first_token = prefix.split()[0] if prefix.split() else ""
+    if first_token:
+        for v in _EXECUTE_VERBS:
+            if " " not in v and first_token == v:
+                return Intent.EXECUTE
+
+    # Pregunta de planificación: "qué archivos hay que eliminar", "decime qué
+    # habría que agregar", "cómo implementar X" → PLAN (el usuario pregunta
+    # QUÉ hacer, no lo está haciendo). VA ANTES que VERIFY puro: "verificá qué
+    # archivos hay que eliminar" es planificación, no solo análisis.
+    if _has_any(prefix, _PLAN_LEADING) or _has_any(prefix, _PLANNING_LEADING):
+        return Intent.PLAN
 
     # Verificación/análisis puro → ANALYZE (prioridad del PRIMER verbo).
     # "analizá cómo eliminar un endpoint" → ANALYZE aunque "eliminar" sea un
@@ -196,13 +231,6 @@ def classify_intent(_llm, user_message: str) -> Intent:
     # (el usuario quiere que ARREGLE, no solo que analice).
     if _has_any(prefix, _VERIFY_LEADING) and not _COORDINATED_EXECUTE_RE.search(prefix):
         return Intent.ANALYZE
-
-    # Pregunta de planificación: "qué archivos hay que eliminar", "decime qué
-    # habría que agregar", "cómo implementar X" → PLAN (el usuario pregunta
-    # QUÉ hacer, no lo está haciendo). DEBE ir antes de EXECUTE: el verbo en
-    # infinitivo subordinado a "qué/habría que/hay que/cómo" no es una orden.
-    if _has_any(prefix, _PLAN_LEADING) or _has_any(prefix, _PLANNING_LEADING):
-        return Intent.PLAN
 
     # EXECUTE gana si hay verbo de acción en el comando del usuario. DEBE ir
     # ANTES del check de CHAT: un texto a escribir puede contener saludos

@@ -40,16 +40,32 @@ def clear_write_overrides() -> None:
     WRITE_OVERRIDE_PATHS.clear()
 
 
+def _resolved_key(path: str) -> str:
+    """Key normalizada para comparar overrides: expanduser + resolve.
+
+    Sin esto `/repo//src//a.ts`, `/repo/src/./a.ts` o `Src/A.ts` (macOS
+    case-insensitive) bypassean el set por string exacto.
+    """
+    try:
+        return str(Path(path).expanduser().resolve())
+    except OSError:
+        return str(Path(path).expanduser().absolute())
+
+
 def _is_protected_task_path(path: str) -> bool:
     """True si el path corresponde a un archivo de planificación que el agente
     NUNCA debe escribir/editar/borrar (tasks.md, .agent-devs/, plans/, etc.).
 
     El 4B tiende a reescribir tasks.md (precargado en el prompt) corrompiendo el
     plan. Detectamos por nombre de archivo o por subdirectorio protegido.
+    Resolve para que symlinks (evil.md -> tasks.md) no bypasseen.
     """
     if not path:
         return False
-    p = Path(path)
+    try:
+        p = Path(path).expanduser().resolve()
+    except OSError:
+        p = Path(path)
     name_lower = p.name.lower()
     if name_lower in PROTECTED_TASK_FILENAMES:
         return True
@@ -392,7 +408,9 @@ def write_file(path: str, content: str) -> str:
             f"Call write_file with a FILE name inside it, for example: "
             f"write_file(path='{path}/index.ts', content='...')"
         )
-    if p.exists() and p.is_file() and path not in WRITE_OVERRIDE_PATHS:
+    resolved = _resolved_key(path)
+    resolved_overrides = {_resolved_key(o) for o in WRITE_OVERRIDE_PATHS}
+    if p.exists() and p.is_file() and resolved not in resolved_overrides:
         # Guard anti-destrucción: write_file NO puede sobrescribir archivos
         # existentes (salvo configs triviales de ≤5 líneas). Reescribir desde
         # memoria pierde imports/hooks/lógica — el 4B mutiló PacientesPage.tsx.
@@ -510,6 +528,23 @@ def delete_file(path: str) -> str:
         )
     if p.is_dir():
         return f"'{path}' is a directory. Use a different approach to remove directories."
+    # Guard anti-bypass: borrar + recrear bypassea el guard de write_file
+    # (E2E real: 35B borró __init__.py de 1851 líneas y escribió un stub).
+    # Exigir la misma autorización que el overwrite para archivos grandes.
+    if p.is_file():
+        try:
+            existing_lines = len(p.read_text(encoding="utf-8", errors="replace").splitlines())
+        except OSError:
+            existing_lines = 0
+        resolved = _resolved_key(path)
+        resolved_overrides = {_resolved_key(o) for o in WRITE_OVERRIDE_PATHS}
+        if existing_lines > WRITE_FILE_OVERWRITE_MAX_LINES and resolved not in resolved_overrides:
+            return (
+                f"⛔ '{path}' tiene {existing_lines} líneas y delete_file está "
+                f"BLOQUEADO sin autorización (borrar + recrear bypassea el guard "
+                f"anti-destrucción). Usá edit_file/apply_patch quirúrgico en vez "
+                f"de borrar y reescribir."
+            )
     p.unlink()
     return f"✅ Deleted {path}"
 
@@ -619,6 +654,26 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
 
     start, end = spans[0]
     new_content = content[:start] + new_str + content[end:]
+
+    # GUARD ANTI-ESCAPE JSON (E2E real 4B): el modelo escapa comillas como en
+    # JSON (\\\"hola\\\") dentro del tool call y el archivo queda con backslashes
+    # literales → SyntaxError. Detectar y rechazar ANTES de escribir.
+    if ('\\"' in new_str or "\\'" in new_str) and '\\"' not in content and "\\'" not in content:
+        return (
+            f"⛔ Edit RECHAZADO en {path}: tu new_str contiene secuencias escapadas "
+            f"literales (\\\\\\\" o \\\\'). Los tool calls ya son JSON — NO escapes "
+            f"las comillas adentro. Pasá el código LITERAL: \"hola\", no \\\\\"hola\\\\\". "
+            f"Rehacé el edit con el texto exacto."
+        )
+
+    # GUARD DE SINTAXIS (E2E real 4B): edit_file escribía sin validar y un
+    # segundo edit con old_str escapado corrompió app.py (return \\\"hola\\\").
+    # Si el archivo estaba sano y el edit lo rompe, BLOQUEAR (no solo avisar).
+    if p.suffix.lower() in _SYNTAX_CHECKERS:
+        old_err = _syntax_check(path, content)
+        new_err = _syntax_check(path, new_content)
+        if old_err is None and new_err is not None:
+            return f"⛔ Edit RECHAZADO por sintaxis en {path}: {new_err} El archivo NO fue modificado. Releé con read_file y reintentá con el bloque literal."
 
     # GUARD DE INTEGRIDAD .md: un edit con old_str fuzzy-incorrecto DUPLICÓ
     # frontmatter y fusionó fences (E2E real Task 8: changelog.md y

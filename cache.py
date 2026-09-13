@@ -57,8 +57,14 @@ CREATE INDEX IF NOT EXISTS idx_bulk_subtasks_hash ON bulk_subtasks(task_hash);
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(CACHE_DB)
+    conn = sqlite3.connect(CACHE_DB, timeout=10.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except sqlite3.OperationalError:
+        pass
     conn.executescript(_SCHEMA)
     # Migración liviana: lista de archivos del snapshot para el reuso por
     # diff chico. Fail-open: si la columna ya existe, se ignora el error.
@@ -260,7 +266,13 @@ def list_repos():
 
 
 def save_turn(session_id: str, repo_path: str, role: str,
-              user_message: str, assistant_message: str, tokens_used: int) -> None:
+              user_message: str, assistant_message: str, tokens_used: int,
+              max_chars: int = 8000) -> None:
+    # Cap para no inflar repo_lens.db con preloads de 30k chars por turno
+    if user_message and len(user_message) > max_chars:
+        user_message = user_message[:max_chars] + "\n… (truncated)"
+    if assistant_message and len(assistant_message) > max_chars:
+        assistant_message = assistant_message[:max_chars] + "\n… (truncated)"
     conn = _connect()
     conn.execute(
         """INSERT INTO session_history
@@ -279,7 +291,7 @@ def load_recent_turns(repo_path: str, limit: int = 10) -> list[dict]:
         """SELECT session_id, role, user_message, assistant_message, tokens_used, created_at
            FROM session_history
            WHERE repo_path = ?
-           ORDER BY created_at DESC
+           ORDER BY id DESC
            LIMIT ?""",
         (normalize_path(repo_path), limit),
     ).fetchall()
@@ -324,8 +336,27 @@ def ensure_bulk_plan(task_hash: str, batches: list[list[str]]) -> bool:
         )
     )
     if not same and existing:
-        conn.execute("DELETE FROM bulk_subtasks WHERE task_hash = ?", (task_hash,))
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("DELETE FROM bulk_subtasks WHERE task_hash = ?", (task_hash,))
+            conn.executemany(
+                """INSERT INTO bulk_subtasks
+                   (task_hash, seq, files_json, status, attempts, created_at, updated_at)
+                   VALUES (?, ?, ?, 'pending', 0, ?, ?)""",
+                [
+                    (task_hash, i, json.dumps(b, ensure_ascii=False), now, now)
+                    for i, b in enumerate(batches)
+                ],
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
         existing = []
+        conn.close()
+        return True
     if not existing:
         conn.executemany(
             """INSERT INTO bulk_subtasks
@@ -384,19 +415,25 @@ def mark_batch(task_hash: str, seq: int, status: str, *, bump_attempt: bool = Fa
 def fail_or_keep_batch(task_hash: str, seq: int, max_attempts: int) -> str:
     """Registra un intento fallido del batch; si agotó los intentos lo marca
     'failed' (permanente), si no vuelve a 'pending' para reanudar.
-    Devuelve el nuevo status."""
+    Devuelve el nuevo status. Atómico: evita lost update entre workers."""
     conn = _connect()
+    conn.execute(
+        """UPDATE bulk_subtasks
+           SET attempts = attempts + 1, updated_at = ?
+           WHERE task_hash = ? AND seq = ?""",
+        (_now(), task_hash, seq),
+    )
     row = conn.execute(
         "SELECT attempts FROM bulk_subtasks WHERE task_hash = ? AND seq = ?",
         (task_hash, seq),
     ).fetchone()
-    attempts = ((row["attempts"] if row else 0) or 0) + 1
+    attempts = (row["attempts"] if row else 1) or 1
     status = "failed" if attempts >= max_attempts else "pending"
     conn.execute(
         """UPDATE bulk_subtasks
-           SET status = ?, attempts = ?, updated_at = ?
+           SET status = ?, updated_at = ?
            WHERE task_hash = ? AND seq = ?""",
-        (status, attempts, _now(), task_hash, seq),
+        (status, _now(), task_hash, seq),
     )
     conn.commit()
     conn.close()
@@ -404,7 +441,7 @@ def fail_or_keep_batch(task_hash: str, seq: int, max_attempts: int) -> str:
 
 
 def bulk_progress(task_hash: str) -> dict:
-    """{total, done, failed, pending} del plan."""
+    """{total, done, failed, pending, in_progress} del plan."""
     conn = _connect()
     rows = conn.execute(
         "SELECT status FROM bulk_subtasks WHERE task_hash = ?",
@@ -416,5 +453,6 @@ def bulk_progress(task_hash: str) -> dict:
         "total": len(statuses),
         "done": sum(1 for s in statuses if s == "done"),
         "failed": sum(1 for s in statuses if s == "failed"),
-        "pending": sum(1 for s in statuses if s != "done" and s != "failed"),
+        "pending": sum(1 for s in statuses if s == "pending"),
+        "in_progress": sum(1 for s in statuses if s == "in_progress"),
     }

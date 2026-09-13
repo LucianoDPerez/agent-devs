@@ -481,10 +481,30 @@ def _resolve_relative_path(path: str, repo_path: str | None) -> str:
 
     Cualquier path que no arranque con / ~ . o un prefijo de drive se considera
     relativo al repo (Gemma 4 pasa 'frontend/src/x.ts'; sin resolución,
-    read_file/edit_file fallan contra el CWD del proceso)."""
+    read_file/edit_file fallan contra el CWD del proceso). `./x` y `~/x` se
+    resuelven contra el repo/home para no depender del CWD del proceso.
+    """
     if not repo_path or not path:
         return path
-    if path.startswith(("/", "~", "./", "../")) or (len(path) > 1 and path[1] == ":"):
+    if path.startswith("~/"):
+        try:
+            return str(Path(path).expanduser())
+        except OSError:
+            return path
+    if path.startswith("./"):
+        return str(Path(repo_path) / path[2:])
+    if path.startswith("../"):
+        # ../ fuera del repo se deja tal cual para que la tool lo rechace;
+        # ../ interno se normaliza contra el repo.
+        try:
+            resolved = (Path(repo_path) / path).resolve()
+            repo_resolved = Path(repo_path).resolve()
+            if resolved.is_relative_to(repo_resolved):
+                return str(resolved)
+        except OSError:
+            pass
+        return path
+    if path.startswith("/") or (len(path) > 1 and path[1] == ":"):
         return path
     return str(Path(repo_path) / path)
 

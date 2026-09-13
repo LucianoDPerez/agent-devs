@@ -153,17 +153,29 @@ def _detect_framework(root: Path) -> str:
     return ""
 
 
-def inject_framework_rules(repo_path: str | None) -> str:
-    """Returns framework-specific coding rules for the detected stack.
+from functools import lru_cache as _lru_cache
 
-    Empty string if no framework detected.
-    """
-    if not repo_path:
-        return ""
+
+@_lru_cache(maxsize=64)
+def _cached_framework(repo_path: str) -> str:
     framework = _detect_framework(Path(repo_path))
     if not framework:
         return ""
-    rules = _FRAMEWORK_RULES.get(framework, "")
+    return _FRAMEWORK_RULES.get(framework, "")
+
+
+def inject_framework_rules(repo_path: str | None) -> str:
+    """Returns framework-specific coding rules for the detected stack.
+
+    Empty string if no framework detected. Cacheado por repo_path (se leía
+    package.json en cada build_agent: cada cambio de rol + cada retry).
+    """
+    if not repo_path:
+        return ""
+    try:
+        rules = _cached_framework(str(Path(repo_path).resolve()))
+    except OSError:
+        rules = ""
     if not rules:
         return ""
     return f"\n{rules}\n"

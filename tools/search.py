@@ -24,11 +24,19 @@ def search_code(path: str, pattern: str) -> str:
             "Accept this and continue — do not retry variants of this path."
         )
 
-    compiled = re.compile(pattern, re.IGNORECASE)
+    try:
+        compiled = re.compile(pattern, re.IGNORECASE)
+    except re.error as e:
+        return f"⛔ Patrón regex inválido {pattern!r}: {e}. Usá un patrón literal simple."
+    if len(pattern) > 200:
+        return "⛔ Patrón demasiado largo (máx 200 chars). Acotalo."
     matches: list[str] = []
     total = 0
     used_chars = 0
     result_truncated = False
+    scanned = 0
+    _MAX_FILES = 2000
+    _MAX_BYTES = 200_000
 
     targets = list(root.rglob("*")) if root.is_dir() else [root]
     for entry in targets:
@@ -36,9 +44,19 @@ def search_code(path: str, pattern: str) -> str:
             continue
 
         skip_ext = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".zip",
-                    ".tar", ".gz", ".mp4", ".mp3", ".wav", ".ogg"}
+                    ".tar", ".gz", ".mp4", ".mp3", ".wav", ".ogg",
+                    ".db", ".sqlite", ".sqlite3", ".log"}
         if entry.suffix.lower() in skip_ext or entry.name.endswith(".tsbuildinfo"):
             continue
+        try:
+            if entry.stat().st_size > _MAX_BYTES:
+                continue
+        except OSError:
+            continue
+        scanned += 1
+        if scanned > _MAX_FILES:
+            result_truncated = True
+            break
 
         try:
             lines = entry.read_text(encoding="utf-8", errors="replace").splitlines()

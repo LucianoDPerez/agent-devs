@@ -26,6 +26,17 @@ _MAX_LOG = 4000
 _PORT_RE = re.compile(r"Local:\s+(https?://[^\s]+)")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Bloquea redirects: un 302 a 169.254.169.254 (metadata cloud) vía app
+    local con open-redirect sería SSRF. Se reporta el redirect sin seguirlo."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_no_redirect_opener = urllib.request.build_opener(_NoRedirect)
+
+
 @tool
 def probe_http(url: str, timeout_s: float = 5.0) -> str:
     """GET un recurso LOCAL (solo localhost/127.0.0.1) y devuelve status HTTP +
@@ -37,10 +48,18 @@ def probe_http(url: str, timeout_s: float = 5.0) -> str:
     if not _LOCALHOST_RE.match(url):
         return f"⛔ probe_http SOLO acepta localhost/127.0.0.1 (recibí: {url})."
     try:
-        with urllib.request.urlopen(url, timeout=timeout_s) as resp:
+        timeout_s = max(1.0, min(float(timeout_s), 10.0))
+    except (TypeError, ValueError):
+        timeout_s = 5.0
+    try:
+        with _no_redirect_opener.open(url, timeout=timeout_s) as resp:
             body = resp.read(_MAX_BODY).decode("utf-8", errors="replace")
             return f"HTTP {resp.status} — {url}\n\n{body[: _MAX_BODY]}"
     except urllib.error.HTTPError as e:
+        # Con _NoRedirect, un 301/302 llega acá como HTTPError: no seguirlo.
+        if e.code in (301, 302, 303, 307, 308):
+            loc = e.headers.get("Location", "?") if e.headers else "?"
+            return f"HTTP {e.code} redirect — {url} → {loc} (no seguido por seguridad)"
         body = ""
         try:
             body = e.read(_MAX_BODY).decode("utf-8", errors="replace")
@@ -80,6 +99,12 @@ def capture_dev_server(path: str, script: str = "dev", wait_s: int = 25) -> str:
             f"No existe el script '{script}'. Disponibles: "
             f"{', '.join(sorted(scripts.keys())) or '(ninguno)'}"
         )
+    try:
+        wait_s = max(5, min(int(wait_s), 60))
+    except (TypeError, ValueError):
+        wait_s = 25
+    if not script.replace("-", "").replace("_", "").replace(":", "").isalnum():
+        return f"⛔ script inválido: {script!r}"
 
     proc = subprocess.Popen(
         ["npm", "run", script],
@@ -87,6 +112,7 @@ def capture_dev_server(path: str, script: str = "dev", wait_s: int = 25) -> str:
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        start_new_session=True,
     )
     lines: list[str] = []
 
@@ -100,11 +126,32 @@ def capture_dev_server(path: str, script: str = "dev", wait_s: int = 25) -> str:
     th = threading.Thread(target=pump, daemon=True)
     th.start()
     time.sleep(wait_s)
-    proc.terminate()
+    try:
+        # Matar el process group (npm + hijos vite/webpack), no solo npm
+        import os as _os
+        import signal as _signal
+
+        try:
+            _os.killpg(proc.pid, _signal.SIGTERM)
+        except (OSError, ProcessLookupError):
+            proc.terminate()
+    except Exception:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
     try:
         proc.wait(timeout=5)
     except Exception:
-        proc.kill()
+        try:
+            import os as _os2
+
+            try:
+                _os2.killpg(proc.pid, _signal.SIGKILL)
+            except Exception:
+                proc.kill()
+        except Exception:
+            pass
     th.join(timeout=2)
 
     text = "".join(lines)

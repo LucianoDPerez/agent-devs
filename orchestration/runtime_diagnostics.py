@@ -34,12 +34,14 @@ _PORT_PATTERNS = [
 ]
 
 
+_DB_PORTS = {5432, 3306, 27017, 6379, 9200, 5601, 1521, 1433}
+
 def _detect_ports(repo_path: str) -> list[int]:
     """Puertos de dev del stack: regex sobre archivos de config + defaults."""
     found: list[int] = []
     root = Path(repo_path)
     if not root.is_dir():
-        return list(_DEFAULT_PORTS)
+        return []
     # Configs típicos: raíz + subdirs frontend/backend/web/server/api
     config_names = (
         "vite.config.ts", "vite.config.js", "vite.config.mjs",
@@ -60,9 +62,9 @@ def _detect_ports(repo_path: str) -> list[int]:
         for pat in _PORT_PATTERNS:
             for m in pat.finditer(text):
                 port = int(m.group(1))
-                if 1000 <= port <= 65535:
+                if 1000 <= port <= 65535 and port not in _DB_PORTS:
                     found.append(port)
-    return sorted(set(found)) or list(_DEFAULT_PORTS)
+    return sorted(set(found))
 
 
 def _parse_lsof(text: str) -> list[dict]:
@@ -76,7 +78,12 @@ def _parse_lsof(text: str) -> list[dict]:
     return rows
 
 
-def _lsof_listeners(port: int) -> list[dict]:
+def _lsof_listeners(port: int) -> list[dict] | None:
+    """None si lsof no existe (no se puede diagnosticar, no acusar)."""
+    import shutil as _shutil
+
+    if _shutil.which("lsof") is None:
+        return None
     try:
         out = subprocess.run(
             ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN"],
@@ -104,11 +111,16 @@ def detect_runtime_issues(
     """
     if ports is None:
         ports = _detect_ports(repo_path)
+    if not ports:
+        return ""
     lsof = lsof_fn or _lsof_listeners
 
     findings: list[str] = []
     for port in ports:
         rows = lsof(port)
+        if rows is None:
+            # lsof ausente: no se puede saber, no acusar
+            continue
         if not rows:
             findings.append(
                 f"  - Puerto {port}: NADIE lo escucha — el dev server de ese "
@@ -152,7 +164,7 @@ def _health_check(port: int, paths: tuple[str, ...]) -> str:
         url = f"http://127.0.0.1:{port}{p}"
         try:
             with urllib.request.urlopen(url, timeout=3) as resp:
-                if resp.status < 500:
+                if 200 <= resp.status < 400:
                     return f"puerto {port} responde ({url} → HTTP {resp.status})"
         except Exception:
             continue
@@ -180,6 +192,8 @@ def runtime_status(
 
     if ports is None:
         ports = _detect_ports(repo_path)
+    if not ports:
+        return ""
     health = health_checks or {
         3000: ("/api/health", "/health"),
         8000: ("/api/health", "/health", "/"),

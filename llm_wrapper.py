@@ -141,20 +141,26 @@ class _UsageTracker:
     """Contador de tokens compartido entre instancias (sobrevive a model_copy)."""
 
     def __init__(self):
+        import threading as _threading
+
+        self._lock = _threading.Lock()
         self.turn = {"prompt": 0, "completion": 0, "cached": 0}
         self.session = {"prompt": 0, "completion": 0, "cached": 0}
 
     def record(self, prompt: int, completion: int, cached: int = 0):
-        for acc in (self.turn, self.session):
-            acc["prompt"] = max(acc["prompt"], prompt)
-            acc["completion"] += completion
-            acc["cached"] = max(acc["cached"], cached)
+        with self._lock:
+            for acc in (self.turn, self.session):
+                acc["prompt"] = max(acc["prompt"], prompt)
+                acc["completion"] += completion
+                acc["cached"] = max(acc["cached"], cached)
 
     def reset_turn(self):
-        self.turn = {"prompt": 0, "completion": 0, "cached": 0}
+        with self._lock:
+            self.turn = {"prompt": 0, "completion": 0, "cached": 0}
 
     def report(self) -> dict:
-        return {"turn": dict(self.turn), "session": dict(self.session)}
+        with self._lock:
+            return {"turn": dict(self.turn), "session": dict(self.session)}
 
 
 _USAGE = _UsageTracker()
@@ -199,6 +205,10 @@ class LocalLLM(BaseChatModel):
         new = self.model_copy(deep=False)
         new._tools = list(tools)
         new._tool_choice = tool_choice
+        # Copiar dict mutable: si no, mutar chat_template_kwargs en una copia
+        # contamina a todas (model_copy deep=False comparte referencia).
+        if self.chat_template_kwargs is not None:
+            new.chat_template_kwargs = dict(self.chat_template_kwargs)
         return new
 
     def _convert_messages(self, messages: list[BaseMessage]) -> list[dict[str, Any]]:
@@ -417,7 +427,7 @@ def detect_server_model(base_url: str, timeout: float = 1.5) -> str | None:
     import json
     import urllib.request
 
-    base = base_url.split("/v1")[0]
+    base = base_url.split("/v1", 1)[0]
     try:
         with urllib.request.urlopen(base + "/v1/models", timeout=timeout) as resp:
             data = json.load(resp)
@@ -439,7 +449,7 @@ def detect_context_limit(base_url: str, timeout: float = 1.5) -> int | None:
     import json
     import urllib.request
 
-    base = base_url.split("/v1")[0]
+    base = base_url.split("/v1", 1)[0]
     try:
         with urllib.request.urlopen(base + "/props", timeout=timeout) as resp:
             data = json.load(resp)

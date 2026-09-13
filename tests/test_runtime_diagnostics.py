@@ -61,7 +61,8 @@ class TestDetectPorts:
     def test_defaults_when_no_config(self):
         repo = _repo({"README.md": "hola"})
         ports = _detect_ports(repo)
-        assert 3000 in ports  # defaults razonables
+        # Sin configs no se acusa defaults: evita perseguir entorno inexistente
+        assert ports == []
 
 
 class TestDetectRuntimeIssues:

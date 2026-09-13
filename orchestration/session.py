@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -234,15 +235,30 @@ def _is_continuation(text: str) -> bool:
 
     Robusto a acentos, mayúsculas y sufijos ('continua por favor', 'sigue con eso'):
     normaliza y compara por token inicial o prefijo. Así 'continua' no pierde
-    contexto solo por agregar una palabra."""
+    contexto solo por agregar una palabra.
+    Anti-FP: 'si' afirmativo solo si es mensaje de 1 token (si no, es condicional
+    'si el test falla...'); 'va/vamos/sigue/dale' solo si mensaje corto (<=3
+    tokens) o exacto — 'vamos a crear auth.py desde cero' es tarea nueva.
+    """
     prefix = normalize(_extract_command_prefix(text))
     if not prefix:
         return False
-    # exacto o primer token es continuation
-    first = prefix.split()[0] if prefix else ""
+    tokens = prefix.split()
+    first = tokens[0] if tokens else ""
     for w in _CONTINUATION_WORDS:
         nw = normalize(w)
-        if prefix == nw or first == nw or prefix.startswith(nw + " "):
+        if prefix == nw:
+            return True
+        if nw in ("si", "sí"):
+            # 'si' solo vale como afirmación aislada, no condicional
+            continue
+        if nw in ("va", "vamos", "sigue", "dale", "adelante"):
+            if first == nw and len(tokens) <= 3:
+                return True
+            if prefix.startswith(nw + " ") and len(tokens) <= 3:
+                return True
+            continue
+        if first == nw or prefix.startswith(nw + " "):
             return True
     return False
 
@@ -381,7 +397,7 @@ _SELFCONTAINED_ERROR_RE = re.compile(
 _SELFCONTAINED_CODE_RE = re.compile(r"(```|<\w+[\s>]|=>|\{[^}]*\}|=\s*['\"]|;)")
 
 
-_VERIFY_ONLY_RE = re.compile(r"\b(analiz|verific|confirm|comprob|cheque|asegur|revis)\w*", re.I)
+_VERIFY_ONLY_RE = re.compile(r"\b(analiz|verific|confirm|comprob|cheque|asegur(?:ate|áte)|revis)\w*", re.I)
 _IMPL_VERBS_RE = re.compile(r"\b(escrib|cre[áa]|agreg|edit|modific|arregl|correg|refactor|fix|migr|refactoriz)\w*", re.I)
 # "implement" SOLO si NO es participio pasado ("implementada/implementado" =
 # ya está hecha → verificación, no orden de implementar).
@@ -662,6 +678,7 @@ class Session:
         self._confirm_event: threading.Event | None = None
         self._confirm_answer: bool | None = None
         self._confirm_timeout: float = EXECUTE_CONFIRM_TIMEOUT
+        self._confirm_lock = threading.Lock()
         # Cancel del turno EN CURSO: lo setea run_turn; lo llama la TUI con ESC.
         self._turn_cancel = None
         # Edit pendiente cuando la confirmación vence por timeout: el usuario
@@ -955,10 +972,17 @@ class Session:
 
         Expuesto como comando /compact en la TUI — el usuario no debería
         esperar al 90% automático si sabe que la sesión ya no aporta.
+        Fail-safe: si el LLM falla (fallback genérico), NO se destruye el
+        historial — se aborta para no perder mensajes irrecuperables.
         """
+        if len(self._messages) <= 2:
+            return
         old_messages = self._messages[:-2]  # preservar últimos 2 mensajes
         recent = self._messages[-2:] if len(self._messages) >= 2 else self._messages
         summary = _generate_summary(self.llm, old_messages)
+        if summary.strip() == "Sesión previa resumida automáticamente.":
+            console.print("[yellow]⚠️ No se pudo generar resumen (LLM no disponible) — historial intacto.[/yellow]")
+            return
         self._messages = [
             SystemMessage(f"Resumen de la conversación previa:\n{summary}"),
             *recent,
@@ -1044,6 +1068,19 @@ class Session:
             )
         return _EXECUTE_FORCE_WRITE_MSG + self._findings_block() + anchor
 
+    def _trim_for_retry(self) -> None:
+        """Recorta historial para retry preservando el SystemMessage summary.
+
+        El summary es la única memoria comprimida — perderlo deja al retry
+        sin tarea canónica bulk ni contexto previo. Se preservan: summary (si
+        existe) + últimos 3 mensajes.
+        """
+        summaries = [m for m in self._messages if isinstance(m, SystemMessage)]
+        tail = self._messages[-3:] if len(self._messages) > 3 else list(self._messages)
+        # Evitar duplicar el summary si ya está en el tail
+        seen = {id(m) for m in tail}
+        self._messages = [m for m in summaries if id(m) not in seen] + tail
+
     def _enter_budget_retry(self, retry_msg: str) -> list:
         """Prepara el retry de EXECUTE tras un turno que no convergió (budget
         agotado, recursion limit o reasoning-only): acota las lecturas, resetea
@@ -1053,7 +1090,7 @@ class Session:
 
         _called_tools.clear(): la compuerta final debe exigir verify en ESTE
         intento — no dejar pasar verify stale del intento anterior."""
-        self._messages = self._messages[-3:] if len(self._messages) > 3 else self._messages
+        self._trim_for_retry()
         self._messages.append(HumanMessage(self._retry_with_read_anchor()))
         messages_for_agent = list(self._messages)
         self._called_tools.clear()
@@ -1220,7 +1257,7 @@ class Session:
                 "tools de búsqueda y no las necesitás: todo lo que relevaste "
                 "está arriba."
             )
-        self._messages = self._messages[-3:] if len(self._messages) > 3 else self._messages
+        self._trim_for_retry()
         self._messages.append(HumanMessage(retry_body))
         self._rebuild_agent(new_role, no_explore=True)
         self._analyze_budget.reset()
@@ -1548,6 +1585,37 @@ class Session:
             console.print("[dim]📐 Pregunta autocontenida — respondiendo directo (explore=0).[/dim]\n")
 
         # Reset dedupe + explore budget cada turno (siempre restaurar defaults)
+        # Orden: primero restaurar max_* a defaults, DESPUÉS reset() — reset()
+        # calcula _explore_exhausted desde max_calls, si se resetea con el valor
+        # stale (=0 de un retry previo) el turno arranca con lecturas capadas.
+        # Bulk scope es por-turno (se re-detecta abajo): resetear para no fugar
+        # recursion/budgets/require_write a turnos normales siguientes.
+        self._bulk_scope = 0
+        self._bulk_task_hash = ""
+        self._bulk_current_seq = -1
+        self._dedupe.max_repeats = 1
+        if new_role == Role.EXECUTE:
+            self._explore_budget.max_calls = EXECUTE_EXPLORE_BUDGET
+            self._explore_budget.max_reads_after_explore = EXECUTE_MAX_READS_AFTER_EXPLORE
+            self._explore_budget.max_tools_before_write = EXECUTE_MAX_TOOLS_BEFORE_WRITE
+            self._explore_budget.max_writes_before_verify = EXECUTE_MAX_WRITES_BEFORE_VERIFY
+            self._explore_budget.max_verify_before_write = EXECUTE_MAX_VERIFY_BEFORE_WRITE
+            self._explore_budget.write_pressure = True
+        elif new_role == Role.REVIEW:
+            self._explore_budget.max_calls = REVIEW_EXPLORE_BUDGET
+            self._explore_budget.max_reads_after_explore = REVIEW_MAX_READS_AFTER_EXPLORE
+            self._explore_budget.max_tools_before_write = REVIEW_MAX_TOOLS_BEFORE_WRITE
+            self._explore_budget.max_writes_before_verify = EXECUTE_MAX_WRITES_BEFORE_VERIFY
+            self._explore_budget.max_verify_before_write = EXECUTE_MAX_VERIFY_BEFORE_WRITE
+            # REVIEW nunca escribe: sin write-pressure (si no, al superar 30
+            # tools le ordena "write_file AHORA", incorrecto para reviewer).
+            self._explore_budget.write_pressure = False
+        elif new_role == Role.ANALYZE:
+            self._analyze_budget.max_calls = ANALYZE_EXPLORE_BUDGET
+            self._analyze_budget.max_reads_after_explore = ANALYZE_MAX_READS_AFTER_EXPLORE
+        elif new_role == Role.PLAN:
+            self._analyze_budget.max_calls = PLAN_EXPLORE_BUDGET
+            self._analyze_budget.max_reads_after_explore = PLAN_MAX_READS_AFTER_EXPLORE
         self._dedupe.reset()
         self._explore_budget.reset()
         self._analyze_budget.reset()
@@ -1562,20 +1630,6 @@ class Session:
             clear_write_overrides()
         except Exception:
             pass
-        if new_role == Role.EXECUTE:
-            self._explore_budget.max_calls = EXECUTE_EXPLORE_BUDGET
-            self._explore_budget.max_reads_after_explore = EXECUTE_MAX_READS_AFTER_EXPLORE
-            self._explore_budget.max_tools_before_write = EXECUTE_MAX_TOOLS_BEFORE_WRITE
-        elif new_role == Role.REVIEW:
-            self._explore_budget.max_calls = REVIEW_EXPLORE_BUDGET
-            self._explore_budget.max_reads_after_explore = REVIEW_MAX_READS_AFTER_EXPLORE
-            self._explore_budget.max_tools_before_write = REVIEW_MAX_TOOLS_BEFORE_WRITE
-        elif new_role == Role.ANALYZE:
-            self._analyze_budget.max_calls = ANALYZE_EXPLORE_BUDGET
-            self._analyze_budget.max_reads_after_explore = ANALYZE_MAX_READS_AFTER_EXPLORE
-        elif new_role == Role.PLAN:
-            self._analyze_budget.max_calls = PLAN_EXPLORE_BUDGET
-            self._analyze_budget.max_reads_after_explore = PLAN_MAX_READS_AFTER_EXPLORE
 
         # Acumular el mensaje del usuario en el historial
         agent_input = user_input
@@ -1741,9 +1795,10 @@ class Session:
                             f"{total_b} batches — batch {cur['seq'] + 1}: "
                             f"{len(cur['files'])} archivo(s). Progreso: "
                             f"{progress['done']} done · {progress['failed']} failed · "
+                            f"{progress.get('in_progress', 0)} en curso · "
                             f"{progress['pending']} pendientes.[/dim]\n"
                         )
-                    elif created or progress["pending"] == 0:
+                    elif created or (progress["pending"] == 0 and progress.get("in_progress", 0) == 0):
                         console.print(
                             f"[dim]📦 Tarea bulk ya COMPLETA según la cola "
                             f"({progress['done']}/{total_b} batches done). Si "
@@ -2686,21 +2741,29 @@ class Session:
         """
         if not EXECUTE_CONFIRM_WRITES or not self._fullscreen:
             return True
-        path = kwargs.get("path", "?")
-        console.print(
-            f"\n[bold yellow]❓ ¿Aprobás {name} sobre '{path}'?[/bold yellow]\n"
-            "[dim]Escribí 'sí'/'no' (o 's'/'n') en el input y Enter. "
-            f"Sin respuesta en {int(self._confirm_timeout)}s se venció. "
-            "Podés decir 'continua' o 'sí' para reintentarlo sin perder contexto.[/dim]"
-        )
-        self._confirm_answer = None
-        self._confirm_event = threading.Event()
-        # Guardar pendiente ANTES de esperar: si vence, queda para 'continua'
-        self._pending_write = (name, dict(kwargs))
+        # Serializar confirmaciones: un solo slot. Si ya hay una pendiente, el
+        # segundo write espera su turno en vez de pisar el Event (carrera que
+        # dejaba al primero en wait(180s) huérfano y perdía su write).
+        with self._confirm_lock:
+            if self._confirm_event is not None:
+                return False
+            path = kwargs.get("path", "?")
+            console.print(
+                f"\n[bold yellow]❓ ¿Aprobás {name} sobre '{path}'?[/bold yellow]\n"
+                "[dim]Escribí 'sí'/'no' (o 's'/'n') en el input y Enter. "
+                f"Sin respuesta en {int(self._confirm_timeout)}s se venció. "
+                "Podés decir 'continua' o 'sí' para reintentarlo sin perder contexto.[/dim]"
+            )
+            self._confirm_answer = None
+            self._confirm_event = threading.Event()
+            # Guardar pendiente ANTES de esperar: si vence, queda para 'continua'
+            self._pending_write = (name, dict(kwargs))
+            event = self._confirm_event
         try:
-            answered = self._confirm_event.wait(self._confirm_timeout)
+            answered = event.wait(self._confirm_timeout)
         finally:
-            self._confirm_event = None
+            with self._confirm_lock:
+                self._confirm_event = None
         if not answered or self._confirm_answer is None:
             key = self._pending_key(name, kwargs)
             n = self._pending_timeouts.get(key, 0) + 1
@@ -2727,11 +2790,11 @@ class Session:
         if self._confirm_answer:
             console.print("[green]✅ Aprobado.[/green]")
             self._pending_write = None
-            self._pending_timeouts.clear()
+            self._pending_timeouts.pop(self._pending_key(name, kwargs), None)
             return True
         console.print("[red]⛔ Rechazado — se cancela el turno.[/red]")
         self._pending_write = None
-        self._pending_timeouts.clear()
+        self._pending_timeouts.pop(self._pending_key(name, kwargs), None)
         self._cancel_turn()
         return False
 
@@ -2745,9 +2808,10 @@ class Session:
         Un RECHAZO cancela el turno (semántica igual a ESC): no seguimos
         trabajando tras un "no" del usuario. La aprobación solo desbloquea.
         """
-        if self._confirm_event is not None:
-            self._confirm_answer = bool(answer)
-            self._confirm_event.set()
+        with self._confirm_lock:
+            if self._confirm_event is not None:
+                self._confirm_answer = bool(answer)
+                self._confirm_event.set()
         if not answer:
             self._cancel_turn()
 

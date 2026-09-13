@@ -259,12 +259,19 @@ def _find_file_named(name: str, repo_path: str) -> Path | None:
     filtra los labels File/Module (y en MCP <0.9 name_pattern no está
     soportado). El filesystem es la fuente confiable para este caso.
     """
+    import glob as _glob
+
     root = Path(repo_path)
     if not root.exists() or not name:
         return None
+    # Sanitizar glob: component viene 100% del LLM, *, ?, [ escapan del repo.
+    if any(c in name for c in ("*", "?", "[", "]", "/", "\\")):
+        return None
+    if len(name) > 80:
+        return None
     best: Path | None = None
     try:
-        for p in root.rglob(f"{name}.*"):
+        for p in root.rglob(f"{_glob.escape(name)}.*"):
             if _is_excluded(p) or not p.is_file():
                 continue
             if best is None or len(p.parts) < len(best.parts):

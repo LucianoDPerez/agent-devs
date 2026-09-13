@@ -381,11 +381,17 @@ def apply_mismatch_fixes(repo_path: str, *, max_findings: int = 25) -> str:
         frontend_base_has_api=base_has_api,
     )
     applied: list[str] = []
+    try:
+        from tools.filesystem import _is_protected_task_path
+    except Exception:
+        _is_protected_task_path = lambda _p: False  # noqa: E731
     for f in findings:
         target = f["target"]
         if not target or target == f["literal"]:
             continue
         p = root / f["rel"]
+        if _is_protected_task_path(str(p)):
+            continue
         try:
             lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
         except OSError:

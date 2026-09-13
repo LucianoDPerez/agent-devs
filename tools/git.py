@@ -169,10 +169,15 @@ def push(path: str, remote: str | None = None, branch: str | None = None) -> str
     """Push the current branch (or `branch`) to `remote` (default 'origin')."""
     branch = branch or _current_branch_impl(path)
     remote = remote or "origin"
+    # `--` antes de refspecs: evita arg-injection vía --upload-pack/--exec
+    # (branch/remote vienen 100% del LLM).
+    for val, label in ((remote, "remote"), (branch, "branch")):
+        if val.startswith("-"):
+            raise ToolException(f"⛔ {label} inválido: {val!r} (no puede empezar con '-')")
     try:
-        _run(path, ["git", "push", remote, branch])
+        _run(path, ["git", "push", "--", remote, branch])
     except ToolException:
-        _run(path, ["git", "push", "-u", remote, branch])
+        _run(path, ["git", "push", "-u", "--", remote, branch])
     return f"🚀 Pushed {branch} to {remote}"
 
 
@@ -182,7 +187,9 @@ def create_pr(path: str, title: str, body: str = "", base: str = "main") -> str:
     branch = _current_branch_impl(path)
     if branch == base:
         raise ToolException(f"Cannot open a PR to {base} from the same branch.")
-    _run(path, ["git", "push", "-u", "origin", branch])
+    if branch.startswith("-"):
+        raise ToolException(f"⛔ branch inválido: {branch!r}")
+    _run(path, ["git", "push", "-u", "--", "origin", branch])
 
     args = ["gh", "pr", "create", "--title", title, "--base", base, "--head", branch]
     if body:

@@ -259,14 +259,12 @@ EXCLUDED_DIRS = {
     "__pycache__", ".venv", "venv", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox",
     # java / jvm / gradle / maven
     "target", ".gradle", ".mvn", "out", "obj", "classes",
-    # go / rust / cargo
-    "vendor", "target",
+    # go / rust / cargo / php / ruby (vendor compartido)
+    "vendor",
     # builds / distributables (JS, Python, etc.)
     "dist", "build",
-    # php / composer
-    "vendor",
     # ruby / bundle
-    ".bundle", "vendor",
+    ".bundle",
     # elixir
     "_build", "deps", ".beam",
     # swift / xcode
@@ -274,8 +272,8 @@ EXCLUDED_DIRS = {
     # dart / flutter
     ".dart_tool", ".pub-cache",
     # misc
-    ".env", ".idea", ".vscode", ".terraform", ".venv", ".wwebjs_session",
-    ".wwebjs_cache", "https:", "Pods", ".cargo", ".cache",
+    ".env", ".idea", ".vscode", ".terraform", ".wwebjs_session",
+    ".wwebjs_cache", "Pods", ".cargo", ".cache",
 }
 EXCLUDED_FILES = {
     ".DS_Store", "Thumbs.db", ".env", ".log", ".tmp",

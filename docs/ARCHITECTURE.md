@@ -582,8 +582,8 @@ Configurado en el `llama-server` startup (ver Instalación). Limita el reasoning
 Si el server NO tiene `--reasoning-budget` configurado, el código cliente lo detecta y reintenta:
 
 1. `stream_agent_turn` (`display/console.py`): rastrea si se produjo `content`/`tool_calls`. Si el stream termina con **solo reasoning**, levanta `ReasoningOnlyResponse`.
-2. `MAX_REASONING_SECONDS = 30` corta el stream si el modelo lleva 30s razonando sin producir output.
-3. `MAX_TOOL_CALLS_PER_TURN = 12` corta el stream después de 12 tool calls (detiene loops de read_file). Levanta `ToolCallLimitExceeded`.
+2. `MAX_REASONING_SECONDS = 180` (`config.py:59`) corta el stream si el modelo lleva 180s razonando sin producir output.
+3. `MAX_TOOL_CALLS_PER_TURN = 30` (`config.py:117`) corta el stream después de 30 tool calls (detiene loops de read_file). Levanta `ToolCallLimitExceeded`.
 4. `session.py` atrapa la excepción → recorta el contexto a 3 mensajes + agrega instrucción forzada ("YA RACIONALIZASTE. Tu PRIMERA acción DEBE ser write_file") → reintenta una vez.
 5. `agent_builder.py` pasa `max_reasoning_tokens` via `extra_body` (best-effort; funcionan si el server lo soporta, se ignoran si no).
 
@@ -594,9 +594,9 @@ El 4B modelo tiende a leer el mismo archivo 7+ veces porque **ignora los strings
 | Mecanismo | Cómo funciona | Efectividad |
 |-----------|--------------|-------------|
 | **`ToolBudgetExceeded` (GraphBubbleUp)** | Hereda `GraphBubbleUp` → LangGraph ToolNode la RE-RAIZA (no la convierte a ToolMessage) → propaga a `session.py` → retry | ✅ Elimina loops de dedupe |
-| **`MAX_TOOL_CALLS_PER_TURN = 12`** | Contador en `stream_agent_turn`: corta el stream después de 12 tool calls → `ToolCallLimitExceeded` → retry | ✅ Límite duro, 4B no puede ignorar |
+| **`MAX_TOOL_CALLS_PER_TURN = 30`** (`config.py:117`) | Contador en `stream_agent_turn`: corta el stream después de 30 tool calls → `ToolCallLimitExceeded` → retry | ✅ Límite duro, 4B no puede ignorar |
 | **Retry write-only (`force_write`)** | En el retry, `build_agent(force_write=True)` reconstruye el agente con **SOLO** `write_file`/`edit_file`/`delete_file` + git-write + verify. **SIN** `read_file`/`list_files`/`search_code`. El 4B sin lectura disponible escribe directo | ✅✅ **DEFINITIVO** (verificado: escribe controller NestJS real en el retry) |
-| **`EXECUTE_RECURSION_LIMIT = 10`** | Límite LangGraph de agent steps. Si todo lo demás falla, corta a los 10 pasos | ✅ Último recurso |
+| **`EXECUTE_RECURSION_LIMIT = 70`** (`config.py:96`), **`AGENT_RECURSION_LIMIT = 50`** (`config.py:91`) | Límite LangGraph de agent steps. Si todo lo demás falla, corta | ✅ Último recurso |
 | Stop strings (consume) | `consume()` devuelve `"⛔ ..."` como tool result | ❌ 4B las ignora |
 
 **Hallazgo clave (verificado en pruebas contra el server)**: el root cause definitivo del loop NO es el reasoning ni las excepciones — es que **el 4B no puede autolimitarse la exploración**. Con `read_file` + `list_files` disponibles, las usa infinitamente (13+ reads, 0 writes en 309s). Sin esas tools (write-only), escribe código real en ~30-70s (`write_file` con controller NestJS de 1,859 chars → logger, fire-and-forget, manejo 404, etc.).
@@ -607,13 +607,17 @@ El 4B modelo tiende a leer el mismo archivo 7+ veces porque **ignora los strings
 
 | Parámetro | Default | Rol |
 |-----------|---------|-----|
-| `MAX_TOOL_CALLS_PER_TURN` | 20 | Límite duro de tool calls por turno |
-| `EXECUTE_RECURSION_LIMIT` | 30 | Límite LangGraph de agent steps (EXECUTE) |
-| `EXECUTE_MAX_REASONING_TOKENS` | 256 | EXECUTE (via extra_body, best-effort) |
+| `MAX_TOOL_CALLS_PER_TURN` | 30 (`config.py:117`) | Límite duro de tool calls por turno |
+| `EXECUTE_RECURSION_LIMIT` | 70 (`config.py:96`) | Límite LangGraph de agent steps (EXECUTE) |
+| `AGENT_RECURSION_LIMIT` | 50 (`config.py:91`) | Límite LangGraph de agent steps (resto) |
+| `EXECUTE_EXPLORE_BUDGET` | 3 (`config.py:102`) | Máx explore (list/search/inspect) por turno EXECUTE |
+| `EXECUTE_MAX_READS_AFTER_EXPLORE` | 5 (`config.py:105`) | Máx reads tras agotar explore |
+| `EXECUTE_MAX_TOOLS_BEFORE_WRITE` | 12 (`config.py:111`) | Máx tools sin escribir ni verificar |
+| `EXECUTE_MAX_REASONING_TOKENS` | 1024 (`config.py:37`) | EXECUTE (via extra_body, best-effort) |
 | `REVIEW_MAX_REASONING_TOKENS` | 512 | REVIEW (via extra_body, best-effort) |
 | `ANALYZE_MAX_REASONING_TOKENS` | 64 | ANALYZE (via extra_body, best-effort) |
 | `PLAN_MAX_REASONING_TOKENS` | 128 | PLAN (via extra_body, best-effort) |
-| `MAX_REASONING_SECONDS` | 300 | Time budget para cortar stream si solo razoné (None en retry no_explore) |
+| `MAX_REASONING_SECONDS` | 180 (`config.py:59`) | Time budget para cortar stream si solo razoné (None en retry no_explore) |
 | `TURN_IDLE_TIMEOUT` | 360 | Idle máximo por turno (6 min) |
 | `REASONING_RETRY_ENABLED` | True | Activa/desactiva retry automático |
 

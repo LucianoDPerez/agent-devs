@@ -11,6 +11,7 @@ from tools._helpers import _is_excluded
 _CODE_EXTENSIONS: set[str] = {
     ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
     ".py", ".go", ".vue", ".svelte",
+    ".java", ".kt", ".php", ".rb", ".rs", ".cs",
 }
 
 # Paths absolutos a archivos de texto/tareas citados en el prompt del usuario
@@ -113,8 +114,9 @@ def filter_task_sections(content: str, task_numbers: list[int]) -> str:
         return content
 
     wanted = set(task_numbers)
+    matches = list(_TASK_SECTION_RE.finditer(content))
     sections: list[str] = []
-    for match in _TASK_SECTION_RE.finditer(content):
+    for match in matches:
         num = int(match.group(2))
         if num in wanted:
             sections.append(match.group(1).strip())
@@ -123,11 +125,16 @@ def filter_task_sections(content: str, task_numbers: list[int]) -> str:
         # El archivo no usa el formato "Tarea N" → devolver completo
         return content
 
+    # Preservar preámbulo global (intro, convenciones, notas) antes del primer ##
+    preamble = content[: matches[0].start()].strip() if matches else ""
     header = (
         f"# Alcance: SOLO Tarea(s) {', '.join(str(n) for n in task_numbers)}\n"
         "Ignorá cualquier otra tarea del archivo. No implementes nada fuera de este alcance.\n\n"
     )
-    return header + "\n\n---\n\n".join(sections)
+    body = "\n\n---\n\n".join(sections)
+    if preamble:
+        return header + preamble + "\n\n---\n\n" + body
+    return header + body
 
 
 def extract_checklist_items(content: str) -> list[str]:
@@ -274,10 +281,16 @@ def _collect_cited_paths(user_input: str, repo_path: str | None) -> list[Path]:
             key = str(p)
         if key in seen:
             return
-        if not p.is_file():
+        try:
+            if not p.is_file():
+                return
+            # Evitar cargar logs/dumps de 500KB para luego truncar: stat primero
+            if p.stat().st_size > 20000:
+                return
+        except OSError:
             return
         seen.add(key)
-        cited.append(p)
+        cited.append(p.resolve() if p.exists() else p)
 
     for match in _ABS_FILE_RE.finditer(user_input):
         _try_add(Path(match.group(1)))
@@ -1039,8 +1052,13 @@ def preload_cited_files(user_input: str, repo_path: str | None = None) -> str:
 
     task_nums = extract_requested_task_numbers(user_input)
     out = _build_preload_parts(user_input, cited, task_nums, mode="execute", repo_path=repo_path)
-    hints = inject_repo_hints(repo_path)
-    git_ctx = inject_git_context(repo_path)
+    # Cap global ~24k chars: citados ya consumen hasta 20k, hints/git se acotan
+    # con lo que quede para no exceder contexto antes del historial.
+    remaining = max(4000, 24000 - len(out))
+    hints_budget = min(8000, remaining // 2)
+    git_budget = min(6000, remaining - hints_budget)
+    hints = inject_repo_hints(repo_path, max_chars=hints_budget)
+    git_ctx = inject_git_context(repo_path, max_chars=git_budget)
     if hints or git_ctx:
         marker = "INSTRUCCIÓN OBLIGATORIA:"
         if git_ctx:
@@ -1119,24 +1137,34 @@ def _resolve_keyword_paths(user_input: str, repo_path: str) -> str:
     if not keywords:
         return ""
 
+    from tools._helpers import _is_excluded
+
     root = Path(repo_path)
     hints: list[str] = []
-    for kw in sorted(keywords):
+    # Topes anti-DoS: rglob camina todo el árbol; sin tope bloquea el turno.
+    for kw in sorted(keywords)[:5]:
         matches: list[Path] = []
         # rglob es case-sensitive incluso en macOS (APFS default = case-insensitive
         # pero Python Path.rglob hace exact match). Probamos kw, kw.lower() y kw.title().
         for variant in {kw, kw.lower(), kw.title()}:
-            matches += list(root.rglob(f"*{variant}*"))
+            try:
+                it = root.rglob(f"*{variant}*")
+                for _i, p in enumerate(it):
+                    if _is_excluded(p):
+                        continue
+                    matches.append(p)
+                    if len(matches) >= 20:
+                        break
+            except OSError:
+                continue
+            if len(matches) >= 20:
+                break
         matches = list(dict.fromkeys(matches))  # dedupe preserving order
         code_files = sorted(
             str(m.relative_to(root))
             for m in matches
             if m.is_file()
             and m.suffix.lower() in _CODE_EXTENSIONS
-            and not any(
-                part.startswith(".") or part in {"node_modules", "__pycache__", ".git", "dist", "build"}
-                for part in m.parts
-            )
         )
         if code_files:
             listed = ", ".join(code_files[:4])
@@ -1149,19 +1177,3 @@ def _resolve_keyword_paths(user_input: str, repo_path: str) -> str:
             + "\n"
         )
     return ""
-
-    # Sin archivos citados: inyectar git context para review de cambios recientes
-    if git_ctx:
-        return (
-            user_input
-            + "\n\n" + git_ctx
-            + "\n\nINSTRUCCIÓN OBLIGATORIA (REVIEW AC-AWARE): "
-            "El git status YA ESTÁ ARRIBA. "
-            "LEÉ CADA archivo listado en `git diff main...BRANCH --name-only` con read_file. "
-            "Si ese bloque no existe, leé los archivos del git status. "
-            "Clasificá CRITICAL / WARNING / SUGGESTION. "
-            "Cita archivo:línea para cada hallazgo. "
-            "Emítí el informe UNA vez y terminá."
-        )
-
-    return user_input

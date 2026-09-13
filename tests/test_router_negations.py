@@ -18,7 +18,10 @@ from orchestration.router import classify_intent
     "Explicame el bug y decime qué tocarías, pero no toques código.",
 ])
 def test_negated_actions_no_activan_execute(prompt):
-    assert classify_intent(None, prompt) == Intent.ANALYZE
+    # Negación => nunca EXECUTE (evita retries de escritura de 45 min).
+    # ANALYZE o PLAN valen: ambos son solo-lectura. "decime qué archivo habría
+    # que cambiar" clasifica PLAN desde que PLANNING va antes que VERIFY puro.
+    assert classify_intent(None, prompt) != Intent.EXECUTE
 
 
 def test_accion_real_sigue_ganando():

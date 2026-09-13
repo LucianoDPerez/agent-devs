@@ -289,10 +289,13 @@ async def build_agent(
         # Y DESACTIVA el thinking: con tool_choice="required" + thinking activo,
         # el modelo razona sin converger y nunca emite la tool call (bug real
         # en E2E: retries de 90s+ con 0 tool calls, tanto Agents-A1 como Gemma).
+        # Merge (no reemplazo) de chat_template_kwargs para no perder keys previas.
+        merged_kwargs = dict(getattr(role_llm, "chat_template_kwargs", None) or {})
+        merged_kwargs["enable_thinking"] = False
         role_llm = role_llm.model_copy(
             update={
                 "force_tool_calls": True,
-                "chat_template_kwargs": {"enable_thinking": False},
+                "chat_template_kwargs": merged_kwargs,
             },
             deep=False,
         )
