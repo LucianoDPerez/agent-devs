@@ -103,5 +103,28 @@ def test_analiza_puro_ruta_analyze():
     assert classify_intent(None, "analizá el código y decime qué falla") == Intent.ANALYZE
 
 
+@pytest.mark.parametrize("prompt", [
+    "verifica si estan realizadas estas tareas /folder/file.md",
+    "verificá que estén hechas las tareas de planes/migracion.md",
+    "chequeá si se cumplieron los criterios de docs/tarea.md",
+])
+def test_verificacion_de_tareas_citadas_ruta_review(prompt):
+    """Verificación de tareas con path concreto → REVIEW (checklist ítem por
+    ítem contra código). En ANALYZE genérico el modelo respondía desde el
+    caché sin leer (E2E real con 35B)."""
+    assert classify_intent(None, prompt) == Intent.REVIEW
+
+
+@pytest.mark.parametrize("prompt", [
+    "analizá si el login anda",
+    "verificá qué archivos hay que eliminar",
+    "verifica que este implementada correctamente Task 5",
+])
+def test_verificacion_sin_path_no_va_a_review(prompt):
+    """Sin path concreto no se roba nada: análisis puro → ANALYZE,
+    pregunta de planificación → PLAN."""
+    assert classify_intent(None, prompt) != Intent.REVIEW
+
+
 def test_analiza_con_accion_ruta_execute():
     assert classify_intent(None, "analizá y arreglá el bug") == Intent.EXECUTE

@@ -49,7 +49,7 @@ REGLAS STRICTAS:
      queries devolvieron vacío: 0 funciones con complexity>=10, 0 TODOs").
      PROHIBIDO responder "no se detectaron problemas" sin enumerar qué
      buscaste y qué devolvió cada query.
-5. Si el análisis cacheado existe, NO lo re-explores. Andá directo a la tarea.
+5. El análisis cacheado es CONTEXTO, no evidencia: evitá re-explorar lo ya resumido que no venga al caso, pero si el mensaje actual cita archivos o pide verificar algo, LEÉLOS igual (read_file/trace_component) y verificá contra el código real. El caché NUNCA sustituye una lectura que la tarea actual exige.
 6. Nunca listés directorios completos. Acotá el path (ej: app/api/).
 7. Si una tool dice "does not exist", aceptalo y seguí. No intentes variantes.
 8. EXPLORACIÓN GRAPH (tools cm__*): para cualquier componente/function, usá

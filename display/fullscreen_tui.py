@@ -212,10 +212,20 @@ class FullscreenTUI(App):
         background: #1a1a2e;
         color: #e0e0e0;
     }
+    #slash-hint {
+        height: auto;
+        background: #1a1a2e;
+        color: #9a9ab5;
+        padding: 0 1;
+        display: none;
+    }
     """
     BINDINGS = [
         Binding("enter", "submit", priority=True),
         Binding("escape", "cancel_turn", priority=True),
+        # Tab completa el comando sugerido (solo con la tira visible; si no,
+        # indenta como siempre — no cambia la conducta normal).
+        Binding("tab", "slash_complete", priority=True),
         Binding("ctrl+c", "copy_or_quit", priority=True),
         Binding("alt+enter", "input_newline"),
         Binding("ctrl+shift+c", "copy_selection"),
@@ -244,6 +254,10 @@ class FullscreenTUI(App):
         self._md_active = False
         self._md_raw = ""
         self._md_start = 0
+        # Sugerencias de slash commands (tira sobre el input, estilo opencode)
+        self._slash_matches: list[tuple[str, str]] = []
+        self._slash_index = 0
+        self._slash_visible = False
 
     # ── UI ─────────────────────────────────────────────────────────────
     def compose(self) -> ComposeResult:
@@ -253,6 +267,7 @@ class FullscreenTUI(App):
             id="pane",
         )
         yield Static(id="toolbar")
+        yield Static(id="slash-hint")
         yield TextArea(id="input", text="")
 
     def on_mount(self) -> None:
@@ -504,6 +519,11 @@ class FullscreenTUI(App):
             pass
 
     def action_cancel_turn(self) -> None:
+        # Con la tira de comandos visible y sin turno en curso, Esc la cierra
+        # (como en opencode) en vez de intentar cancelar nada.
+        if self._slash_visible and not self._busy:
+            self._hide_slash_hint()
+            return
         if self.on_cancel is not None:
             try:
                 self.on_cancel()
@@ -528,6 +548,100 @@ class FullscreenTUI(App):
 
     def action_input_newline(self) -> None:
         self.query_one("#input", TextArea).insert("\n")
+
+    # ── sugerencias de slash commands (estilo opencode) ──────────────
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        """Tira de sugerencias al tipear '/' (navegar: seguir tipeando para
+        filtrar; Tab completa; Esc la cierra; Enter ejecuta)."""
+        try:
+            if event.control.id != "input":
+                return
+            self._refresh_slash_hint(event.control.text)
+        except Exception:
+            pass
+
+    def _refresh_slash_hint(self, text: str) -> None:
+        from display.commands import command_names, match_commands
+
+        matches: list[tuple[str, str]] = []
+        stripped = text.strip()
+        if stripped.startswith("/") and "\n" not in stripped:
+            token = stripped.split()[0]
+            if "/" not in token[1:]:
+                if token in command_names() and len(stripped.split()) > 1:
+                    # Comando ya elegido + argumentos (ej. "/resume ab12"):
+                    # no hay nada más que sugerir.
+                    matches = []
+                else:
+                    matches = match_commands(token if token != "/" else "/")
+        prev = (
+            self._slash_matches[self._slash_index][0]
+            if self._slash_matches else None
+        )
+        self._slash_matches = matches
+        if prev and any(n == prev for n, _ in matches):
+            self._slash_index = next(
+                i for i, (n, _) in enumerate(matches) if n == prev
+            )
+        else:
+            self._slash_index = 0
+        self._render_slash_hint()
+
+    def _render_slash_hint(self) -> None:
+        try:
+            widget = self.query_one("#slash-hint", Static)
+        except Exception:
+            return
+        if not self._slash_matches:
+            self._slash_visible = False
+            widget.display = False
+            return
+        lines = []
+        for i, (name, desc) in enumerate(self._slash_matches):
+            mark = "›" if i == self._slash_index else " "
+            lines.append(f"{mark} {name:<9} {desc}")
+        lines.append("  [tab completa · esc cierra]")
+        widget.update("\n".join(lines))
+        widget.display = True
+        self._slash_visible = True
+
+    def _hide_slash_hint(self) -> None:
+        self._slash_matches = []
+        self._slash_index = 0
+        self._slash_visible = False
+        try:
+            self.query_one("#slash-hint", Static).display = False
+        except Exception:
+            pass
+
+    def action_slash_complete(self) -> None:
+        """Tab: completa la coincidencia única (o el prefijo común); si no hay
+        tira visible, indenta como siempre (cero cambio de conducta normal)."""
+        if not self._slash_visible or not self._slash_matches:
+            try:
+                self.query_one("#input", TextArea).insert("  ")
+            except Exception:
+                pass
+            return
+        import os as _os
+
+        from display.commands import takes_args
+
+        names = [n for n, _ in self._slash_matches]
+        if len(names) == 1:
+            completed = names[0]
+        else:
+            common = _os.path.commonprefix(names)
+            token = self.query_one("#input", TextArea).text.strip().split()[0]
+            completed = common if len(common) > len(token) else names[self._slash_index]
+        try:
+            ta = self.query_one("#input", TextArea)
+            ta.load_text(completed + (" " if takes_args(completed) else ""))
+            doc = ta.document
+            last = doc.line_count - 1
+            ta.move_cursor((last, len(doc.get_line(last))))
+        except Exception:
+            pass
 
     def _safe_submit(self, text: str) -> None:
         try:

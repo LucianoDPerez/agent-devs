@@ -1,0 +1,158 @@
+"""Slash commands: registro, matching, despacho y /resume.
+
+Evidencia de los faltantes originales:
+- /history solo listaba resúmenes (80 chars) y era imposible retomar:
+  load_session_turns (cache.py) existía pero nadie la llamaba.
+- Sin autocompletado: TextArea pelado, cero Completer en el repo.
+"""
+import pytest
+
+import cache
+from cache import save_turn
+from display.commands import (
+    build_ptk_completer,
+    format_help,
+    interpret_slash,
+    match_commands,
+)
+from orchestration.session import Session
+
+
+# ── registro y matching ──────────────────────────────────────────────
+
+def test_todos_los_comandos_tienen_descripcion():
+    help_text = format_help()
+    for name in ("/new", "/compact", "/history", "/resume", "/help"):
+        assert name in help_text
+    # Descripciones breves pedidas (una por comando)
+    assert "nueva sesión" in help_text
+    assert "/resume <id>" in help_text
+
+
+def test_match_filtra_por_prefijo():
+    assert [n for n, _ in match_commands("/")] == ["/new", "/compact", "/history", "/resume", "/help"]
+    assert [n for n, _ in match_commands("/h")] == ["/history", "/help"]
+    assert [n for n, _ in match_commands("/res")] == ["/resume"]
+    assert match_commands("/z") == []
+
+
+def test_interpret_mensaje_normal_va_al_llm():
+    assert interpret_slash("analizá el login")[0] == "message"
+    assert interpret_slash("")[0] == "message"
+    # Paths del repo NO son comandos (segundo slash los descalifica)
+    assert interpret_slash("/api/health devuelve 500")[0] == "message"
+
+
+def test_interpret_comandos():
+    assert interpret_slash("/new") == ("run", ("/new", ""))
+    assert interpret_slash("/History")[0] == "run"  # case-insensitive
+    assert interpret_slash("/resume ab12") == ("run", ("/resume", "ab12"))
+    assert interpret_slash("/")[0] == "help"
+    assert interpret_slash("/help") == ("run", ("/help", ""))
+
+
+def test_interpret_abreviatura_unica_corre_sola():
+    # "/his" solo matchea /history (sin args) → corre directo
+    assert interpret_slash("/his") == ("run", ("/history", ""))
+
+
+def test_interpret_abreviatura_con_args_pide_uso():
+    # "/res" matchea /resume pero falta el id → hint, no ejecución
+    kind, payload = interpret_slash("/res")
+    assert kind == "hint"
+    assert [n for n, _ in payload] == ["/resume"]
+
+
+def test_interpret_desconocido_muestra_opciones():
+    kind, payload = interpret_slash("/xyz")
+    assert kind == "hint"
+    assert payload == []
+
+
+def test_ptk_completer_ofrece_todo():
+    completer = build_ptk_completer()
+    from prompt_toolkit.document import Document
+
+    got = {c.text for c in completer.get_completions(Document("/"), None)}
+    assert got == {"/new", "/compact", "/history", "/resume", "/help"}
+    got_h = {c.text for c in completer.get_completions(Document("/h"), None)}
+    assert got_h == {"/history", "/help"}
+
+
+# ── /resume ──────────────────────────────────────────────────────────
+
+def _seed(monkeypatch, tmp_path, sid, repo, role="analyzer", user="hola", asst="buenas"):
+    monkeypatch.setattr(cache, "CACHE_DB", tmp_path / "t.db")
+    save_turn(session_id=sid, repo_path=str(repo), role=role,
+              user_message=user, assistant_message=asst, tokens_used=10)
+
+
+def _session(monkeypatch, repo):
+    sess = Session(llm=None, repo_path=str(repo))
+    # Sin LLM en tests: emular lo que _rebuild_agent hace con el rol.
+    def _fake_rebuild(role):
+        sess.current_role = role
+        return True
+    sess._rebuild_agent = _fake_rebuild
+    return sess
+
+
+def test_resume_restaura_mensajes_rol_e_id(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _seed(monkeypatch, tmp_path, "abcd1234", repo, role="analyzer",
+          user="analizá x", asst="miré x:1")
+    _seed(monkeypatch, tmp_path, "abcd1234", repo, role="planner",
+          user="planificá y", asst="plan: z")
+    sess = _session(monkeypatch, repo)
+    ok, msg, data = sess.resume_session("abcd")
+    assert ok is True
+    assert "abcd1234" in msg and "2 turno" in msg
+    assert sess.session_id == "abcd1234"
+    assert sess.current_role.value == "planner"  # rol del último turno
+    assert sess._last_response == "plan: z"
+    kinds = [type(m).__name__ for m in sess._messages]
+    assert kinds == ["HumanMessage", "AIMessage", "HumanMessage", "AIMessage"]
+
+
+def test_resume_id_inexistente(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _seed(monkeypatch, tmp_path, "abcd1234", repo)
+    sess = _session(monkeypatch, repo)
+    ok, msg, data = sess.resume_session("zzzz")
+    assert ok is False and "/history" in msg and data == []
+
+
+def test_resume_prefijo_ambiguo(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _seed(monkeypatch, tmp_path, "abc11111", repo)
+    _seed(monkeypatch, tmp_path, "abc22222", repo)
+    sess = _session(monkeypatch, repo)
+    ok, msg, _ = sess.resume_session("abc")
+    assert ok is False and "ambiguo" in msg
+    ok2, _, _ = sess.resume_session("abc1")
+    assert ok2 is True
+
+
+def test_resume_otro_repo_se_rechaza(monkeypatch, tmp_path):
+    repo_a = tmp_path / "a"
+    repo_b = tmp_path / "b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    _seed(monkeypatch, tmp_path, "zzz99999", repo_b)
+    sess = _session(monkeypatch, repo_a)
+    ok, msg, _ = sess.resume_session("zzz99999")
+    assert ok is False and "otro repo" in msg
+
+
+def test_resume_rol_invalido_cae_a_analyze(monkeypatch, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _seed(monkeypatch, tmp_path, "qwer1234", repo, role="nonsense",
+          user="h", asst="a")
+    sess = _session(monkeypatch, repo)
+    ok, _, _ = sess.resume_session("qwer1234")
+    assert ok is True
+    assert sess.current_role.value == "analyzer"

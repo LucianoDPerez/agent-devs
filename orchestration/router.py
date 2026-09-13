@@ -224,6 +224,18 @@ def classify_intent(_llm, user_message: str) -> Intent:
     if _has_any(prefix, _PLAN_LEADING) or _has_any(prefix, _PLANNING_LEADING):
         return Intent.PLAN
 
+    # Verificación de TAREAS citadas ("verificá si están hechas estas tareas
+    # file.md") → REVIEW: hay un checklist que validar ítem por ítem contra el
+    # código con evidencia. En ANALYZE genérico el modelo responde desde el
+    # caché sin leer. Exige path/archivo concreto para no robar análisis puros
+    # ("analizá si el login anda" sigue a ANALYZE).
+    if (
+        _has_any(prefix, _VERIFY_LEADING)
+        and re.search(r"\b(tareas?|checklist|criterios)\b", prefix)
+        and re.search(r"(?:\w[\w.\-/]*\.\w{1,5}\b|/[\w./-]+/)", prefix)
+    ):
+        return Intent.REVIEW
+
     # Verificación/análisis puro → ANALYZE (prioridad del PRIMER verbo).
     # "analizá cómo eliminar un endpoint" → ANALYZE aunque "eliminar" sea un
     # verbo de acción: está subordinado al análisis, no es una orden.

@@ -406,6 +406,30 @@ class TestMinimalPlan:
         assert "app.module" in plan
         assert ".env.example" in plan
 
+    def test_preload_for_analyze_inyecta_checklist_y_orden(self, tmp_path):
+        """E2E real (35B): 'verificá si están hechas estas tareas file.md'
+        respondió desde el caché sin leer. El preload debe inyectar contenido
+        + checklist + orden de verificar contra código."""
+        from orchestration.execute_bootstrap import preload_for_analyze
+
+        tasks = tmp_path / "tareas.md"
+        tasks.write_text(_SAMPLE_TASKS, encoding="utf-8")
+        out = preload_for_analyze(
+            f"verificá si están realizadas estas tareas {tasks}",
+            repo_path=str(tmp_path),
+        )
+        assert out != f"verificá si están realizadas estas tareas {tasks}"
+        assert "VERIFICACIÓN CON EVIDENCIA" in out
+        assert "CHECKLIST A VERIFICAR" in out
+        assert "Se agregan las nuevas variables de entorno" in out
+        assert "NO escribas código" in out
+
+    def test_preload_for_analyze_sin_citados_no_cambia_nada(self, tmp_path):
+        from orchestration.execute_bootstrap import preload_for_analyze
+
+        msg = "analizá si el login anda"
+        assert preload_for_analyze(msg, repo_path=str(tmp_path)) == msg
+
     def test_preload_includes_minimal_plan(self, tmp_path):
         (tmp_path / "package.json").write_text("{}", encoding="utf-8")
         src = tmp_path / "apps" / "api" / "src"

@@ -24,6 +24,7 @@ from core.textutil import normalize
 from llm_wrapper import LocalLLM, get_usage, reset_turn_usage
 from orchestration.session import Session
 from analyzer import run_analysis
+from display.commands import format_help, interpret_slash
 from display.console import console, print_welcome
 from display.tui import get_user_input
 from tools import ALL_TOOLS
@@ -272,28 +273,59 @@ def run_fullscreen(session) -> None:
             else:
                 session.resolve_confirm(False)
             return
-        if stripped == "/new":
+        kind, payload = interpret_slash(text)
+        if kind == "message":
+            pass  # sigue abajo: eco + run_turn
+        elif kind == "help":
+            console.print("[bold]Comandos:[/bold]\n" + format_help())
+            return
+        elif kind == "hint":
+            matches = payload
+            if matches:
+                console.print("[yellow]¿Quisiste decir?[/yellow]\n" + format_help(matches))
+            else:
+                console.print("[yellow]Comando desconocido. Disponibles:[/yellow]\n" + format_help())
+            return
+        elif payload[0] == "/new":
             session.reset()
             session._fullscreen = True  # reset() no debe apagar el modo
             tui.clear_pane()  # sesión nueva → panel nuevo
             console.print(f"[green]✅ Nueva sesión iniciada ({session.session_id}).[/green]")
             return
-        if stripped == "/compact":
+        elif payload[0] == "/compact":
             console.print("[yellow]📦 Compactando contexto (resumen del historial)…[/yellow]")
             session.force_summarize()
             console.print(f"[green]✅ Listo. Contexto ahora al {session.context_usage_pct():.0f}%.[/green]")
             return
-        if stripped == "/history":
+        elif payload[0] == "/history":
             turns = session.get_recent_history(limit=10)
             if not turns:
                 console.print("[dim]Sin turnos previos.[/dim]")
                 return
             for t in turns:
                 user = (t.get("user_message") or "")[:80]
+                asst = (t.get("assistant_message") or "")[:80]
                 console.print(
                     f"[bold]Usuario[/bold] [{t.get('role', '-')}] "
-                    f"({t.get('tokens_used', 0)} tokens): {user}"
+                    f"(id={t.get('session_id', '-')}, {t.get('tokens_used', 0)} tokens): {user}"
                 )
+                if asst:
+                    console.print(f"  [dim]Agente: {asst}[/dim]")
+            console.print("[dim]Retomá una con /resume <id>.[/dim]")
+            return
+        elif payload[0] == "/resume":
+            ok, msg, data = session.resume_session(payload[1])
+            console.print(f"[green]{msg}[/green]" if ok else f"[red]{msg}[/red]")
+            if ok:
+                for t in data:
+                    user = (t.get("user_message") or "")[:300]
+                    asst = (t.get("assistant_message") or "")[:300]
+                    console.print(f"\n[bold]vos ›[/bold] {user}")
+                    if asst:
+                        console.print(f"[dim]{asst}[/dim]")
+            return
+        elif payload[0] == "/help":
+            console.print("[bold]Comandos:[/bold]\n" + format_help())
             return
 
         # ECO del prompt ANTES de llamar al LLM (en full-screen el input se
@@ -313,7 +345,7 @@ def run_fullscreen(session) -> None:
     # El header FIJO de la TUI ya muestra LLM/repo/modelo/tools — no duplicar
     # el panel de welcome en el scrollable. Solo el hint inicial.
     console.print("💡 Escribí qué querés hacer. [dim](ESC cancela turno · "
-                  "rueda/scroll en el panel · commit manual al terminar)[/dim]\n")
+                  "rueda/scroll en el panel · / para comandos · commit manual al terminar)[/dim]\n")
     _warn_dirty_repo(session.repo_path)
 
     try:
@@ -695,12 +727,42 @@ def main():
                 break
             if not user_input.strip():
                 continue
-            if stripped == "/new":
+            kind, payload = interpret_slash(user_input)
+            if kind == "help":
+                console.print("[bold]Comandos:[/bold]\n" + format_help() + "\n")
+                continue
+            if kind == "hint":
+                matches = payload
+                if matches:
+                    console.print("[yellow]¿Quisiste decir?[/yellow]\n" + format_help(matches) + "\n")
+                else:
+                    console.print("[yellow]Comando desconocido. Disponibles:[/yellow]\n" + format_help() + "\n")
+                continue
+            if kind == "run" and payload[0] == "/new":
                 session.reset()
                 console.print("[green]✅ Nueva sesión iniciada. Historial reseteado.[/green]")
                 console.print(f"[dim]Session ID: {session.session_id}[/dim]\n")
                 continue
-            if stripped == "/history":
+            if kind == "run" and payload[0] == "/help":
+                console.print("[bold]Comandos:[/bold]\n" + format_help() + "\n")
+                continue
+            if kind == "run" and payload[0] == "/resume":
+                ok, msg, data = session.resume_session(payload[1])
+                console.print(f"[green]{msg}[/green]\n" if ok else f"[red]{msg}[/red]\n")
+                if ok:
+                    for t in data:
+                        user = (t.get("user_message") or "")[:300]
+                        asst = (t.get("assistant_message") or "")[:300]
+                        console.print(f"  [bold]vos ›[/bold] {user}")
+                        if asst:
+                            console.print(f"  [dim]{asst}[/dim]")
+                        console.print()
+                continue
+            if kind == "run" and payload[0] == "/compact":
+                session.force_summarize()
+                console.print(f"[green]✅ Listo. Contexto ahora al {session.context_usage_pct():.0f}%.[/green]\n")
+                continue
+            if kind == "run" and payload[0] == "/history":
                 turns = session.get_recent_history(limit=10)
                 if not turns:
                     console.print("[dim]No hay turnos previos guardados.[/dim]\n")
@@ -718,7 +780,7 @@ def main():
                             console.print(f"  [dim]Agente:[/dim]")
                             console.print(f"    [dim]{asst}[/dim]")
                         console.print()
-                    console.print()
+                    console.print("[dim]Retomá una con /resume <id>.[/dim]\n")
                 continue
             try:
                 from display.status_bar import run_turn_with_sticky_bar

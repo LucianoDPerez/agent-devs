@@ -12,7 +12,7 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from cache import load_recent_turns, save_turn
+from cache import load_recent_turns, load_session_turns, save_turn
 from cache import (
     bulk_progress,
     ensure_bulk_plan,
@@ -110,6 +110,7 @@ from orchestration.execute_bootstrap import (
     extract_requested_task_numbers,
     inject_repo_hints,
     preload_cited_files,
+    preload_for_analyze,
     preload_for_review,
 )
 from orchestration.framework_rules import inject_framework_rules
@@ -119,6 +120,7 @@ from orchestration.router import _extract_command_prefix, classify_intent
 from orchestration.tool_dedupe import (
     EXPLORE_TOOL_NAMES,
     ExploreBudget,
+    READISH_TOOL_NAMES,
     ToolBudgetExceeded,
     ToolCallDedupe,
     VERIFY_TOOL_NAMES,
@@ -656,6 +658,9 @@ class Session:
         # para una orden NUEVA dejaría al usuario sin exploración — cada orden
         # debe arrancar con el agente completo.
         self._agent_no_explore = False
+        # Preload de ANALYZE en ESTE turno (archivos .md/.txt citados): lo usa
+        # el guard de evidencia para exigir lecturas antes de dictaminar.
+        self._analyze_preloaded: bool = False
         # Tarea bulk detectada (≥ EXECUTE_BULK_MIN_FILES archivos): escala
         # budgets de EXECUTE y permite lecturas en el retry (0) para releer
         # los archivos que faltan.
@@ -1593,6 +1598,7 @@ class Session:
         self._bulk_scope = 0
         self._bulk_task_hash = ""
         self._bulk_current_seq = -1
+        self._analyze_preloaded = False
         self._dedupe.max_repeats = 1
         if new_role == Role.EXECUTE:
             self._explore_budget.max_calls = EXECUTE_EXPLORE_BUDGET
@@ -1761,6 +1767,22 @@ class Session:
                 console.print(
                     f"[dim]📎 Checklist AC pre-cargado para review{scope}.[/dim]\n"
                 )
+        elif new_role == Role.ANALYZE:
+            # Archivos citados (.md/.txt): inyectar contenido + checklist para
+            # que la verificación se haga contra el código con evidencia, no
+            # desde el análisis cacheado (E2E real: veredicto sin leer nada).
+            # Sin citados devuelve el input intacto (cero cambio de conducta).
+            self._analyze_preloaded = False
+            preloaded = preload_for_analyze(user_input, self.repo_path)
+            if preloaded != user_input:
+                agent_input = preloaded
+                self._analyze_preloaded = True
+                nums = extract_requested_task_numbers(user_input)
+                scope = f" (Tarea(s) {', '.join(map(str, nums))})" if nums else ""
+                console.print(
+                    f"[dim]📎 Tareas citadas pre-cargadas para verificación{scope} "
+                    f"(verificá cada ítem contra el código).[/dim]\n"
+                )
 
         # Tareas bulk: escalar budgets de EXECUTE + dividir en batches con
         # cola persistida. El budget default corta una tarea de 14 templates a
@@ -1830,6 +1852,7 @@ class Session:
         attempt = 0
         gate_retries = 0
         verify_injections = 0
+        evidence_retried = False
         interrupted = False
         interrupted_by_esc = False
         auto_stopped = False
@@ -2044,6 +2067,39 @@ class Session:
                         "redactá el plan con archivos concretos."
                     )
                     self._messages.append(HumanMessage(retry_plan))
+                    messages_for_agent = list(self._messages)
+                    continue
+                # GUARD ANALYZE-EVIDENCIA: el usuario citó archivos concretos
+                # (preload con checklist) y el turno terminó sin leer NADA de
+                # código ni citar evidencia → el veredicto vendría del caché.
+                # UNA vez se reintenta exigiendo lecturas (E2E real: "verificá
+                # si están hechas estas tareas file.md" respondió sin abrir ni
+                # el .md ni el código).
+                if (
+                    new_role == Role.ANALYZE
+                    and not evidence_retried
+                    and self._analyze_preloaded
+                    and not (self._called_tools & (EXPLORE_TOOL_NAMES | READISH_TOOL_NAMES))
+                    and not _response_has_evidence(self._last_response)
+                    and attempt + 1 < max_attempts
+                ):
+                    evidence_retried = True
+                    attempt += 1
+                    console.print(
+                        "\n[yellow]🔍 Veredicto sin evidencia (0 lecturas de código) — "
+                        "reintentando con exigencia de leer y citar…[/yellow]\n"
+                    )
+                    self._messages.append(HumanMessage(
+                        "⛔ Tu veredicto anterior salió SIN leer código (0 tool calls "
+                        "de lectura) y SIN citar evidencia. Eso NO es verificar: es "
+                        "adivinar desde el caché.\n"
+                        "REHACÉ la verificación AHORA: 1) el contenido de la tarea "
+                        "YA ESTÁ ARRIBA, no lo releas; 2) leé con read_file/"
+                        "trace_component el CÓDIGO de CADA ítem del checklist; "
+                        "3) dictaminá cumplido/no-cumplido citando archivo:línea "
+                        "de lo que cada tool devolvió. Si algo no se puede "
+                        "verificar, decilo explícito."
+                    ))
                     messages_for_agent = list(self._messages)
                     continue
                 break
@@ -2584,6 +2640,81 @@ class Session:
     def get_recent_history(self, limit: int = 5) -> list[dict]:
         """Devuelve los últimos N turnos del repo (de cualquier sesión)."""
         return load_recent_turns(self.repo_path, limit=limit)
+
+    def resume_session(self, session_prefix: str) -> tuple[bool, str, list[dict]]:
+        """Retoma una sesión previa del MISMO repo por id (completo o prefijo).
+
+        Restaura _messages (pares usuario/asistente), session_id (los próximos
+        turnos se guardan en la misma sesión), rol y última respuesta, y
+        reconstruye el agente del rol. Retorna (ok, mensaje, turnos).
+        """
+        from cache import normalize_path
+
+        prefix = (session_prefix or "").strip()
+        if not prefix:
+            return False, "Uso: /resume <id> (mirálos con /history).", []
+        try:
+            recent = load_recent_turns(self.repo_path, limit=50)
+        except Exception:
+            return False, "⛔ No se pudo leer el historial.", []
+        sids: list[str] = []
+        for t in recent:
+            sid = t.get("session_id") or ""
+            if sid and sid not in sids:
+                sids.append(sid)
+        matches = [s for s in sids if s.startswith(prefix)]
+        if not matches:
+            # ¿Existe pero en OTRO repo? (id completo de otro proyecto)
+            if len(prefix) >= 4:
+                try:
+                    foreign = load_session_turns(prefix)
+                except Exception:
+                    foreign = []
+                if foreign:
+                    return False, f"⛔ La sesión {prefix} es de otro repo. Parate en ese repo para retomarla.", []
+            return False, f"⛔ No hay sesión '{prefix}' en este repo. Mirá los ids con /history.", []
+        if len(matches) > 1:
+            return False, f"⛔ Prefijo ambiguo: {', '.join(matches)}. Pasá más caracteres.", []
+        sid = matches[0]
+        try:
+            data = load_session_turns(sid)
+        except Exception:
+            return False, "⛔ No se pudo cargar esa sesión.", []
+        if not data:
+            return False, f"⛔ La sesión {sid} no tiene turnos.", []
+        try:
+            here = normalize_path(self.repo_path)
+        except Exception:
+            here = self.repo_path
+        if any((t.get("repo_path") or "") != here for t in data):
+            return False, f"⛔ La sesión {sid} es de otro repo. Parate en ese repo para retomarla.", []
+        # Tope: últimas 20 — sesiones larguísimas reventarían el contexto.
+        shown_truncated = len(data) > 20
+        data = data[-20:]
+        msgs: list = []
+        for t in data:
+            u = (t.get("user_message") or "").strip()
+            a = (t.get("assistant_message") or "").strip()
+            if u:
+                msgs.append(HumanMessage(u))
+            if a:
+                msgs.append(AIMessage(a))
+        if not msgs:
+            return False, f"⛔ La sesión {sid} no tiene contenido recuperable.", []
+        self._messages = msgs
+        self.session_id = sid
+        self._last_response = (data[-1].get("assistant_message") or "").strip()
+        self._read_cache.clear()
+        self._session_time = 0.0
+        self._role_announced = False
+        raw_role = (data[-1].get("role") or "").strip()
+        try:
+            role = Role(raw_role)
+        except ValueError:
+            role = Role.ANALYZE
+        self._rebuild_agent(role)
+        extra = " (últimos 20 turnos)" if shown_truncated else ""
+        return True, f"✅ Sesión {sid} retomada: {len(data)} turno(s){extra}. Seguí donde habías quedado.", data
 
     def _cancel_turn(self) -> None:
         """Cancela el turno en curso (thread-safe, mismo camino que ESC)."""

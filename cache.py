@@ -303,10 +303,11 @@ def load_session_turns(session_id: str) -> list[dict]:
     """Devuelve todos los turnos de una sesión específica."""
     conn = _connect()
     rows = conn.execute(
-        """SELECT role, user_message, assistant_message, tokens_used, created_at
+        """SELECT session_id, repo_path, role, user_message, assistant_message,
+                  tokens_used, created_at
            FROM session_history
            WHERE session_id = ?
-           ORDER BY created_at ASC""",
+           ORDER BY id ASC""",
         (session_id,),
     ).fetchall()
     conn.close()

@@ -162,6 +162,14 @@ def format_done_checklist(items: list[str], *, mode: str = "execute") -> str:
             "Clasificá CRITICAL solo si un ítem del checklist NO está cumplido en el diff. "
             "No inventes requisitos de seguridad/perf que no estén en estos criterios.\n"
         )
+    if mode == "analyze":
+        return (
+            "\n\nCHECKLIST A VERIFICAR (uno por uno, contra el código real):\n"
+            f"{lines}\n"
+            "Para cada ítem: LEÉ el código que lo implementa (read_file/trace_component) "
+            "y dictaminá cumplido/no-cumplido SOLO con evidencia archivo:línea. "
+            "PROHIBIDO dictaminar desde el análisis cacheado o el texto de la tarea.\n"
+        )
     return (
         "\n\nANTES DE TERMINAR — cada ítem debe estar cumplido con evidencia en el código:\n"
         f"{lines}\n"
@@ -1004,9 +1012,31 @@ def _build_preload_parts(
             "INSTRUCCIÓN OBLIGATORIA (REVIEW AC-AWARE): "
             + scope_rule
             + "El contenido de tareas YA ESTÁ ARRIBA. "
-            "Revisá el diff/branch contra esos criterios. "
-            "CRITICAL = checkbox no cumplido. "
-            "Emítí el informe UNA vez y terminá."
+            + "Revisá el código (y el diff/branch si aplica) contra esos criterios. "
+            + "CRITICAL = checkbox no cumplido. "
+            + "Cada hallazgo se cita con archivo:línea + output real de la tool. "
+            + "Emítí el informe UNA vez y terminá."
+        )
+        return "\n".join(p for p in parts if p is not None)
+
+    if mode == "analyze":
+        scope_rule = ""
+        if task_nums:
+            listed = ", ".join(f"Tarea {n}" for n in task_nums)
+            scope_rule = (
+                f"Verificá ÚNICAMENTE {listed}. "
+            )
+        parts.append(
+            "INSTRUCCIÓN OBLIGATORIA (VERIFICACIÓN CON EVIDENCIA): "
+            + scope_rule
+            + "El contenido de la tarea YA ESTÁ ARRIBA — NO lo releas con read_file. "
+            + "Tu trabajo es verificar cada ítem contra el CÓDIGO REAL: leé los "
+            + "archivos que implementan cada punto con read_file/trace_component "
+            + "(los paths de la tarea bastan; sin list_files recursivos). "
+            + "Cada veredicto se cita con archivo:línea + lo que devolvió la tool. "
+            + "Si un ítem no se puede verificar (falta path, log o criterio), "
+            + "decilo explícito en vez de darlo por cumplido. "
+            + "NO escribas código: solo verificá y dictaminá."
         )
         return "\n".join(p for p in parts if p is not None)
 
@@ -1113,6 +1143,33 @@ def preload_for_review(user_input: str, repo_path: str | None = None) -> str:
         )
 
     return user_input
+
+
+def preload_for_analyze(user_input: str, repo_path: str | None = None) -> str:
+    """Preload para ANALYZE cuando el usuario cita archivos (.md/.txt).
+
+    Caso típico: "verificá si están hechas estas tareas file.md". Sin esto el
+    modelo responde desde el análisis cacheado sin abrir ni el .md ni el
+    código (E2E real con 35B). Con esto recibe el contenido + checklist +
+    orden explícita de verificar cada ítem contra el código con evidencia.
+
+    Sin archivos citados devuelve el input intacto (cero cambio de conducta).
+    """
+    cited = _collect_cited_paths(user_input, repo_path)
+    if not cited:
+        return user_input
+    task_nums = extract_requested_task_numbers(user_input)
+    out = _build_preload_parts(user_input, cited, task_nums, mode="analyze", repo_path=repo_path)
+    # Mapa del repo acotado: ayuda a ubicar el código de cada ítem sin explorar.
+    remaining = max(2000, 12000 - len(out))
+    hints = inject_repo_hints(repo_path, max_chars=min(4000, remaining))
+    if hints:
+        marker = "INSTRUCCIÓN OBLIGATORIA:"
+        if marker in out:
+            out = out.replace(marker, hints + "\n" + marker, 1)
+        else:
+            out = out + "\n\n" + hints
+    return out
 
 
 def _resolve_keyword_paths(user_input: str, repo_path: str) -> str:

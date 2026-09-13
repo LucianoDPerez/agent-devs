@@ -371,9 +371,12 @@ El orquestador **detecta automáticamente** la intención y carga el rol adecuad
 ### Comandos de sesión
 
 ```bash
->>> /new        # nueva sesión (resetea historial, mantiene cache de repo)
->>> /history    # muestra los últimos 10 turnos guardados en SQLite
->>> exit        # cierra la sesión
+>>> /new           # nueva sesión (resetea historial, mantiene cache de repo)
+>>> /compact       # resume el historial para liberar contexto
+>>> /history       # muestra los últimos 10 turnos guardados en SQLite (con id)
+>>> /resume <id>   # retoma una sesión anterior del mismo repo
+>>> /help          # lista los comandos (también con "/" + Tab/Esc en el input)
+>>> exit           # cierra la sesión
 ```
 
 ## Herramientas disponibles (30 tools)

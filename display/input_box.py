@@ -27,11 +27,17 @@ _MAX_LINES = 14
 
 def _build_input_app(status: dict) -> Application:
     """App de input: caja TextArea pintada + barra de estado fija abajo."""
+    from display.commands import build_ptk_completer
+
     input_field = TextArea(
         text="",
         multiline=True,
         wrap_lines=True,
         focus_on_click=True,
+        # Autocompletado de slash commands: menú flotante con descripción,
+        # se abre solo al tipear "/" (complete_while_typing).
+        completer=build_ptk_completer(),
+        complete_while_typing=True,
     )
 
     def _height():
@@ -45,8 +51,23 @@ def _build_input_app(status: dict) -> Application:
 
     @kb.add("enter", eager=True)
     def _submit(event):
-        if event.current_buffer.text.strip():
-            event.app.exit(result=event.current_buffer.text)
+        buf = event.current_buffer
+        if buf.complete_state:
+            # Menú de comandos abierto: Enter acepta la sugerencia, no envía.
+            completed = buf.complete_state.current_completion
+            if completed is not None:
+                buf.apply_completion(completed)
+            return
+        if buf.text.strip():
+            event.app.exit(result=buf.text)
+
+    @kb.add("escape")
+    def _dismiss_completion(event):
+        # Solo actúa con el menú abierto (no eager: no pisa el combo
+        # Esc+Enter de salto de línea — si viene Enter después, gana ese).
+        buf = event.current_buffer
+        if buf.complete_state:
+            buf.cancel_completion()
 
     @kb.add("escape", "enter")
     def _newline(event):

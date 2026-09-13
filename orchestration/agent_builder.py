@@ -221,7 +221,9 @@ async def build_agent(
     extra_context = ""
     if cached_analysis:
         extra_context = (
-            f"ANÁLISIS CACHÉ (usalo como contexto base; no re-explores lo resumido):\n"
+            f"ANÁLISIS CACHÉ (usalo como contexto base; no re-explores lo resumido "
+            f"que no venga al caso. Los archivos citados en el mensaje actual "
+            f"SIEMPRE se leen/verifican igual: el caché nunca sustituye evidencia):\n"
             f"{cached_analysis}\n"
         )
     fw_rules = inject_framework_rules(repo_path)
