@@ -1196,37 +1196,72 @@ class Session:
         resuelve lenguaje natural via _extract_exported_component)."""
         return user_msg.strip()[:120]
 
-    def _retry_analyze_anchor(self) -> str:
-        """Ancla para el retry de ANALYZE/PLAN: el contenido que trace_component
-        y read_file cachearon en el PASS1. Sin esto, el 4B no tiene NADA que
+    def _retry_analyze_anchor(self, max_blocks: int = 3, max_chars: int = 12000) -> str:
+        """Ancla para el retry de ANALYZE/PLAN: lo que trace_component y
+        read_file cachearon en el PASS1. Sin esto, el 4B no tiene NADA que
         analizar (los ToolMessages del graph se pierden al cortar por budget)
-        y razona en círculos adivinando paths."""
+        y razona en círculos adivinando paths.
+
+        Se inyectan TODOS los leídos (no solo el primero: anclar en 1 solo
+        obliga al modelo a rellenar con caché en preguntas amplias — E2E real:
+        recomendó archivos de src/modules/* nunca leídos citando "líneas
+        inferidas"). Lo que no entra por presupuesto va como ÍNDICE de paths
+        para que al menos no invente nombres.
+        """
         if not self._read_cache:
             return ""
-        # El 4B se enfoca en lo PRIMERO que ve y se confunde con componentes
-        # duplicados. Si el PASS1 cacheó traces, usar SOLO esos (en orden de
-        # exploración): el primero suele ser la componente central del bug.
-        # El trace del sistema (que puede resolver un hook y duplicar contenido)
-        # se usa SOLO como fallback cuando el PASS1 no cacheó nada.
-        pass1 = [k for k in self._read_cache.keys() if k != "[trace:sistema]"]
-        if not pass1:
-            pass1 = [k for k in self._read_cache.keys() if k == "[trace:sistema]"]
-        blocks = []
-        for key in pass1[:1]:
+        # Traces primero (son la pista principal del PASS1); el trace del
+        # sistema (que puede duplicar contenido) solo como fallback cuando el
+        # PASS1 no cacheó nada propio.
+        traces = [k for k in self._read_cache.keys() if k.startswith("[trace:")]
+        own_traces = [k for k in traces if k != "[trace:sistema]"]
+        ordered = (own_traces or traces) + [
+            k for k in self._read_cache.keys() if not k.startswith("[trace:")
+        ]
+        blocks: list[str] = []
+        indexed: list[str] = []
+        used = 0
+        for key in ordered:
             content = self._read_cache[key]
-            if key.startswith("[trace:"):
-                label = f"RESULTADO DE TRACE_COMPONENT ({key})"
-            else:
-                label = f"CONTENIDO REAL DE {key}"
-            blocks.append(f"--- {label} ---\n{content[:5000]}\n--- FIN ---")
-        return (
-            "\n\nCONTENIDO QUE YA LEÍSTE EN EL INTENTO ANTERIOR (es lo ÚNICO que "
-            "tenés; analizá EN BASE A ESTO, NO inventes otros paths).\n"
-            "🔴 LA COMPONENTE SIGUIENTE ES EL CÓDIGO REAL DEL BUG. Analizá su "
-            "código línea por línea y compará la validación del submit con la "
-            "condición del botón Guardar. Respondé el análisis AHORA.\n"
-            + "\n\n".join(blocks)
+            if len(blocks) < max_blocks and used < max_chars:
+                take = min(len(content), 5000, max_chars - used)
+                if take > 200:
+                    if key.startswith("[trace:"):
+                        label = f"RESULTADO DE TRACE_COMPONENT ({key})"
+                    else:
+                        label = f"CONTENIDO REAL DE {key}"
+                    blocks.append(f"--- {label} ---\n{content[:take]}\n--- FIN ---")
+                    used += take
+                    continue
+            indexed.append(key)
+        # HECHOS del intento anterior: el modelo no puede reescribir su propia
+        # historia ("respondí sin tools" cuando sí leyó). Van en el ancla para
+        # que el veredicto parta de lo realmente ejecutado.
+        tools = ", ".join(sorted(self._called_tools)) or "ninguna"
+        read_paths = ", ".join(
+            k for k in self._read_cache.keys() if not k.startswith("[")
+        ) or "ninguno"
+        parts = [
+            "\n\nCONTENIDO QUE YA LEÍSTE EN EL INTENTO ANTERIOR. Analizá EN BASE "
+            "A ESTO y citá archivo:línea de lo que cada tool devolvió. PROHIBIDO "
+            "inventar paths, firmas o archivos fuera de esta lista y del "
+            "historial del turno.",
+            f"HECHOS DE TU INTENTO ANTERIOR: ejecutaste estas tools: {tools}. "
+            f"Leíste estos archivos: {read_paths}. Todo archivo fuera de esa "
+            f"lista que menciones debe marcarse como NO verificado.",
+        ]
+        if indexed:
+            parts.append(
+                "LEÍDO PERO SIN CONTENIDO POR PRESUPUESTO (solo paths, no cites "
+                "líneas de estos):\n" + "\n".join(f"- {k}" for k in indexed)
+            )
+        parts.extend(blocks)
+        parts.append(
+            "Si lo que te piden excede lo que leíste, NO completes con el análisis "
+            "cacheado: decí explícito QUÉ te falta (paths, logs, criterios) y "
+            "pedilo. Un veredicto sin evidencia es peor que pedir datos."
         )
+        return "\n".join(parts)
 
     def _retry_analyze_no_explore(self, new_role: Role, reason: str) -> None:
         """Retry de ANALYZE/PLAN: reconstruye el agente SIN tools (no write-only
