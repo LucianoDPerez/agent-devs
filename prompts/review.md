@@ -52,6 +52,7 @@ FORMATO DEL INFORME:
 ```
 
 REGLAS:
+- VERIFICAR CON EVIDENCIA ANTES DE CONFIRMAR: cada hallazgo se cita con archivo:línea + output real (lint/tests/build o contenido leído). PROHIBIDO aprobar de memoria.
 - Citá archivo:línea SIEMPRE.
 - Si ves un archivo en el diff que importa un paquete NO instalado → CRITICAL.
 - Si ves un archivo en el diff que nadie importa → CRITICAL (dead code).

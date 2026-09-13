@@ -303,6 +303,53 @@ def _extract_target_files(analysis: str) -> list[str]:
     return out
 
 
+# Evidencia grounded: archivo:línea (ej. src/foo.ts:45) o bloque de código.
+# Un análisis sin esto es opinión, no diagnóstico — encadenarlo con explore=0
+# obliga al executor a escribir desde una alucinación (E2E Medicos: el analyzer
+# inventó "useDashboard no existe" y el "implementa" posterior lo perpetuó).
+_GROUNDED_EVIDENCE_RE = re.compile(r"[\w.\-/]+\.(?:tsx?|jsx?|go|py|ts|js):\d+")
+_CODE_BLOCK_RE = re.compile(r"```")
+
+
+def _has_grounded_evidence(task: str) -> bool:
+    """True si el análisis previo trae evidencia verificable.
+
+    Grounded = al menos un path con línea (file:línea) o un bloque de código
+    citado. Sin esto NO se debe encadenar con explore=0: el executor necesita
+    explorar antes de escribir en vez de heredar una hipótesis sin sustento.
+    """
+    if not task:
+        return False
+    if _GROUNDED_EVIDENCE_RE.search(task):
+        return True
+    if _CODE_BLOCK_RE.search(task) and _TARGET_FILE_RE.search(task):
+        return True
+    return False
+
+
+def _response_has_evidence(text: str | None) -> bool:
+    """True si la respuesta del modelo cita evidencia verificable.
+
+    Se usa en el cierre determinístico: un "LISTO" sin archivo:línea ni
+    bloque de código es una confirmación sin evidencia. Fail-open por diseño:
+    solo informa, nunca bloquea el turno.
+    """
+    if not text:
+        return False
+    if _GROUNDED_EVIDENCE_RE.search(text):
+        return True
+    if _CODE_BLOCK_RE.search(text):
+        return True
+    lowered = text.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "verificación:", "verificacion:", "lint", "pytest", "tsc",
+            "build", "tests", "test ",
+        )
+    )
+
+
 def _is_ambiguous_execute(user_input: str, repo_path: str | None = None) -> bool:
     """True si el mensaje es un comando EXECUTE vago (sin archivos, sin tarea
     concreta). Caso típico del día a día: "analizá X" → "implementa".
@@ -621,6 +668,11 @@ class Session:
         # dijo 'continua' después y espera que NO se re-explore todo. Se guarda
         # acá y el próximo turno lo reaplica sin LLM.
         self._pending_write: tuple[str, dict] | None = None
+        # Timeouts consecutivos por pendiente (key=name::path::hash): evita el
+        # loop de reintentar el MISMO write tras cada timeout (E2E Medicos:
+        # 6x el mismo write_file tras "Confirmación vencida"). Al 2do timeout
+        # seguido del mismo pendiente se descarta y se exige otra estrategia.
+        self._pending_timeouts: dict[str, int] = {}
         # Límite de contexto VIVO: se detecta del server en start() (GET /props).
         # El config hardcodeado quedaba viejo (asumía -c 62000, había 36608) y
         # el summary automático nunca alcanzaba a disparar antes del overflow.
@@ -1278,9 +1330,10 @@ class Session:
         """Resumen de cierre determinístico del SISTEMA (no del modelo).
 
         Anuncia la tarea realizada con EVIDENCIA REAL: archivos modificados
-        (git) + verificación corrida (tools llamadas). El modelo 4B alucina
-        "Archivo creado ✅" sin haber creado nada; acá el sistema verifica
-        en disco antes de decir que está hecho.
+        (git) + verificación corrida (tools llamadas) + evidencia citada en
+        la respuesta (archivo:línea). El modelo 4B alucina "Archivo creado ✅"
+        sin haber creado nada; acá el sistema verifica en disco antes de
+        decir que está hecho.
         """
         files = self._changed_files()
         verified = self._verify_tools_called()
@@ -1293,7 +1346,14 @@ class Session:
                 "   Verificación: lint/tests/build ✅" if verified
                 else "   Verificación: no se corrió (podés pedirla con 'revisá los cambios')"
             )
-            return f"{head}\n{detail}\n{verify_line}"
+            evidence_line = ""
+            if not verified or not _response_has_evidence(self._last_response):
+                evidence_line = (
+                    "\n   Evidencia: ⚠️ la respuesta no cita archivo:línea ni "
+                    "verificación — VERIFICAR CON EVIDENCIA ANTES DE CONFIRMAR "
+                    "(revisá el diff antes de commitear)"
+                )
+            return f"{head}\n{detail}\n{verify_line}{evidence_line}"
         if verified:
             return "✅ Turno completado (verificación corrida, sin cambios en disco)."
         return "↻ El turno terminó sin cambios detectados en disco."
@@ -1610,14 +1670,29 @@ class Session:
                 task = _derive_task_from_history(self._messages)
                 if task:
                     targets = _extract_target_files(task)
-                    agent_input = user_input + _build_chained_execute_suffix(
-                        task, target_files=targets
-                    )
-                    # Mismos límites que la corrección post-review: prohibir
-                    # exploración y forzar lectura-directa de los objetivos.
-                    self._explore_budget.max_calls = 0
-                    self._explore_budget.max_tools_before_write = 4
-                    console.print("[dim]🔗 Retomando análisis previo como tarea (explore=0).[/dim]\n")
+                    if _has_grounded_evidence(task) and targets:
+                        agent_input = user_input + _build_chained_execute_suffix(
+                            task, target_files=targets
+                        )
+                        # Mismos límites que la corrección post-review: prohibir
+                        # exploración y forzar lectura-directa de los objetivos.
+                        self._explore_budget.max_calls = 0
+                        self._explore_budget.max_tools_before_write = 4
+                        console.print("[dim]🔗 Retomando análisis previo como tarea (explore=0).[/dim]\n")
+                    else:
+                        # Análisis previo SIN evidencia (sin file:línea ni código
+                        # citado): encadenarlo con explore=0 perpetúa una
+                        # hipótesis sin sustento. Se mantiene presupuesto de
+                        # exploración y se exige verificar antes de escribir.
+                        agent_input = (
+                            user_input
+                            + "\n\n⛔ El análisis previo NO trae evidencia grounded "
+                            "(sin archivo:línea ni código citado). NO lo tomes como "
+                            "verdad: explorá el repo (trace_component/read_file) y "
+                            "VERIFICÁ CON EVIDENCIA ANTES DE CONFIRMAR cualquier "
+                            "diagnóstico previo antes de escribir código."
+                        )
+                        console.print("[dim]🔗 Análisis previo sin evidencia — explore acotado, verificar antes de escribir.[/dim]\n")
         elif new_role == Role.REVIEW:
             agent_input = preload_for_review(user_input, self.repo_path)
             self._dedupe.max_repeats = 1
@@ -2466,6 +2541,52 @@ class Session:
         self.resolve_confirm(False)
         self._cancel_turn()
 
+    def _pending_key(self, name: str, kwargs: dict) -> str:
+        """Key estable para dedupear pendientes (name + path + hash del cambio)."""
+        import hashlib
+        import json
+
+        try:
+            payload = json.dumps(kwargs, sort_keys=True, default=str)
+        except TypeError:
+            payload = str(kwargs)
+        digest = hashlib.sha1(payload.encode("utf-8", errors="replace")).hexdigest()[:12]
+        return f"{name}::{kwargs.get('path', '?')}::{digest}"
+
+    def _pending_already_applied(self, name: str, kwargs: dict) -> str | None:
+        """Chequeo de idempotencia ANTES de reejecutar un pendiente.
+
+        El retry de pendientes bypasea el wrapper (llama a filesystem directo),
+        así que el guard idempotente de tool_dedupe no aplica. Sin esto, un
+        'continua' tras un timeout re-ejecuta el MISMO write aunque el archivo
+        ya lo tenga (o el usuario lo haya aplicado a mano).
+        Retorna mensaje de descarte o None si hay que ejecutar."""
+        from pathlib import Path as _Path
+
+        path = kwargs.get("path", "")
+        if not path:
+            return None
+        try:
+            content = _Path(path).read_text(encoding="utf-8")
+        except OSError:
+            return None
+        if name == "edit_file":
+            old = (kwargs.get("old_str", "") or "").strip()
+            new = (kwargs.get("new_str", "") or "").strip()
+            if new and new in content and (not old or old not in content):
+                return (
+                    f"El cambio {name} sobre '{path}' YA ESTÁ aplicado "
+                    "(new_str presente, old_str ausente). No se reejecuta."
+                )
+        elif name == "write_file":
+            new_content = kwargs.get("content", "")
+            if isinstance(new_content, str) and new_content and new_content == content:
+                return (
+                    f"El archivo '{path}' YA TIENE ese contenido. "
+                    "No se reescribe."
+                )
+        return None
+
     def _try_execute_pending_write(self, user_input: str) -> bool:
         """Si hay un write pendiente por timeout, reejecutarlo sin LLM ni re-exploración.
 
@@ -2478,9 +2599,16 @@ class Session:
         if norm in ("no", "n", "nope", "cancelar", "cancela", "rechazo"):
             console.print("[dim]Pendiente descartado.[/dim]")
             self._pending_write = None
+            self._pending_timeouts.clear()
             return False
         name, kwargs = self._pending_write
         path = kwargs.get("path", "?")
+        already = self._pending_already_applied(name, kwargs)
+        if already is not None:
+            console.print(f"[dim]{already}[/dim]")
+            self._pending_write = None
+            self._pending_timeouts.clear()
+            return True
         console.print(
             f"\n[dim]↻ Edit pendiente detectado — reintentando {name} sobre '{path}' "
             f"sin re-explorar (contexto del turno anterior conservado)…[/dim]"
@@ -2488,6 +2616,7 @@ class Session:
         # Ejecutar SIN pasar por confirmación (el usuario ya dijo 'continua/si')
         # Usamos las tools de filesystem directamente para evitar re-confirm loop.
         self._pending_write = None
+        self._pending_timeouts.clear()
         try:
             if name == "edit_file":
                 from tools.filesystem import edit_file as _ef
@@ -2563,6 +2692,20 @@ class Session:
         finally:
             self._confirm_event = None
         if not answered or self._confirm_answer is None:
+            key = self._pending_key(name, kwargs)
+            n = self._pending_timeouts.get(key, 0) + 1
+            self._pending_timeouts[key] = n
+            if n >= 2:
+                # Mismo pendiente vencido 2 veces seguidas: no es falta de
+                # tiempo, es falta de decisión. Descartarlo corta el loop
+                # 'timeout → continua → timeout' (E2E Medicos: 6x mismo write).
+                self._pending_write = None
+                console.print(
+                    "[yellow]⏱️  Confirmación vencida 2 veces para el mismo cambio — "
+                    "lo descarto para no loopear. Si lo necesitás, pedilo de nuevo "
+                    "con otra estrategia o aprobá dentro del timeout.[/yellow]"
+                )
+                return False
             console.print(
                 "[yellow]⏱️  Confirmación vencida — podés reintentarlo con 'continua' o 'sí' "
                 "(sin re-explorar, sin perder lo ya leído).[/yellow]"
@@ -2574,9 +2717,11 @@ class Session:
         if self._confirm_answer:
             console.print("[green]✅ Aprobado.[/green]")
             self._pending_write = None
+            self._pending_timeouts.clear()
             return True
         console.print("[red]⛔ Rechazado — se cancela el turno.[/red]")
         self._pending_write = None
+        self._pending_timeouts.clear()
         self._cancel_turn()
         return False
 

@@ -108,7 +108,17 @@ def _implicated(changed_file: str, error_text: str) -> bool:
     if name and name in error_text:
         return True
     # También matchea el path relativo (los builds suelen imprimirlo).
-    return changed_file.replace("\\", "/") in error_text.replace("\\", "/")
+    if changed_file.replace("\\", "/") in error_text.replace("\\", "/"):
+        return True
+    # Los compiladores a veces imprimen el path de otra forma (absoluto vs
+    # relativo, ./ prefijo) o el error menciona el símbolo importado pero el
+    # path sale truncado. El stem (sin extensión) es un fallback seguro:
+    # "pacientesRoutes" matchea tanto "src/.../pacientesRoutes.ts(20,5)"
+    # como "Cannot find module './pacientesRoutes'".
+    stem = Path(changed_file).stem
+    if stem and len(stem) >= 4 and stem in error_text:
+        return True
+    return False
 
 
 def _syntax_errors(repo_path: str, files: list[str]) -> tuple[bool, str]:

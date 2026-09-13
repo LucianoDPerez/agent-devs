@@ -48,6 +48,17 @@ def test_implicated_no_match():
     assert not _implicated("frontend/src/pages/PacientesPage.tsx", err)
 
 
+def test_implicated_matches_stem_when_path_differs():
+    # tsc con path absoluto vs changed relativo: el stem igual matchea
+    err = "Cannot find name 'PrismaConsultaRepository'. src/interfaces/http/routes/pacientesRoutes.ts(20,42): error TS2304"
+    assert _implicated("backend/src/interfaces/http/routes/pacientesRoutes.ts", err)
+
+
+def test_implicated_stem_ignores_short_names():
+    # stems cortos (<4 chars) no matchean para evitar falsos positivos
+    assert not _implicated("src/a.ts", "error in database module")
+
+
 # ── changed_code_files ───────────────────────────────────────────────────────
 
 

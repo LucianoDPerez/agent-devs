@@ -40,6 +40,7 @@ Si una verificación falla:
 Recién cuando todas las subtareas estén verificadas, respondé LISTO con un resumen breve: qué hiciste, qué quedó verde, y qué errores heredados encontraste (si los hubo).
 
 ## Reglas
+- VERIFICAR CON EVIDENCIA ANTES DE CONFIRMAR: cada afirmación (bug, causa raíz, fix, "está hecho") se cita con archivo:línea + output real de la tool que lo demuestra. PROHIBIDO afirmar de memoria o dar por hecho lo que no leíste/ejecutaste.
 - Usá el logging estándar del framework. NUNCA `console.log`/print sin contexto.
 - Timeout HTTP REAL en el cliente (ej: `timeout: 5000`).
 - No inventes CRUD/endpoints/features extra.

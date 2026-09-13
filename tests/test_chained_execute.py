@@ -9,8 +9,10 @@ from orchestration.session import (
     _build_chained_execute_suffix,
     _derive_task_from_history,
     _extract_target_files,
+    _has_grounded_evidence,
     _is_ambiguous_execute,
     _is_selfcontained_analysis,
+    _response_has_evidence,
 )
 
 
@@ -96,6 +98,47 @@ def test_build_chained_execute_suffix_truncates_long_task():
     long_task = "x" * 5000
     suffix = _build_chained_execute_suffix(long_task)
     assert "truncado" in suffix
+
+
+# ── _has_grounded_evidence (encadenar solo análisis con sustento) ─────────────
+
+
+def test_grounded_true_for_file_line():
+    task = "El bug está en frontend/src/pages/PacientesPage.tsx:65, el onSelect no navega"
+    assert _has_grounded_evidence(task) is True
+
+
+def test_grounded_true_for_code_block_with_path():
+    task = "En frontend/src/api.ts:\n```ts\nconsultasApi.listByPaciente()\n```"
+    assert _has_grounded_evidence(task) is True
+
+
+def test_grounded_false_for_opinion_without_evidence():
+    task = "El hook useDashboard no existe o devuelve data malformada, hay que crearlo"
+    assert _has_grounded_evidence(task) is False
+
+
+def test_grounded_false_for_empty():
+    assert _has_grounded_evidence("") is False
+    assert _has_grounded_evidence(None) is False
+
+
+# ── _response_has_evidence (cierre determinístico) ────────────────────────────
+
+
+def test_response_evidence_true_for_file_line():
+    assert _response_has_evidence("Fix en session.py:123, verificado con lint") is True
+
+
+def test_response_evidence_true_for_verify_mention():
+    assert _response_has_evidence("Corrí los tests y pasaron") is True
+    assert _response_has_evidence("Verificación: lint ✅") is True
+
+
+def test_response_evidence_false_for_bare_claim():
+    assert _response_has_evidence("Listo, ya está hecho") is False
+    assert _response_has_evidence("") is False
+    assert _response_has_evidence(None) is False
 
 
 # ── _is_selfcontained_analysis ──────────────────────────────────────────────

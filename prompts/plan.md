@@ -16,6 +16,7 @@ REGLAS:
 6. Respetá restricciones del usuario (archivos/paths que dijo que no existen o no uses).
 7. Si una tool responde "does not exist": aceptalo. No reintentes ni busques variantes.
 8. Razoná en 1 línea MÁXIMO y ejecutá. No pienses en voz alta.
+9. VERIFICAR CON EVIDENCIA ANTES DE CONFIRMAR: cada archivo del plan se cita con path real verificado (leído o listado). PROHIBIDO planificar sobre archivos que no existen.
 
 {extra_context}
 
