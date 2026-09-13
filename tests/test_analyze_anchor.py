@@ -132,6 +132,34 @@ def test_readonly_retry_segunda_vuelta_responde_sin_tools(tmp_path):
     assert "CONTENIDO REAL DE src/a.ts" in body  # ancla regenerada
 
 
+def test_segunda_vuelta_contexto_minimo_y_pregunta_original(tmp_path):
+    """E2E real T1: con todo el historial encima el 4B declaró 'sin acceso
+    al código' teniendo snippets. La 2ª vuelta deja solo summaries +
+    pregunta original + ancla (sin anidar reintentos)."""
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from core.roles import Role
+
+    sess = _session(tmp_path)
+    sess._read_cache = {"src/a.ts": "contenido A " * 100}
+    sess._messages = [
+        SystemMessage("resumen previo"),
+        HumanMessage("pregunta original del usuario"),
+        HumanMessage("Reanalizá la pregunta: ... (retry 1ª)"),
+        HumanMessage("basura larga " * 500),
+    ]
+    sess._turn_question = "pregunta original del usuario"
+    sess._rebuild_agent = lambda *a, **k: True
+    sess._retry_analyze_no_explore(Role.ANALYZE, "1")  # 1ª: solo-lectura
+    sess._retry_analyze_no_explore(Role.ANALYZE, "2")  # 2ª: mínima
+    assert len(sess._messages) == 2
+    assert isinstance(sess._messages[0], SystemMessage)
+    body = str(sess._messages[1].content)
+    assert "Pregunta original: \"pregunta original del usuario\"" in body
+    assert "Reanalizá: Reanalizá" not in body
+    assert "PROHIBIDO decir que no tenés acceso" in body
+
+
 def test_readonly_retry_preserva_traces_sin_system_trace(tmp_path, monkeypatch):
     """Con traces del PASS1 no se dispara _system_trace_for (evita duplicar
     contenido que distrae al 4B)."""

@@ -656,6 +656,7 @@ class Session:
         # Retry de solo-lectura en curso (ANALYZE/PLAN con solo read_file):
         # el guard PLAN-EXPLORA no debe exigir exploración imposible.
         self._readonly_retry = False
+        self._turn_question = ""
         # El agente actual se construyó SIN tools (no_explore)? Reutilizarlo
         # para una orden NUEVA dejaría al usuario sin exploración — cada orden
         # debe arrancar con el agente completo.
@@ -1286,24 +1287,38 @@ class Session:
         """
         from tools.filesystem import read_file
 
+        # Pregunta ORIGINAL del turno (no el último HumanMessage: ese puede ser
+        # un retry inyectado y anidaría "Reanalizá: Reanalizá: ..." — E2E T1).
+        user_msg = (getattr(self, "_turn_question", "") or "").strip()
+        if not user_msg:
+            for m in reversed(self._messages):
+                if isinstance(m, HumanMessage):
+                    user_msg = str(m.content)
+                    break
         if self._readonly_retry:
             # Segunda vuelta: ya se leyó lo legible; responder SIN tools con
-            # el ancla completa (evita rumiar hasta agotar output — E2E real
-            # T1: 15k chars de razonamiento sin acción → respuesta vacía).
-            # El ancla se regenera: el trim puede haber cortado la de la 1ª.
-            self._trim_for_retry()
+            # contexto MÍNIMO (pregunta + ancla regenerada). El historial largo
+            # ahoga al 4B (lost-in-the-middle): con todo el contexto encima
+            # declaró "sin acceso al código" teniendo 3 snippets (E2E real T1).
+            # Rumiar hasta agotar output también queda bloqueado así.
+            anchor = self._retry_analyze_anchor()
+            summaries = [m for m in self._messages if isinstance(m, SystemMessage)]
+            self._messages = summaries
             self._messages.append(HumanMessage(
-                "RESPONDÉ AHORA el análisis final en texto con lo que leíste "
-                "(ancla + historial): citá archivo:línea por afirmación. Ya no "
-                "tenés tools — no intentes leer más. Si algo no se pudo "
+                f"Pregunta original: \"{user_msg}\"\n\n"
+                "RESPONDÉ AHORA el análisis final en texto con el ancla de "
+                "abajo: citá archivo:línea por afirmación (los paths están en "
+                "los encabezados --- --- y en HECHOS). Ya no tenés tools — no "
+                "intentes leer más. PROHIBIDO decir que no tenés acceso al "
+                "código: el ancla CONTIENE código real. Si algo no se pudo "
                 "verificar, decí QUÉ falta en vez de completar."
-                + self._retry_analyze_anchor()
+                + anchor
             ))
             self._rebuild_agent(new_role, no_explore=True)
             self._analyze_budget.reset()
             console.print(
                 f"\n[yellow]⚠️  {reason} — Respondiendo con lo leído "
-                "(sin tools)…[/yellow]\n"
+                "(contexto mínimo, sin tools)…[/yellow]\n"
             )
             return
 
@@ -1311,11 +1326,6 @@ class Session:
         # del retry sin tools) y flag para que el guard PLAN-EXPLORA no exija
         # exploración imposible en este agente restringido.
         self._readonly_retry = True
-        user_msg = ""
-        for m in reversed(self._messages):
-            if isinstance(m, HumanMessage):
-                user_msg = str(m.content)
-                break
         anchor = self._retry_analyze_anchor()
         # El SISTEMA complementa el ancla SOLO si el PASS1 no cacheó traces
         # (si exploró mal y el budget se agotó antes de tocar código). Si el
@@ -1630,6 +1640,9 @@ class Session:
             pass
 
         self._readonly_retry = False
+        # Pregunta ORIGINAL del turno (los reintentos inyectan HumanMessages
+        # propios; sin esto la 2ª vuelta anida "Reanalizá: Reanalizá: ...").
+        self._turn_question = user_input
         # ── Edit pendiente por timeout de confirmación ──────────────────
         # Si el turno anterior quedó con un write pendiente (confirmación
         # vencida), y el usuario dice "continua/si/dale" (exacto), reaplicar
