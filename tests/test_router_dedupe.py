@@ -123,11 +123,21 @@ def test_explore_budget_allows_two_then_stops(tmp_path):
     tool = tools[0]
     args = {"path": str(tmp_path), "recursive": False}
     r1 = tool.invoke(args)
+    # Repetir el MISMO path no quema budget: el guard anti-redundancia lo
+    # bloquea sin costo (E2E real T1) para reservar exploración a reads.
     r2 = tool.invoke({**args})
+    assert "Ya listaste" in r2
+    assert budget.used == 1
     sub = tmp_path / "sub"
     sub.mkdir()
+    (sub / "b.ts").write_text("y", encoding="utf-8")
+    sub2 = tmp_path / "sub2"
+    sub2.mkdir()
+    (sub2 / "c.ts").write_text("z", encoding="utf-8")
     r3 = tool.invoke({"path": str(sub), "recursive": False})
-    assert "agotada" in r3
+    assert "agotada" not in r3
+    r4 = tool.invoke({"path": str(sub2), "recursive": False})
+    assert "agotada" in r4
     assert budget.used == 3
 
 

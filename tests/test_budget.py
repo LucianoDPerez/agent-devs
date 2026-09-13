@@ -158,6 +158,63 @@ class TestExploreBudgetAnalyze:
         assert budget.consume("cm__search_graph", {"query": "z"}) is None
 
 
+class TestRedundantListing:
+    """Listados redundantes: bloqueados SIN consumir budget (E2E real T1).
+
+    El 4B listaba src recursive + src plano + subdirs (ya incluidos) y quemaba
+    el budget de exploración con 0 reads. El redundante devuelve STOP y no
+    cuenta en _count/_total."""
+
+    def _budget(self):
+        return ExploreBudget(
+            max_calls=4,
+            max_reads_after_explore=8,
+            max_tools_before_write=12,
+            write_pressure=False,
+        )
+
+    def test_repeat_flat_same_path_blocked_free(self, tmp_path):
+        b = self._budget()
+        assert b.consume("list_files", {"path": str(tmp_path), "recursive": False}) is None
+        assert b.used == 1
+        stop = b.consume("list_files", {"path": str(tmp_path), "recursive": False})
+        assert stop is not None and "Ya listaste" in stop
+        assert b.used == 1  # no consumió budget
+        assert b._total == 1
+
+    def test_recursive_never_tracked_as_listed(self, tmp_path):
+        # recursive=true lo bloquea la regla de abajo (no ejecuta): no debe
+        # envenenar el tracking y bloquear un flat posterior que SÍ aporta.
+        b = self._budget()
+        blocked = b.consume("list_files", {"path": str(tmp_path), "recursive": True})
+        assert blocked is not None and "recursive=true" in blocked
+        assert b.consume("list_files", {"path": str(tmp_path), "recursive": False}) is None
+        assert b.used == 1
+
+    def test_different_dirs_not_blocked(self, tmp_path):
+        b = self._budget()
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b").mkdir()
+        assert b.consume("list_files", {"path": str(tmp_path / "a")}) is None
+        assert b.consume("list_files", {"path": str(tmp_path / "b")}) is None
+        assert b.used == 2
+
+    def test_nonexistent_path_not_tracked(self, tmp_path):
+        b = self._budget()
+        missing = str(tmp_path / "nope")
+        assert b.consume("list_files", {"path": missing}) is None
+        assert b.consume("list_files", {"path": missing}) is None
+        assert b.used == 2  # al no existir, no se marca como listado
+
+    def test_reset_clears_listing_memory(self, tmp_path):
+        b = self._budget()
+        assert b.consume("list_files", {"path": str(tmp_path), "recursive": False}) is None
+        assert b.consume("list_files", {"path": str(tmp_path), "recursive": False}) is not None
+        b.reset()
+        assert b.consume("list_files", {"path": str(tmp_path), "recursive": False}) is None
+        assert b.used == 1
+
+
 class TestDedupe:
     """Tool dedupe should allow N repeats then block."""
 

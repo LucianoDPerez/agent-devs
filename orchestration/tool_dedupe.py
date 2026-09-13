@@ -177,6 +177,7 @@ class ExploreBudget:
         self._edits_per_path: dict[str, int] = {}
         self._reads_per_path: dict[str, int] = {}
         self._read_limits: dict[str, int] = {}
+        self._listed_flat: set[str] = set()
         self._writes_since_verify = 0
         self._verify_streak = 0
         # El wrapper de tools difiere el raise de VerifyRequired al POST-ejecución:
@@ -190,10 +191,11 @@ class ExploreBudget:
         self._reads_after = 0
         self._total = 0
         self._wrote = False
-        self._explore_exhausted = self.max_calls <= 0
+        self._explore_exhausted = False
         self._edits_per_path.clear()
         self._reads_per_path.clear()
         self._read_limits.clear()
+        self._listed_flat.clear()
         self._writes_since_verify = 0
         self._verify_streak = 0
 
@@ -246,9 +248,47 @@ class ExploreBudget:
     def used(self) -> int:
         return self._count
 
+    def _check_redundant_list(self, kwargs: dict[str, Any]) -> str | None:
+        """STOP sin costo si el path ya fue listado en el turno.
+
+        Solo se trackean listados planos: recursive=true está prohibido
+        aguas abajo (nunca ejecuta, así que registrarlo envenenaría el
+        tracking: un flat posterior se bloquearía por un listado que jamás
+        ocurrió). E2E real T1: src plano repetido + subdirs quemaron el
+        budget con 0 reads.
+        """
+        import os
+
+        if (kwargs or {}).get("recursive"):
+            return None
+        raw = (kwargs or {}).get("path", "")
+        if not raw:
+            return None
+        try:
+            norm = os.path.normpath(os.path.abspath(raw))
+            if not Path(norm).is_dir():
+                return None
+        except OSError:
+            return None
+        if norm in self._listed_flat:
+            return (
+                f"⛔ Ya listaste '{raw}'. No lo listes de nuevo: abrí archivos "
+                f"con read_file o ubicá símbolos con trace_component."
+            )
+        self._listed_flat.add(norm)
+        return None
+
     def consume(self, name: str, kwargs: dict[str, Any] | None = None) -> str | None:
         """Devuelve mensaje STOP si la llamada no debe ejecutarse."""
         kwargs = kwargs or {}
+        # Listado redundante: el mismo árbol ya listado (o incluido en un
+        # recursive previo) no aporta nada y quemaba el budget de exploración
+        # (E2E real T1: src recursive + src plano + subdirs, 0 reads). Se
+        # bloquea SIN consumir budget y se redirige a leer archivos.
+        if name == "list_files":
+            stop = self._check_redundant_list(kwargs)
+            if stop:
+                return stop
         self._total += 1
         # Debug print SOLO con AGENTDEVS_DEBUG=1: iba por stderr y en modo
         # --tui pisaba la UI (stderr no pasa por el panel capturado).
@@ -353,11 +393,13 @@ class ExploreBudget:
         # VERIFY / git RO siempre permitidos una vez que ya escribió
         # (y también antes, con tope de tools sin write)
 
-        # recursive=true prohibido en EXECUTE
+        # recursive=true prohibido (en TODOS los roles: el 4B lo usa para
+        # volcar árboles enteros al contexto en vez de leer archivos).
         if name == "list_files" and kwargs.get("recursive"):
             return (
-                "⛔ list_files(recursive=true) prohibido en EXECUTE. "
-                "Usá recursive=false o ESCRIBÍ YA con write_file/edit_file."
+                "⛔ list_files(recursive=true) prohibido. Listá UN nivel con "
+                "recursive=false y abrí archivos con read_file (o ubicá "
+                "símbolos con trace_component)."
             )
 
         # Write pressure: si pasamos N tools sin escribir ni verify, forzar write.
