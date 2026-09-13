@@ -741,6 +741,14 @@ def _wrap_one(
             comp = kwargs.get("component")
             if isinstance(result, str) and comp:
                 read_cache[f"[trace:{comp}]"] = result
+        elif name == "cm__get_code_snippet":
+            # Mismo caso que trace_component (E2E real T1: el PASS1 obtuvo
+            # source vía snippet crudo, el retry recortó el ToolMessage y el
+            # modelo declaró "ningún archivo leído" ignorando su propia
+            # lectura). Sin caché, el ancla queda vacío y el retry es ciego.
+            qn = kwargs.get("qualified_name") or kwargs.get("query") or "?"
+            if isinstance(result, str) and result.strip():
+                read_cache[f"[snippet:{qn}]"] = result
 
     def _rejected_message(kwargs: dict[str, Any]) -> str:
         """Mensaje que ve el modelo cuando el usuario rechaza un write/edit/delete."""

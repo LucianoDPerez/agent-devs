@@ -1215,8 +1215,10 @@ class Session:
         # PASS1 no cacheó nada propio.
         traces = [k for k in self._read_cache.keys() if k.startswith("[trace:")]
         own_traces = [k for k in traces if k != "[trace:sistema]"]
-        ordered = (own_traces or traces) + [
-            k for k in self._read_cache.keys() if not k.startswith("[trace:")
+        snippets = [k for k in self._read_cache.keys() if k.startswith("[snippet:")]
+        ordered = (own_traces or traces) + snippets + [
+            k for k in self._read_cache.keys()
+            if not k.startswith("[trace:") and not k.startswith("[snippet:")
         ]
         blocks: list[str] = []
         indexed: list[str] = []
@@ -1228,6 +1230,8 @@ class Session:
                 if take > 200:
                     if key.startswith("[trace:"):
                         label = f"RESULTADO DE TRACE_COMPONENT ({key})"
+                    elif key.startswith("[snippet:"):
+                        label = f"SOURCE DEL GRAFO ({key})"
                     else:
                         label = f"CONTENIDO REAL DE {key}"
                     blocks.append(f"--- {label} ---\n{content[:take]}\n--- FIN ---")
@@ -1238,9 +1242,10 @@ class Session:
         # historia ("respondí sin tools" cuando sí leyó). Van en el ancla para
         # que el veredicto parta de lo realmente ejecutado.
         tools = ", ".join(sorted(self._called_tools)) or "ninguna"
-        read_paths = ", ".join(
-            k for k in self._read_cache.keys() if not k.startswith("[")
-        ) or "ninguno"
+        # TODAS las claves del caché son código obtenido (archivos, snippets
+        # del grafo, traces): filtrar las [trace:/[snippet: mentía ("ninguno")
+        # aunque el modelo sí había leído source (E2E real T1).
+        read_paths = ", ".join(self._read_cache.keys()) or "ninguno"
         parts = [
             "\n\nCONTENIDO QUE YA LEÍSTE EN EL INTENTO ANTERIOR. Analizá EN BASE "
             "A ESTO y citá archivo:línea de lo que cada tool devolvió. PROHIBIDO "
