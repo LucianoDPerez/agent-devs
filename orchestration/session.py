@@ -1841,6 +1841,12 @@ class Session:
                         if new_role == Role.EXECUTE
                         else None
                     ),
+                    # ANALYZE/PLAN deben cerrar con texto: si corrieron tools
+                    # pero la respuesta quedó vacía (corte o cierre vacío del
+                    # modelo), reintentar con el ancla en vez de guardar ''.
+                    # EXECUTE/REVIEW no lo usan (cierre determinístico / flujo
+                    # propio).
+                    require_text=new_role in (Role.ANALYZE, Role.PLAN),
                 )
             )
 
@@ -2105,11 +2111,15 @@ class Session:
                 if new_role in (Role.ANALYZE, Role.PLAN):
                     # ANALYZE/PLAN nunca van write-only: sin tools de búsqueda,
                     # responde con el contexto que ya tiene.
-                    reason = (
-                        f"El modelo hizo {e.total_calls} tool calls (loop)"
-                        if isinstance(e, ToolCallLimitExceeded)
-                        else f"El modelo gastó {len(e.reasoning_text)} chars razonando sin actuar"
-                    )
+                    if isinstance(e, ToolCallLimitExceeded):
+                        reason = f"El modelo hizo {e.total_calls} tool calls (loop)"
+                    elif getattr(e, "reason", "") == "empty-after-tools":
+                        reason = (
+                            "El modelo corrió tools pero cerró sin texto "
+                            "(respuesta vacía)"
+                        )
+                    else:
+                        reason = f"El modelo gastó {len(e.reasoning_text)} chars razonando sin actuar"
                     self._retry_analyze_no_explore(new_role, reason)
                     messages_for_agent = list(self._messages)
                     continue

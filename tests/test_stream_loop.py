@@ -10,8 +10,47 @@ Acá se valida la LÓGICA de detección (la integración en stream_agent_turn se
 prueba E2E con el LLM real en tests/harness_*).
 """
 
+import asyncio
 import random
 import string
+
+import pytest
+from langchain_core.messages import AIMessageChunk
+
+from display.console import ReasoningOnlyResponse, stream_agent_turn
+
+
+class _FakeAgent:
+    """Agente stub cuyo astream emite los chunks dados y termina."""
+
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    def astream(self, *args, **kwargs):
+        chunks = self._chunks
+
+        async def gen():
+            for c in chunks:
+                yield (c, {})
+
+        return gen()
+
+
+def _tool_chunk(name="read_file"):
+    return AIMessageChunk(
+        content="",
+        tool_call_chunks=[{"name": name, "args": '{"path": "x"}', "id": "c1", "index": 0}],
+    )
+
+
+def _text_chunk(text):
+    return AIMessageChunk(content=text)
+
+
+def _run(agent, **kwargs):
+    return asyncio.run(
+        stream_agent_turn(agent, [], {"configurable": {"thread_id": "t"}}, **kwargs)
+    )
 
 
 def _detect_loop(text: str, windows=(64, 128, 256)) -> bool:
@@ -60,3 +99,31 @@ def test_no_detecta_markdown_con_listas():
 def test_texto_corto_no_se_evalua():
     """Menos de 512 chars: sin loop (la respuesta corta es legítima)."""
     assert not _detect_loop("hola " * 20)
+
+
+# ── require_text (respuesta vacía tras tools) ────────────────────────────────
+
+
+def test_empty_after_tools_raises_with_require_text():
+    """Tools sin texto final + require_text → retry vía ReasoningOnlyResponse.
+
+    E2E Medicos: el analyzer leyó el schema y el turno se guardó ''.
+    """
+    with pytest.raises(ReasoningOnlyResponse) as exc:
+        _run(_FakeAgent([_tool_chunk()]), idle_timeout=5, require_text=True)
+    assert exc.value.reason == "empty-after-tools"
+
+
+def test_empty_after_tools_returns_empty_without_require_text():
+    """Sin require_text (EXECUTE) se preserva el comportamiento anterior."""
+    assert _run(_FakeAgent([_tool_chunk()]), idle_timeout=5) == ""
+
+
+def test_text_after_tools_returns_text_with_require_text():
+    """Con texto final no hay raise aunque require_text esté activo."""
+    out = _run(
+        _FakeAgent([_tool_chunk(), _text_chunk("campos: id, nombre")]),
+        idle_timeout=5,
+        require_text=True,
+    )
+    assert out == "campos: id, nombre"

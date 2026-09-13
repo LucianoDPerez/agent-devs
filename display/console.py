@@ -75,7 +75,8 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                             max_reasoning_seconds: float | None = None,
                             max_tool_calls: int | None = None,
                             require_write: bool = False,
-                            max_content_seconds: float | None = None):
+                            max_content_seconds: float | None = None,
+                            require_text: bool = False):
     """Ejecuta el agente con streaming. Reasoning en dim, response normal.
 
     Retorna el texto completo de la respuesta (sin razonamiento) para persistencia.
@@ -97,6 +98,13 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
     ``require_write`` (EXECUTE retry): si el turno termina sin haber hecho
     NINGÚN write_file/edit_file/delete_file, levanta ReasoningOnlyResponse.
     El 4B a veces "responde" con texto/monólogo sin escribir nada real.
+
+    ``require_text`` (ANALYZE/PLAN): si el turno corrió tools pero el modelo
+    nunca emitió texto (respuesta final vacía), levanta ReasoningOnlyResponse
+    con reason="empty-after-tools". Sin esto el turno se guarda como '' en
+    SQLite y el usuario ve tools + silencio (E2E Medicos: analyzer leyó el
+    schema y la respuesta quedó vacía). EXECUTE no lo usa: ahí el cierre
+    determinístico del sistema ya cubre el veredicto con evidencia real.
     """
     reasoning_started = False
     response_started = False
@@ -178,7 +186,8 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                     if elapsed > max_reasoning_seconds:
                         console.print(
                             f"\n[dim]↻ Modelo pensando sin producir output "
-                            f"({elapsed:.0f}s). Reintentando…[/dim]"
+                            f"({elapsed:.0f}s). Se corta aquí — el turno se "
+                            f"reintenta con lo ya leído.[/dim]"
                         )
                         break
             else:
@@ -288,6 +297,13 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
 
     if reasoning_started and not produced_output:
         raise ReasoningOnlyResponse("".join(reasoning_text))
+
+    if require_text and not "".join(response_parts).strip() and produced_output:
+        # Tools corrieron pero no hay texto final: el modelo nunca cerró el
+        # turno (corte por timeout o cierre vacío). Guardar "" sería mostrar
+        # tools + silencio. Se reintenta vía el handler de session.py, que
+        # para ANALYZE/PLAN responde sin tools con el ancla de lo ya leído.
+        raise ReasoningOnlyResponse("".join(reasoning_text), reason="empty-after-tools")
 
     if require_write and not wrote_something:
         console.print(
