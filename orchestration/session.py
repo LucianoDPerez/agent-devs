@@ -653,7 +653,9 @@ class Session:
         # Cache de archivos leídos (read_file) durante el turno: el retry
         # write-only lo inyecta como anclaje para reescribir sin leer.
         self._read_cache: dict[str, str] = {}
-        self._no_explore_retry = False
+        # Retry de solo-lectura en curso (ANALYZE/PLAN con solo read_file):
+        # el guard PLAN-EXPLORA no debe exigir exploración imposible.
+        self._readonly_retry = False
         # El agente actual se construyó SIN tools (no_explore)? Reutilizarlo
         # para una orden NUEVA dejaría al usuario sin exploración — cada orden
         # debe arrancar con el agente completo.
@@ -819,7 +821,8 @@ class Session:
         self._load_previous_sessions()
         self._rebuild_agent(Role.ANALYZE)
 
-    def _rebuild_agent(self, role: Role, no_explore: bool = False) -> bool:
+    def _rebuild_agent(self, role: Role, no_explore: bool = False,
+                       tools_override: list | None = None) -> bool:
         # no_explore=True construye un agente SIN tools: reutilizarlo para una
         # orden NUEVA normal dejaría al usuario sin exploración (E2E real:
         # "arquitectura del backend" agota el budget → retry no_explore → la
@@ -828,6 +831,7 @@ class Session:
             self.agent is not None
             and role == self.current_role
             and not no_explore
+            and tools_override is None
             and not getattr(self, "_agent_no_explore", False)
         ):
             return False
@@ -842,6 +846,7 @@ class Session:
                     self._explore_budget, self._analyze_budget,
                     read_cache=self._read_cache,
                     no_explore=no_explore,
+                    tools_override=tools_override,
                     tool_call_logger=self._called_tools,
                     graph_project=self._graph_project,
                     confirm_callback=(
@@ -851,7 +856,7 @@ class Session:
                     ),
                 )
             )
-            self._agent_no_explore = no_explore
+            self._agent_no_explore = no_explore or tools_override is not None
         finally:
             loop.close()
         return True
@@ -1268,13 +1273,21 @@ class Session:
         )
         return "\n".join(parts)
 
-    def _retry_analyze_no_explore(self, new_role: Role, reason: str) -> None:
-        """Retry de ANALYZE/PLAN: reconstruye el agente SIN tools (no write-only
-        — estos roles NUNCA escriben en el repo del usuario). El 4B usa cualquier
-        tool como muleta y razona "qué más leer" en vez de responder. El contexto
-        correcto lo arma el SISTEMA (ancla de traces + _system_trace_for); con
-        0 tools el modelo responde el análisis en texto plano (verificado)."""
-        self._no_explore_retry = True
+    def _retry_analyze_readonly(self, new_role: Role, reason: str) -> None:
+        """Retry de ANALYZE/PLAN con SOLO read_file (sin búsqueda ni listados).
+
+        El retry anterior (0 tools) no podía convertir listados en lecturas:
+        el PASS1 moría en breadth (E2E real T1: 3 intentos, 0 read_file) y el
+        retry respondía a ciegas. Acá se conserva el historial (los listados
+        quedan visibles para elegir QUÉ leer) y el agente solo puede leer
+        2-8 archivos clave antes de responder con evidencia.
+        """
+        from tools.filesystem import read_file
+
+        # Turno interactivo con tools: timeouts normales (no el modo paciente
+        # del retry sin tools) y flag para que el guard PLAN-EXPLORA no exija
+        # exploración imposible en este agente restringido.
+        self._readonly_retry = True
         user_msg = ""
         for m in reversed(self._messages):
             if isinstance(m, HumanMessage):
@@ -1296,20 +1309,33 @@ class Session:
             retry_body += anchor
         findings = self._findings_block()
         if findings:
-            retry_body += (
-                findings
-                + "\nRESPONDÉ AHORA el diagnóstico final en texto — ya no tenés "
-                "tools de búsqueda y no las necesitás: todo lo que relevaste "
-                "está arriba."
-            )
-        self._trim_for_retry()
-        self._messages.append(HumanMessage(retry_body))
-        self._rebuild_agent(new_role, no_explore=True)
-        self._analyze_budget.reset()
-        console.print(
-            f"\n[yellow]⚠️  {reason} — Reintentando sin tools de búsqueda "
-            "(responde con lo ya leído)...[/yellow]"
+            retry_body += findings
+        retry_body += (
+            "\n\n⛔ El intento anterior agotó la exploración en listados y "
+            "búsquedas sin leer código. Ahora SOLO tenés read_file (sin "
+            "list_files ni búsqueda): la estructura ya la ubicaste arriba — "
+            "leé los 2-4 archivos CLAVE del tema y recién ahí respondé el "
+            "análisis citando archivo:línea de lo leído. Si con esas lecturas "
+            "no alcanza, decí QUÉ falta en vez de completar."
         )
+        # Sin trim: los listados del PASS1 deben quedar visibles para elegir
+        # qué leer. El agente restringido no puede hacer crecer el contexto
+        # con búsquedas (solo reads acotados).
+        self._messages.append(HumanMessage(retry_body))
+        # Orden: primero topes (explore=0 bloquea listas/búsquedas, reads
+        # acotados), DESPUÉS reset (calcula _explore_exhausted con lo nuevo).
+        self._analyze_budget.max_calls = 0
+        self._analyze_budget.reset()
+        self._rebuild_agent(new_role, tools_override=[read_file])
+        console.print(
+            f"\n[yellow]⚠️  {reason} — Reintentando en modo solo-lectura "
+            "(leé los archivos clave y respondé con evidencia)…[/yellow]\n"
+        )
+
+    def _retry_analyze_no_explore(self, new_role: Role, reason: str) -> None:
+        """Compat: redirige al retry de solo-lectura (conserva el nombre que
+        usan los callers y tests)."""
+        self._retry_analyze_readonly(new_role, reason)
 
     def _repo_has_recent_commit(self) -> bool:
         """Detecta si el repo tiene un commit en los últimos ~5 minutos
@@ -1578,7 +1604,7 @@ class Session:
         except Exception:
             pass
 
-        self._no_explore_retry = False
+        self._readonly_retry = False
         # ── Edit pendiente por timeout de confirmación ──────────────────
         # Si el turno anterior quedó con un write pendiente (confirmación
         # vencida), y el usuario dice "continua/si/dale" (exacto), reaplicar
@@ -1933,20 +1959,13 @@ class Session:
                     messages_for_agent,
                     config,
                     idle_timeout=TURN_IDLE_TIMEOUT,
-                    # Retry no_explore (ANALYZE/PLAN con 0 tools): el modelo NO
-                    # puede entrar en loop de tools; razona 3-6 min y responde.
-                    # Cortar por MAX_REASONING_SECONDS mata justo antes de la
-                    # respuesta (verificado: responde en ~387s con ancla).
-                    # idle_timeout cubre un modelo realmente colgado.
                     # EXECUTE: 90s por bloque de razonamiento (el 4B razona
                     # 30-60s antes de cada tool call; si razona más, se colgó).
+                    # idle_timeout cubre un modelo realmente colgado.
                     max_reasoning_seconds=(
-                        None if self._no_explore_retry
-                        else (
-                            EXECUTE_MAX_REASONING_SECONDS
-                            if new_role == Role.EXECUTE
-                            else MAX_REASONING_SECONDS
-                        )
+                        EXECUTE_MAX_REASONING_SECONDS
+                        if new_role == Role.EXECUTE
+                        else MAX_REASONING_SECONDS
                     ),
                     max_tool_calls=(
                         _bulk_budget(self._bulk_scope)["tool_calls_per_turn"]
@@ -2087,7 +2106,7 @@ class Session:
                 # explorar antes de redactar.
                 if (
                     new_role == Role.PLAN
-                    and not self._no_explore_retry
+                    and not self._readonly_retry
                     and not (self._called_tools & EXPLORE_TOOL_NAMES)
                     and attempt + 1 < max_attempts
                 ):
@@ -2206,8 +2225,8 @@ class Session:
                     break
                 attempt += 1
                 if new_role in (Role.ANALYZE, Role.PLAN):
-                    # Retry SIN tools de búsqueda (no write-only): ANALYZE/PLAN
-                    # no escriben; deben responder con lo que ya leyeron.
+                    # Retry de solo-lectura (no write-only): ANALYZE/PLAN no
+                    # escriben; leen archivos clave y responden con evidencia.
                     self._retry_analyze_no_explore(
                         new_role,
                         f"Exploración agotada en {role_label}: {e}",
@@ -2260,8 +2279,8 @@ class Session:
                     break
                 attempt += 1
                 if new_role in (Role.ANALYZE, Role.PLAN):
-                    # ANALYZE/PLAN nunca van write-only: sin tools de búsqueda,
-                    # responde con el contexto que ya tiene.
+                    # ANALYZE/PLAN nunca van write-only: retry de solo-lectura
+                    # y respuesta con evidencia.
                     if isinstance(e, ToolCallLimitExceeded):
                         reason = f"El modelo hizo {e.total_calls} tool calls (loop)"
                     elif getattr(e, "reason", "") == "empty-after-tools":

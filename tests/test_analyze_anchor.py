@@ -70,6 +70,55 @@ def test_anchor_cache_vacio(tmp_path):
     assert sess._retry_analyze_anchor() == ""
 
 
+def test_readonly_retry_conserva_historial_y_solo_read_file(tmp_path, monkeypatch):
+    """E2E real T1: el retry de 0 tools no podía convertir listados en
+    lecturas (3 intentos, 0 read_file). El retry de solo-lectura conserva el
+    historial (listados visibles) y reconstruye el agente solo con read_file.
+    """
+    from langchain_core.messages import HumanMessage
+
+    from core.roles import Role
+
+    sess = _session(tmp_path)
+    sess._read_cache = {"[trace: Foo]": "class Foo {} " * 100}
+    sess._messages = [HumanMessage("listado:\n- a.ts\n- b.ts")]
+    seen = {}
+
+    def _fake_rebuild(role, no_explore=False, tools_override=None):
+        seen["role"] = role
+        seen["tools"] = [getattr(t, "name", t) for t in (tools_override or [])]
+        return True
+
+    sess._rebuild_agent = _fake_rebuild
+    sess._retry_analyze_no_explore(Role.ANALYZE, "budget agotado")
+    # Historial conservado (sin trim): el listado sigue visible para elegir
+    assert any("a.ts" in str(m.content) for m in sess._messages)
+    # Agente reconstruido SOLO con read_file
+    assert seen["tools"] == ["read_file"]
+    # Búsqueda bloqueada, lecturas acotadas
+    assert sess._analyze_budget.max_calls == 0
+    # El mensaje exige leer + citar (no "respondé con lo ya leído")
+    body = str(sess._messages[-1].content)
+    assert "SOLO tenés read_file" in body
+    assert "archivo:línea" in body
+    assert sess._readonly_retry is True
+
+
+def test_readonly_retry_preserva_traces_sin_system_trace(tmp_path, monkeypatch):
+    """Con traces del PASS1 no se dispara _system_trace_for (evita duplicar
+    contenido que distrae al 4B)."""
+    from core.roles import Role
+
+    sess = _session(tmp_path)
+    sess._read_cache = {"[trace: Foo]": "class Foo {} " * 100}
+    sess._rebuild_agent = lambda *a, **k: True
+    called = []
+    monkeypatch.setattr(
+        sess, "_system_trace_for", lambda *a, **k: called.append(1) or "")
+    sess._retry_analyze_no_explore(Role.ANALYZE, "x")
+    assert called == []
+
+
 def test_anchor_incluye_snippets_en_hechos(tmp_path):
     # E2E real T1: el modelo leyó source vía cm__get_code_snippet pero los
     # hechos decían "ninguno" (se filtraban las claves [..]) y el modelo
