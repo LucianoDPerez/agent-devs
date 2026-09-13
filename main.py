@@ -18,8 +18,8 @@ import sys
 import warnings
 from pathlib import Path
 
-from cache import list_repos, load_analysis, snapshot_hash, save_analysis
-from config import LLM_BASE_URL, LLM_MAX_TOKENS, LLM_MODEL_NAME, LLM_TEMPERATURE
+from cache import list_repos, load_analysis, snapshot_diff_files, snapshot_entries, snapshot_hash, save_analysis
+from config import ANALYSIS_LLM_TIMEOUT, ANALYSIS_REUSE_MAX_FILES, LLM_BASE_URL, LLM_MAX_TOKENS, LLM_MODEL_NAME, LLM_TEMPERATURE
 from core.textutil import normalize
 from llm_wrapper import LocalLLM, get_usage, reset_turn_usage
 from orchestration.session import Session
@@ -41,20 +41,44 @@ def _make_llm(max_tokens: int = LLM_MAX_TOKENS, temperature: float = LLM_TEMPERA
     )
 
 
+def _cached_analysis_valid(cached: dict) -> bool:
+    """True si el summary cacheado es usable (no eco del prompt ni vacío)."""
+    analysis = (cached.get("analysis") or "").strip()
+    poison = (
+        "resumen en español de 80-120 palabras",
+        "qué hace el proyecto, arquitectura general y estructura de carpetas",
+    )
+    return not (any(p in analysis.lower() for p in poison) or len(analysis) < 40)
+
+
 def _ensure_analysis(llm: LocalLLM, repo_path: str, status: str | None = None) -> dict:
     cached = load_analysis(repo_path)
     if cached:
         current = snapshot_hash(repo_path)
-        analysis = (cached.get("analysis") or "").strip()
-        poison = (
-            "resumen en español de 80-120 palabras",
-            "qué hace el proyecto, arquitectura general y estructura de carpetas",
-        )
-        is_poison = any(p in analysis.lower() for p in poison) or len(analysis) < 40
-        if current and cached["snapshot_hash"] == current and not is_poison:
+        if current and cached["snapshot_hash"] == current and _cached_analysis_valid(cached):
             return cached
-        if is_poison:
+        if not _cached_analysis_valid(cached):
             print("⚠️  Análisis cacheado inválido; se regenera.\n", flush=True)
+        else:
+            # El repo cambió: si son pocos archivos, el summary sigue válido
+            # (el resumen de un repo no cambia porque editaste una card).
+            # Se refresca el hash sin pagar 1-2 min de LLM.
+            entries = snapshot_entries(repo_path)
+            changed = snapshot_diff_files(cached.get("snapshot_files"), entries)
+            if changed is not None and changed <= ANALYSIS_REUSE_MAX_FILES:
+                save_analysis(
+                    repo_path, snapshot=current,
+                    language=cached.get("language") or "",
+                    tech_stack=cached.get("tech_stack") or "",
+                    analysis=cached.get("analysis") or "",
+                    snapshot_files="\n".join(entries),
+                )
+                print(
+                    f"[dim]📚 Análisis reutilizado ({changed} archivo(s) cambiado(s) "
+                    f"— sin regenerar).[/dim]\n",
+                    flush=True,
+                )
+                return load_analysis(repo_path) or cached
     # Chequeo rápido antes de esperar 420s de timeout si el server está caído
     alive, _ = _llama_server_alive(timeout=1.5)
     if not alive:
@@ -62,7 +86,7 @@ def _ensure_analysis(llm: LocalLLM, repo_path: str, status: str | None = None) -
     if status:
         print(status, flush=True)
     try:
-        result = run_analysis(repo_path, llm, on_token=lambda tok: print(tok, end="", flush=True), timeout=420)
+        result = run_analysis(repo_path, llm, on_token=lambda tok: print(tok, end="", flush=True), timeout=ANALYSIS_LLM_TIMEOUT)
     except FileNotFoundError as e:
         print(f"❌ {e}")
         sys.exit(1)
@@ -73,7 +97,8 @@ def _ensure_analysis(llm: LocalLLM, repo_path: str, status: str | None = None) -
             _llama_down_exit()
         raise
     save_analysis(repo_path, snapshot=result["snapshot"], language=result["language"],
-                  tech_stack=result["tech_stack"], analysis=result["analysis"])
+                  tech_stack=result["tech_stack"], analysis=result["analysis"],
+                  snapshot_files="\n".join(snapshot_entries(repo_path)))
     print("\n\n✅ Análisis guardado en el caché.")
     print(f"🌐 Lenguaje: {result['language']}")
     print(f"🧰 Stack: {result['tech_stack']}\n")
@@ -92,6 +117,35 @@ def _format_cached_context(cached: dict) -> str:
     if cached.get("analysis"):
         parts.append(cached["analysis"])
     return "\n".join(parts)
+
+
+def deterministic_analysis(repo_path: str) -> dict:
+    """Análisis sin LLM: lenguaje + stack + resumen determinista.
+
+    Para `--no-analysis` (sesiones rápidas): usa el caché si es válido y si
+    no, construye el contexto sin llamar al modelo. Nunca tarda más de ~1s.
+    """
+    from analyzer import detect_language, detect_stack, deterministic_summary
+
+    cached = load_analysis(repo_path)
+    if cached and cached.get("snapshot_hash") == snapshot_hash(repo_path) \
+            and _cached_analysis_valid(cached):
+        return cached
+    language = detect_language(repo_path)
+    stack = detect_stack(repo_path) or language
+    entries = snapshot_entries(repo_path)
+    current = snapshot_hash(repo_path)
+    result = {
+        "path": repo_path,
+        "snapshot": current,
+        "language": language,
+        "tech_stack": stack,
+        "analysis": deterministic_summary(repo_path, language, stack),
+    }
+    save_analysis(repo_path, snapshot=current, language=language,
+                  tech_stack=stack, analysis=result["analysis"],
+                  snapshot_files="\n".join(entries))
+    return result
 
 
 def do_analyze(llm: LocalLLM, repo_path: str):
@@ -551,6 +605,8 @@ def main():
     parser = argparse.ArgumentParser(description="AgentDevs — agente de desarrollo con LLM local")
     parser.add_argument("repo", nargs="?", help="Ruta del repositorio (default: directorio actual)")
     parser.add_argument("--analyze", metavar="REPO", help="Genera y guarda el análisis del repo")
+    parser.add_argument("--no-analysis", action="store_true",
+                        help="Salta el análisis LLM al arrancar (usa caché o resumen determinista, ~1s)")
     parser.add_argument("--list", action="store_true", help="Lista los análisis guardados")
     parser.add_argument("--doctor", action="store_true",
                         help="Verifica el entorno (deps, git, MCP, llama-server) e instala lo que falte")
@@ -583,11 +639,15 @@ def main():
 
     reset_turn_usage()
     try:
-        cached = _ensure_analysis(
-            _make_llm(max_tokens=1024, temperature=0.4),
-            repo_path,
-            status="🤔 Analizando el repositorio... (puede tardar 1-2 min). Ctrl+C para cancelar.",
-        )
+        if args.no_analysis:
+            print("📚 Modo --no-analysis: contexto determinista (~1s, sin LLM).")
+            cached = deterministic_analysis(repo_path)
+        else:
+            cached = _ensure_analysis(
+                _make_llm(max_tokens=1024, temperature=0.4),
+                repo_path,
+                status="🤔 Analizando el repositorio... (puede tardar 1-2 min). Ctrl+C para cancelar.",
+            )
     except SystemExit:
         raise
     except BaseException as e:

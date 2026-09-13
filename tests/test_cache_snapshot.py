@@ -63,3 +63,83 @@ class TestSnapshotNoGit:
         (Path(repo) / "plans" / "p.md").write_text("x\n", encoding="utf-8")
         h2 = cache_mod.snapshot_hash(repo)
         assert h1 != h2, "sin git, cualquier cambio de árbol debe invalidar"
+
+
+class TestSnapshotDiff:
+    def test_identical_is_zero(self):
+        repo = _init_git_repo()
+        entries = cache_mod.snapshot_entries(repo)
+        assert cache_mod.snapshot_diff_files("\n".join(entries), entries) == 0
+
+    def test_one_modified_file_counts_one(self):
+        repo = _init_git_repo()
+        old = "\n".join(cache_mod.snapshot_entries(repo))
+        (Path(repo) / "src" / "app.py").write_text("print('changed')\n", encoding="utf-8")
+        new = cache_mod.snapshot_entries(repo)
+        assert cache_mod.snapshot_diff_files(old, new) == 1
+
+    def test_two_tracked_changes_count_two(self):
+        # el snapshot solo mira tracked: untracked no cuenta (diseño),
+        # dos cambios tracked (edit + delete) cuentan 2
+        repo = _init_git_repo()
+        old = "\n".join(cache_mod.snapshot_entries(repo))
+        (Path(repo) / "src" / "new.py").write_text("x = 1\n", encoding="utf-8")
+        (Path(repo) / "src" / "app.py").write_text("print('v2')\n", encoding="utf-8")
+        (Path(repo) / "README.md").unlink()
+        new = cache_mod.snapshot_entries(repo)
+        assert cache_mod.snapshot_diff_files(old, new) == 2
+
+    def test_no_base_returns_none(self):
+        repo = _init_git_repo()
+        assert cache_mod.snapshot_diff_files(None, cache_mod.snapshot_entries(repo)) is None
+        assert cache_mod.snapshot_diff_files("", cache_mod.snapshot_entries(repo)) is None
+
+    def test_hash_matches_entries(self):
+        import hashlib
+
+        repo = _init_git_repo()
+        entries = cache_mod.snapshot_entries(repo)
+        expected = hashlib.sha256("\n".join(entries).encode()).hexdigest()[:16]
+        assert cache_mod.snapshot_hash(repo) == expected
+
+
+class TestReuseRoundtrip:
+    def test_save_and_reuse_small_diff(self, tmp_path, monkeypatch):
+        import tempfile
+
+        db = str(Path(tempfile.mkdtemp()) / "test.db")
+        monkeypatch.setattr(cache_mod, "CACHE_DB", db)
+        repo = _init_git_repo()
+        entries = cache_mod.snapshot_entries(repo)
+        cache_mod.save_analysis(
+            repo, snapshot=cache_mod.snapshot_hash(repo), language="python",
+            tech_stack="python", analysis="Un resumen válido y largo para el test de reuso.",
+            snapshot_files="\n".join(entries),
+        )
+        # toco 2 archivos tracked -> diff chico -> reuso permitido (<=10)
+        (Path(repo) / "src" / "app.py").write_text("print('v2')\n", encoding="utf-8")
+        (Path(repo) / "README.md").write_text("# Test v2\n", encoding="utf-8")
+        cached = cache_mod.load_analysis(repo)
+        assert cached["snapshot_files"] is not None
+        changed = cache_mod.snapshot_diff_files(
+            cached["snapshot_files"], cache_mod.snapshot_entries(repo)
+        )
+        assert changed == 2
+
+
+class TestDeterministicSummary:
+    def test_summary_has_language_and_modules(self):
+        from analyzer import deterministic_summary
+
+        repo = _init_git_repo()
+        out = deterministic_summary(repo, "python", "python")
+        assert "python" in out
+        assert "src" in out
+        assert len(out) >= 40
+
+    def test_summary_without_dirs(self, tmp_path):
+        from analyzer import deterministic_summary
+
+        out = deterministic_summary(str(tmp_path), "go", "go")
+        assert "go" in out
+        assert len(out) >= 20

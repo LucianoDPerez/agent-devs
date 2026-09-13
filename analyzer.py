@@ -290,6 +290,32 @@ def _readme_summary(repo_path: str) -> str:
     return ""
 
 
+def deterministic_summary(repo_path: str, language: str, stack: str) -> str:
+    """Resumen sin LLM: lenguaje + stack + módulos top-level del repo.
+
+    Es el fallback cuando el LLM corta por timeout o cuando se usa
+    --no-analysis. Mejor que "lenguaje: X": le da al system prompt contexto
+    accionable (qué stacks y qué carpetas mirar) sin gastar 1-2 min.
+    """
+    root = Path(repo_path)
+    try:
+        dirs = sorted(
+            d.name for d in root.iterdir()
+            if d.is_dir() and not d.name.startswith(".") and d.name != "__pycache__"
+        )
+    except OSError:
+        dirs = []
+    tech = stack or language
+    if dirs:
+        shown = ", ".join(dirs[:8])
+        extra = f" (+{len(dirs) - 8} más)" if len(dirs) > 8 else ""
+        return (
+            f"Repositorio {language} ({tech}). "
+            f"Módulos principales: {shown}{extra}."
+        )
+    return f"Repositorio {language} ({tech})."
+
+
 def _extract_json(text: str):
     """Busca el primer bloque JSON balanceado `{...}` en el texto."""
     start = text.find("{")
@@ -367,8 +393,10 @@ def run_analysis(repo_path: str, llm: LocalLLM, on_token=None, timeout: float = 
 
     language = detect_language(repo_path)
     fallback_stack = detect_stack(repo_path) or language
-    fallback_summary = _readme_summary(repo_path) or (
-        f"Repositorio en {repo_path}. Lenguaje detectado: {language}."
+    readme = _readme_summary(repo_path)
+    fallback_summary = (
+        readme if len(readme.strip()) >= 40
+        else deterministic_summary(repo_path, language, fallback_stack)
     )
 
     context = build_context(repo_path)

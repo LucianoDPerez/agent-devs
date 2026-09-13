@@ -60,6 +60,12 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(CACHE_DB)
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
+    # Migración liviana: lista de archivos del snapshot para el reuso por
+    # diff chico. Fail-open: si la columna ya existe, se ignora el error.
+    try:
+        conn.execute("ALTER TABLE repos ADD COLUMN snapshot_files TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     return conn
 
@@ -127,11 +133,16 @@ def _repo_files(root: Path):
             return
 
 
-def snapshot_hash(repo_path: str) -> str:
-    """Hash del árbol de archivos (nombre+tamaño+mtime) para invalidación."""
+def snapshot_entries(repo_path: str) -> list[str]:
+    """Lista ordenada 'rel\\tsize\\tmtime' de los archivos del snapshot.
+
+    Es la materia prima de snapshot_hash y del diff para reuso: si entre dos
+    snapshots cambian pocos archivos, el summary cacheado sigue válido y no
+    hace falta regenerar con el LLM.
+    """
     root = Path(repo_path)
     if not root.exists():
-        return ""
+        return []
     lines = []
     try:
         for p in _repo_files(root):
@@ -142,9 +153,45 @@ def snapshot_hash(repo_path: str) -> str:
             except OSError:
                 continue
     except OSError:
-        return ""
+        return []
     lines.sort()
+    return lines
+
+
+def snapshot_hash(repo_path: str) -> str:
+    """Hash del árbol de archivos (nombre+tamaño+mtime) para invalidación."""
+    lines = snapshot_entries(repo_path)
+    if not lines and not Path(repo_path).exists():
+        return ""
     return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()[:16]
+
+
+def snapshot_diff_files(old_files: str | None, new_entries: list[str]) -> int | None:
+    """Cantidad de archivos que difieren entre dos snapshots.
+
+    Compara por path relativo (un archivo modificado cuenta 1, no 2).
+    Retorna None si no hay base de comparación (fila vieja sin snapshot_files):
+    en ese caso corresponde regeneración completa, una sola vez.
+    """
+    if not old_files:
+        return None
+    old_rels = {ln.split("\t", 1)[0] for ln in old_files.splitlines() if ln.strip()}
+    new_rels = {ln.split("\t", 1)[0] for ln in new_entries}
+    old_map = {}
+    for ln in old_files.splitlines():
+        if not ln.strip():
+            continue
+        parts = ln.split("\t")
+        old_map[parts[0]] = ln
+    new_map = {}
+    for ln in new_entries:
+        parts = ln.split("\t")
+        new_map[parts[0]] = ln
+    changed = 0
+    for rel in old_rels | new_rels:
+        if old_map.get(rel) != new_map.get(rel):
+            changed += 1
+    return changed
 
 
 def _now() -> str:
@@ -152,22 +199,39 @@ def _now() -> str:
 
 
 def save_analysis(repo_path: str, *, snapshot: str, language: str,
-                  tech_stack: str, analysis: str) -> None:
+                  tech_stack: str, analysis: str,
+                  snapshot_files: str | None = None) -> None:
     conn = _connect()
     now = _now()
-    conn.execute(
-        """
-        INSERT INTO repos (path, snapshot_hash, language, tech_stack, analysis, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(path) DO UPDATE SET
-            snapshot_hash = excluded.snapshot_hash,
-            language = excluded.language,
-            tech_stack = excluded.tech_stack,
-            analysis = excluded.analysis,
-            updated_at = excluded.updated_at
-        """,
-        (normalize_path(repo_path), snapshot, language, tech_stack, analysis, now, now),
-    )
+    if snapshot_files is None:
+        conn.execute(
+            """
+            INSERT INTO repos (path, snapshot_hash, language, tech_stack, analysis, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(path) DO UPDATE SET
+                snapshot_hash = excluded.snapshot_hash,
+                language = excluded.language,
+                tech_stack = excluded.tech_stack,
+                analysis = excluded.analysis,
+                updated_at = excluded.updated_at
+            """,
+            (normalize_path(repo_path), snapshot, language, tech_stack, analysis, now, now),
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO repos (path, snapshot_hash, language, tech_stack, analysis, snapshot_files, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(path) DO UPDATE SET
+                snapshot_hash = excluded.snapshot_hash,
+                language = excluded.language,
+                tech_stack = excluded.tech_stack,
+                analysis = excluded.analysis,
+                snapshot_files = excluded.snapshot_files,
+                updated_at = excluded.updated_at
+            """,
+            (normalize_path(repo_path), snapshot, language, tech_stack, analysis, snapshot_files, now, now),
+        )
     conn.commit()
     conn.close()
 

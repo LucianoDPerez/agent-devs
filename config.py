@@ -7,6 +7,15 @@ LLM_TEMPERATURE = 0.2
 # respuesta final (razona 1500-2500 chars). 300s cortaba respuestas largas.
 LLM_TIMEOUT = 600
 LLM_MAX_TOKENS = 3584
+# Análisis de repo (startup): timeout de la llamada LLM de resumen. 420s
+# dejaba al usuario 1-2 min (thinking + ~200 tokens a 6 t/s) cada vez que el
+# snapshot cambiaba. 120s alcanza para un JSON corto; si corta, se usa el
+# fallback determinista (que ahora es decente, no "lenguaje: X").
+ANALYSIS_LLM_TIMEOUT = 120
+# Reuso de análisis: si entre snapshots cambian ≤ N archivos (el caso "toqué
+# 3 archivos y el resumen del repo no cambió"), se conserva el summary y se
+# refresca el hash sin llamar al LLM. Cambios grandes sí regeneran.
+ANALYSIS_REUSE_MAX_FILES = 10
 # EXECUTE: 2560 era para el 4B que quemaba tokens en razonamiento.
 # Modelos nuevos (Ling-3.0-tiny) necesitan más margen para tool calls + verify.
 EXECUTE_MAX_TOKENS = 4096
