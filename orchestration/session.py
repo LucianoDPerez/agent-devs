@@ -1274,15 +1274,38 @@ class Session:
         return "\n".join(parts)
 
     def _retry_analyze_readonly(self, new_role: Role, reason: str) -> None:
-        """Retry de ANALYZE/PLAN con SOLO read_file (sin búsqueda ni listados).
+        """Retry de ANALYZE/PLAN en dos etapas:
 
-        El retry anterior (0 tools) no podía convertir listados en lecturas:
-        el PASS1 moría en breadth (E2E real T1: 3 intentos, 0 read_file) y el
-        retry respondía a ciegas. Acá se conserva el historial (los listados
-        quedan visibles para elegir QUÉ leer) y el agente solo puede leer
-        2-8 archivos clave antes de responder con evidencia.
+        1ª vez: SOLO read_file (sin búsqueda ni listados). El retry anterior
+        (0 tools) no podía convertir listados en lecturas: el PASS1 moría en
+        breadth (E2E real T1: 3 intentos, 0 read_file) y el retry respondía a
+        ciegas. Acá se conserva el historial (los listados quedan visibles
+        para elegir QUÉ leer) y el agente solo puede leer archivos clave.
+        2ª vez (si también se agota): SIN tools + ancla completa — responder
+        con lo leído. Dos etapas calzan justo en max_attempts=3.
         """
         from tools.filesystem import read_file
+
+        if self._readonly_retry:
+            # Segunda vuelta: ya se leyó lo legible; responder SIN tools con
+            # el ancla completa (evita rumiar hasta agotar output — E2E real
+            # T1: 15k chars de razonamiento sin acción → respuesta vacía).
+            # El ancla se regenera: el trim puede haber cortado la de la 1ª.
+            self._trim_for_retry()
+            self._messages.append(HumanMessage(
+                "RESPONDÉ AHORA el análisis final en texto con lo que leíste "
+                "(ancla + historial): citá archivo:línea por afirmación. Ya no "
+                "tenés tools — no intentes leer más. Si algo no se pudo "
+                "verificar, decí QUÉ falta en vez de completar."
+                + self._retry_analyze_anchor()
+            ))
+            self._rebuild_agent(new_role, no_explore=True)
+            self._analyze_budget.reset()
+            console.print(
+                f"\n[yellow]⚠️  {reason} — Respondiendo con lo leído "
+                "(sin tools)…[/yellow]\n"
+            )
+            return
 
         # Turno interactivo con tools: timeouts normales (no el modo paciente
         # del retry sin tools) y flag para que el guard PLAN-EXPLORA no exija

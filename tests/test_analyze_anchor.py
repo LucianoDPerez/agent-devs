@@ -104,6 +104,34 @@ def test_readonly_retry_conserva_historial_y_solo_read_file(tmp_path, monkeypatc
     assert sess._readonly_retry is True
 
 
+def test_readonly_retry_segunda_vuelta_responde_sin_tools(tmp_path):
+    """Si la etapa de lectura también se agota, 2ª vuelta SIN tools + ancla
+    (evita rumiar hasta agotar output — E2E real T1: respuesta vacía)."""
+    from langchain_core.messages import HumanMessage
+
+    from core.roles import Role
+
+    sess = _session(tmp_path)
+    sess._read_cache = {"src/a.ts": "contenido A " * 100}
+    sess._messages = [HumanMessage("pregunta")]
+    seen = {}
+
+    def _fake_rebuild(role, no_explore=False, tools_override=None):
+        seen["no_explore"] = no_explore
+        seen["tools"] = tools_override
+        return True
+
+    sess._rebuild_agent = _fake_rebuild
+    sess._retry_analyze_no_explore(Role.ANALYZE, "1")
+    assert seen["tools"] is not None  # 1ª: solo-lectura
+    sess._retry_analyze_no_explore(Role.ANALYZE, "2")
+    assert seen["no_explore"] is True  # 2ª: sin tools
+    assert seen["tools"] is None
+    body = str(sess._messages[-1].content)
+    assert "RESPONDÉ AHORA" in body
+    assert "CONTENIDO REAL DE src/a.ts" in body  # ancla regenerada
+
+
 def test_readonly_retry_preserva_traces_sin_system_trace(tmp_path, monkeypatch):
     """Con traces del PASS1 no se dispara _system_trace_for (evita duplicar
     contenido que distrae al 4B)."""
