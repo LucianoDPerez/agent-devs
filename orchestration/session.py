@@ -1349,9 +1349,11 @@ class Session:
             "list_files ni búsqueda): la estructura ya la ubicaste arriba — "
             "leé los 2-4 ARCHIVOS clave del tema (read_file es para archivos, "
             "NO directorios: pasar un directorio devuelve error y pierdes "
-            "tiempo) y recién ahí respondé el análisis citando archivo:línea "
-            "de lo leído. Si con esas lecturas no alcanza, decí QUÉ falta en "
-            "vez de completar."
+            "tiempo; los nombres citados en la pregunta son tus objetivos). "
+            "PROHIBIDO responder con un plan de pasos futuros ('voy a leer…'): "
+            "tu PRÓXIMA ACCIÓN debe ser una tool call read_file real. Recién "
+            "con el contenido leído respondé citando archivo:línea. Si con "
+            "esas lecturas no alcanza, decí QUÉ falta en vez de completar."
         )
         # Sin trim: los listados del PASS1 deben quedar visibles para elegir
         # qué leer. El agente restringido no puede hacer crecer el contexto

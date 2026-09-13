@@ -101,6 +101,7 @@ def test_readonly_retry_conserva_historial_y_solo_read_file(tmp_path, monkeypatc
     body = str(sess._messages[-1].content)
     assert "SOLO tenés read_file" in body
     assert "archivo:línea" in body
+    assert "PROHIBIDO responder con un plan de pasos futuros" in body
     assert sess._readonly_retry is True
 
 
