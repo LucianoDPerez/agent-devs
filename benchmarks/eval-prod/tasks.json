@@ -1,0 +1,55 @@
+{
+  "suite": "eval-prod",
+  "repo": "/Users/luchop/PROYECTOS IA/Medicos",
+  "branch": "eval/agent-battery",
+  "harness": "agent-lucho main (slash+evidence fixes)",
+  "model": "agents-a1-4b (llama.cpp local, 4B)",
+  "objetivo": "Bateria de 5 tests de produccion sobre Medicos (NestJS+Prisma backend, Vite frontend). Situaciones reales: si algo falla se corrige el harness y se itera. Todo cambio del agente queda en la rama eval/agent-battery.",
+  "baseline_T0": {
+    "backend_build": "npm run build --prefix backend (tsc) -> PASS",
+    "frontend_build": "npm run build --prefix frontend (tsc -b && vite build) -> PASS",
+    "root_scripts": "ROTOS preexistente: package.json sin campo workspaces, todo script con -w falla con 'No workspaces found'. El agente debe usar paths de subproyecto (regla monorepo).",
+    "tests": "NO hay runner de tests ni archivos .test/.spec en el repo.",
+    "lint": "NO hay script de lint en backend ni frontend.",
+    "db": "MySQL en docker (medicos-db-1, healthy). Backup en baseline/db_dump.sql (2 tablas).",
+    "node": "roto en este shell (dylibs) -> reparado con brew reinstall llhttp simdutf (node v26.8.2).",
+    "dirty_preexistente": "M .gitignore, M AGENTS.md (del usuario, no tocar)."
+  },
+  "tasks": [
+    {
+      "id": "T1",
+      "titulo": "Comprension del repo (auditoria CRUD, sin cambios)",
+      "prompt": "Necesito agregar una funcionalidad de auditoría a este proyecto. Antes de modificar nada, analizá el código y explicame dónde implementarías el registro de auditoría para las operaciones de creación, actualización y eliminación de Pacientes y Consultas. Indicá qué archivos/clases/módulos tocarías y por qué. No hagas cambios todavía.",
+      "rubrica_PASS": "Cita archivos con path:linea reales verificados con tools. Cero paths inventados. Cero modificaciones en disco (git status igual al baseline).",
+      "evalua": "navegación, comprensión arquitectónica, planificar sin tocar código"
+    },
+    {
+      "id": "T2",
+      "titulo": "Bug fixing duplicados por concurrencia (Paciente)",
+      "prompt": "Hay un bug: algunos registros de Paciente aparecen duplicados cuando el endpoint de creación recibe dos requests prácticamente al mismo tiempo (doble click / reintento). Investigá el código relacionado (CreatePaciente, repositorio, schema Prisma, rutas) y determiná la causa con evidencia. Proponé una solución y, si tenés suficiente información, implementala. Verificá con el build del backend que no rompiste nada y reportá qué cambiaste.",
+      "rubrica_PASS": "Causa raíz con evidencia archivo:linea. Fix implementado siguiendo patrones del repo. Build backend tsc en verde. Sin regresiones (mismo baseline).",
+      "evalua": "debugging real + concurrencia + edición multiarchivo + verificación"
+    },
+    {
+      "id": "T3",
+      "titulo": "Feature desactivación múltiple de Pacientes",
+      "prompt": "Necesito agregar una funcionalidad para permitir desactivar múltiples pacientes en una sola operación. Analizá primero cómo están implementados actualmente CreatePaciente, UpdatePaciente y DeletePaciente en backend/src/application/pacientes, el repositorio, las rutas en backend/src/interfaces/http/routes/pacientesRoutes.ts y el schema Prisma. Diseñá la solución siguiendo los patrones existentes del proyecto (caso de uso + repositorio + ruta), implementala y verificá con el build del backend. Al finalizar reportá exactamente qué archivos creaste o modificaste. No corras migraciones contra la base todavía: incluí el cambio de schema necesario pero avisá que la migración queda pendiente.",
+      "rubrica_PASS": "Endpoint + caso de uso + repositorio siguiendo patrones existentes. Build backend verde. Reporte exacto de archivos. Sin migración aplicada.",
+      "evalua": "autonomía, consistencia arquitectónica, múltiples archivos, punta a punta"
+    },
+    {
+      "id": "T4",
+      "titulo": "Seguridad auth (sin cambios)",
+      "prompt": "Revisá el flujo de autenticación y autorización de este proyecto buscando vulnerabilidades o comportamientos inseguros. No quiero una lista genérica: inspeccioná la implementación real (middlewares en backend/src/interfaces/http/middlewares, rutas, controladores). Identificá los problemas que consideres relevantes, explicá su impacto y proponé correcciones priorizadas. No modifiques código todavía.",
+      "rubrica_PASS": "Hallazgos con evidencia archivo:linea del código real. Distingue reales de falsos positivos. Cero modificaciones en disco.",
+      "evalua": "análisis de seguridad + criterio real vs falso positivo"
+    },
+    {
+      "id": "T5",
+      "titulo": "Mejora autónoma sin cambio funcional",
+      "prompt": "Investigá este repositorio y encontrá una mejora concreta que pueda hacerse sin cambiar el comportamiento funcional existente. Elegí vos la mejora basándote en evidencia del código. Antes de modificar nada explicame brevemente qué encontraste y qué vas a hacer. Después implementá la mejora y verificá con el build correspondiente que todo siga funcionando. Al finalizar resumí los cambios y las verificaciones realizadas.",
+      "rubrica_PASS": "Mejora elegida con evidencia. Explicación previa. Implementación + build verde. Sin cambio funcional.",
+      "evalua": "iniciativa + razonamiento + planificación + ejecución + criterio de cierre"
+    }
+  ]
+}
