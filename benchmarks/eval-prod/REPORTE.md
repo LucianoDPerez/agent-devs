@@ -99,7 +99,59 @@ ciclo queda registrado acá.
   mal en preguntas amplias. Se sigue con T3 (EXECUTE con preload/scaffolding,
   donde el harness más ayuda) en vez de más tweaks de mensajes.
 
-## T3 — Feature desactivación múltiple
+## T2 — Bug fixing (9B, intento 2)
+
+- 666s, rol PLAN. Leyó schema + CreatePaciente + rutas + repositorio (todos
+  legibles, 0 errores) pero declaró "no fueron leídos con contenido".
+  Hipótesis: el encuadre "intento anterior" invalida las lecturas en la
+  cabeza del modelo.
+- Fix aplicado (`b87a83e` + este commit de test): ancla en PRESENTE
+  ("EVIDENCIA VERIFICADA DE ESTE TURNO", "CUENTA como lectura válida").
+- Intento 3 (9B): EN CURSO (`results/T2/run3.log`)
+- Veredicto: —
+- Evidencia: —
+
+## T2 — Bug fixing (9B, intento 4, dos turnos)
+
+- El prompt rutea PLAN ("Proponé...") y la rúbrica exige implementar: se corre
+  en 2 turnos encadenados (investigar → implementar), como uso real.
+- Fix previo (`validador backticks/rangos`): el intento 3 citó
+  `` `CreatePaciente.ts:15` `` en archivo de 14 líneas sin que nada lo frene.
+- EN CURSO (`results/T2/run4.log`)
+- Veredicto: —
+- Evidencia: —
+
+## T2 — Bug fixing (9B, intento 4, dos turnos PLAN→EXECUTE)
+
+- 1533s. Turno 1 investiga bien (reads exactos). Turno 2 implementa MECANISMO
+  ERRÓNEO: `uuid` generado por request (no evita duplicados, cada request
+  genera uno distinto) + doble `@id` en schema (Prisma inválido) + dep `uuid`
+  sin instalar + entidad inconsistente. Build backend en ROJO (errores
+  TS2322/TS2741, verificado a mano). Nunca corrió la verificación pedida.
+  Revertido todo; build restaurado en verde.
+- Veredicto: **FAIL** (fix incorrecto + red build + sin verificación).
+  Transcript: `results/T2/transcript.md` (2 turnos) + `run4.log`.
+
+## T3 — Feature desactivación múltiple (9B) — PASS (primer PASS de la batería)
+
+- Turno 1 (ANALYZE): investiga los 5 casos de uso + repo + rutas con citas
+  reales. Turno 2 (EXECUTE): implementa `DeactivatePacientes` (caso de uso con
+  patrón existente) + `DeactivatePacientesDTO` + `IPacienteRepository.deactivate`
+  + impl Prisma (`updateMany`, atómico) + método en controller + ruta
+  `POST /deactivate` con middleware validate + campo `activo` en schema
+  (válido por `prisma validate`) + extensión mínima de `validate.ts` para
+  reglas array. Total ~29 min.
+- El agente corrió `db:generate` (solo regenera cliente, NO migra) para dejar
+  `tsc` en verde (exit 0 verificado a mano). DB intacta (sin columna `activo`,
+  migración pendiente como se le pidió). Notable: NO tocó la DB pese a tener
+  el servidor a mano — respetó la restricción.
+- Imperfecciones registradas: una iteración intermedia degradó `updateMany` a
+  loop N+1 (quedó el loop: funciona pero menos eficiente); tocó `validate.ts`
+  compartido (aditivo, build verde); el codemod PATH FIX metió ruido en
+  `api.ts` (revertido, es determinístico y ajeno a T3).
+- Evidencia: `results/T3/transcript.md` + `transcript2.md` + `run2/run3.log`.
+  Cambios vivos en la rama (feature realista pendiente de migración).
+
 
 - Nota de ruteo: el prompt arranca con "Necesito agregar..." + "Analizá
   primero" → el router da ANALYZE (el verbo de análisis subordinado gana al
@@ -110,17 +162,45 @@ ciclo queda registrado acá.
 - Veredicto: —
 - Evidencia: —
 
-## T4 — Seguridad auth (sin cambios)
+## T4 — Seguridad auth (9B) — PASS
 
-- Estado: PENDIENTE
-- Veredicto: —
-- Evidencia: —
+- 1051s, rol REVIEW, ~15 reads (middlewares, rutas, 3 controllers). Hallazgo
+  central CORRECTO y de alto impacto: no existe authN/authZ (solo helmet/cors/
+  rateLimit en `server.ts`), todo expuesto. Citas reales con líneas
+  plausibles; detectó hasta el método `deactivate` agregado por T3 (leyó el
+  working tree, no el caché). Sin FPs inventados (nada de "SQL injection"
+  genérico). Warnings honestamente condicionales. Cero modificaciones.
+- Detalle menor: sección Verificados usada para un "NO verificado" (debió
+  quedar vacía o listar cumplimientos).
+- Evidencia: `results/T4/transcript.md` + `run1.log`.
 
-## T5 — Mejora autónoma
+## T5 — Mejora autónoma (9B) — PASS
 
-- Estado: PENDIENTE
-- Veredicto: —
-- Evidencia: —
+- 852s, rol EXECUTE. Eligió con evidencia el roto preexistente de T0 (scripts
+  raíz `-w` sin `workspaces`), lo explicó ANTES de actuar y aplicó un diff
+  mínimo (4 líneas en `package.json` raíz). Se autocorrigió un `console.log`
+  propio en `server.ts` (diff neto cero ahí). Verificación real: `npm run
+  build` en raíz ahora corre backend+frontend en verde (re-verificado a mano;
+  antes fallaba con `No workspaces found`). Cero cambio funcional.
+- Evidencia: `results/T5/transcript.md` + `run1.log`.
+
+## Tabla de veredictos (9B qwen35-9b)
+
+| Test | Veredicto | Tiempo | Nota |
+|------|-----------|--------|------|
+| T1b (verificación citada) | PARCIAL | ~9 min | 100% grounded, 2.5/4 veredictos |
+| EXEC angosto | PASS | ~3 min | edit exacto + build verde |
+| T2 (bug concurrencia) | FAIL | ~26 min | mecanismo erróneo + build rojo (revertido) |
+| T3 (feature bulk) | PASS | ~50 min | feature completa + build verde, migración pendiente |
+| T4 (seguridad) | PASS | ~18 min | hallazgo real con evidencia, 0 cambios |
+| T5 (autónoma) | PASS | ~14 min | workspaces + builds raíz en verde |
+
+## Tabla de veredictos (4B agents-a1-4b, referencia)
+
+| Test | Veredicto | Nota |
+|------|-----------|------|
+| T1 (comprensión amplia) | FAIL (7 intentos) | no sintetiza; negativa honesta → confabulada |
+| T2 (bug concurrencia) | FAIL (2 intentos) | lee bien, declara no-leído / no implementa |
 
 ## T1b — Verificación de tareas citadas (9B, caso original de la queja)
 
