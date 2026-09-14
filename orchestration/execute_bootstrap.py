@@ -1011,9 +1011,10 @@ def _build_preload_parts(
         parts.append(
             "INSTRUCCIÓN OBLIGATORIA (REVIEW AC-AWARE): "
             + scope_rule
-            + "El contenido de tareas YA ESTÁ ARRIBA. "
+            +             "El contenido de tareas YA ESTÁ ARRIBA. "
             + "Revisá el código (y el diff/branch si aplica) contra esos criterios. "
-            + "CRITICAL = checkbox no cumplido. "
+            + "CRITICAL = checkbox no cumplido; los cumplidos van en la sección "
+            + "Verificados (también con archivo:línea). "
             + "Cada hallazgo se cita con archivo:línea + output real de la tool. "
             + "Emítí el informe UNA vez y terminá."
         )
@@ -1137,7 +1138,8 @@ def preload_for_review(user_input: str, repo_path: str | None = None) -> str:
             "El git status YA ESTÁ ARRIBA. "
             "LEÉ CADA archivo listado en `git diff main...BRANCH --name-only` con read_file. "
             "Si ese bloque no existe, leé los archivos del git status. "
-            "Clasificá CRITICAL / WARNING / SUGGESTION. "
+            "Clasificá CRITICAL / WARNING / SUGGESTION y listá los criterios "
+            "CUMPLIDOS en la sección Verificados (con archivo:línea también). "
             "Cita archivo:línea para cada hallazgo. "
             "Emítí el informe UNA vez y terminá."
         )

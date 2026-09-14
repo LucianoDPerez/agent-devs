@@ -49,6 +49,9 @@ FORMATO DEL INFORME:
 
 ## Hallazgos SUGGESTION
 - **[archivo:línea]** Mejora opcional
+
+## Verificados (criterios cumplidos con evidencia)
+- **[archivo:línea]** Criterio cumplido
 ```
 
 REGLAS:
