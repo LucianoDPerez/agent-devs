@@ -590,13 +590,30 @@ Resumen:"""
         loop.close()
 
 
-def run_commit_verification(repo_path: str) -> tuple[bool, str]:
+def run_commit_verification(
+    repo_path: str, reuse: dict[str, bool] | None = None
+) -> tuple[bool, str]:
     """Batería lint/tests/build para el gate de commit y /verify.
 
     Retorna (pasó_todo, reporte_corto). Solo `[PASSED]` explícito cuenta;
     cualquier fallo, timeout o tool ausente → False. Fail-open ante errores
     del propio harness (nunca raisea).
+
+    ``reuse``: resultados del turno actual (session._verify_results). Si ya
+    están lint+tests+build en verde (o run_verify verde que los cubre), se
+    reusa sin re-ejecutar: evita la 3ª batería del turno (modelo + post-write
+    gate + commit gate) que quemaba contexto y tiempo.
     """
+    if reuse:
+        trio_ok = all(reuse.get(k) is True for k in ("run_lint", "run_tests", "run_build"))
+        uni_ok = reuse.get("run_verify") is True
+        if trio_ok or uni_ok:
+            src = "run_verify" if uni_ok and not trio_ok else "turno actual"
+            return True, (
+                f"  ✅ lint: reusa verificación verde ({src})\n"
+                f"  ✅ tests: reusa verificación verde ({src})\n"
+                f"  ✅ build: reusa verificación verde ({src})"
+            )
     try:
         from tools.verify import run_build, run_lint, run_tests
     except Exception as e:
@@ -1714,7 +1731,7 @@ class Session:
         # si la batería falla, se aborta y se pide corregir primero.
         console.print("[dim]🔍 Verificando antes de commitear (lint/tests/build)…[/dim]")
         try:
-            passed, report = run_commit_verification(self.repo_path)
+            passed, report = run_commit_verification(self.repo_path, reuse=self._verify_results)
         except Exception as e:
             console.print(f"[dim]No se pudo verificar ({e}): commiteo igual bajo tu responsabilidad.[/dim]")
             passed, report = True, ""

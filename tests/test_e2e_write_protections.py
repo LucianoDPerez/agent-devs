@@ -357,3 +357,35 @@ def test_e2e_main_warns_on_dirty_repo():
     assert hasattr(main, "_warn_dirty_repo")
     with open(main.__file__, encoding="utf-8") as fh:
         assert "_warn_dirty_repo(repo_path)" in fh.read()
+
+
+def test_e2e_protected_write_failfast_no_retry(tmp_path):
+    """Fail-fast para planificación protegida: intento 1 = STOP terminal sin
+    ejecutar la tool, intento 2 idéntico = excepción (no 3-4 reintentos)."""
+    import pytest
+
+    from orchestration.tool_dedupe import (
+        ExploreBudget,
+        ToolBudgetExceeded,
+        ToolCallDedupe,
+        wrap_tools_with_dedupe,
+    )
+    from tools.filesystem import write_file
+
+    target = tmp_path / ".agent" / "tasks.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("{}")
+    original = target.read_text()
+
+    dedupe = ToolCallDedupe(max_repeats=1)
+    wrapped = wrap_tools_with_dedupe(
+        [write_file], dedupe, ExploreBudget(), repo_path=str(tmp_path)
+    )
+    wf = wrapped[0]
+    r1 = wf.invoke({"path": str(target), "content": "hola"})
+    assert "PROTEGIDO" in r1
+    assert "NO lo" in r1 and "reintentes" in r1
+    assert target.read_text() == original  # no se ejecutó el write
+    with pytest.raises(ToolBudgetExceeded, match="PROTEGIDA"):
+        wf.invoke({"path": str(target), "content": "hola"})
+    assert target.read_text() == original

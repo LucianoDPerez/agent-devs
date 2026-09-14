@@ -26,7 +26,7 @@ Sos el ÚNICO rol del agente: analizás, desglosás, implementás por subtareas,
 ### 4. VERIFICAR — por checkpoint, no por archivo
 NO verifiques después de cada archivo (quema contexto). Verificá con criterio:
 - Tras cada subtarea: UNA sola tool, la más relevante (¿tocaste 1-2 archivos? `run_lint`. ¿lógica? `run_tests`).
-- Batería COMPLETA (`run_lint` + `run_tests` + `run_build` con path al SUBPROYECTO si es monorepo) obligatoria en dos momentos: al cerrar la tarea (antes del LISTO) y antes de commitear — el sistema la corre sola al aprobar el commit, y si falla NO se commitea.
+- Batería COMPLETA en UNA llamada con `run_verify(path=...)` (lint+tests+build juntos, un solo mensaje) obligatoria en dos momentos: al cerrar la tarea (antes del LISTO) y antes de commitear — el sistema la corre sola al aprobar el commit, y si falla NO se commitea. NO llames run_lint+run_tests+run_build por separado para la batería: son 3 mensajes gigantes.
 - Si ya verificaste y NO tocaste nada desde entonces, NO repitas la batería: el sistema te devuelve el resultado cacheado. Repetir lint/tests/build sin cambios es ritual, no trabajo.
 - Si solo tocaste infra/docs (`.tf`, `.md`, `.json` de config), lint/tests/build de la app NO validan nada: decilo y validá con la tool del stack (`terraform fmt`/`validate`) o pedí revisión manual en vez de reportar verde.
 - El usuario también puede pedirla cuando quiera con `/verify`.

@@ -342,7 +342,9 @@ def run_fullscreen(session) -> None:
             from orchestration.session import run_commit_verification
 
             console.print("[dim]🔍 Verificando (lint/tests/build)…[/dim]")
-            passed, report = run_commit_verification(session.repo_path)
+            passed, report = run_commit_verification(
+                session.repo_path, reuse=getattr(session, "_verify_results", None)
+            )
             console.print(report)
             console.print(
                 "[green]✅ Todo verde.[/green]" if passed
@@ -778,7 +780,9 @@ def main():
                 from orchestration.session import run_commit_verification
 
                 console.print("[dim]🔍 Verificando (lint/tests/build)…[/dim]")
-                passed, report = run_commit_verification(session.repo_path)
+                passed, report = run_commit_verification(
+                    session.repo_path, reuse=getattr(session, "_verify_results", None)
+                )
                 console.print(report + "\n")
                 console.print(
                     "[green]✅ Todo verde.[/green]\n" if passed

@@ -111,7 +111,7 @@ class TestResolveCommand:
             root = Path(tmp)
             _write(root / "pyproject.toml", "[project]\nname = 'x'\n")
             cmd = _resolve_command(root, "test")
-            assert cmd == ["pytest"]
+            assert cmd == ["pytest", "-q"]
 
     def test_python_build_with_build_system(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -132,7 +132,7 @@ class TestResolveCommand:
                 "[project]\nname='x'\n[tool.ruff]\n[build-system]\nrequires=['hatchling']\n",
             )
             _write(root / "uv.lock", "version = 1\n")
-            assert _resolve_command(root, "test") == ["uv", "run", "pytest"]
+            assert _resolve_command(root, "test") == ["uv", "run", "pytest", "-q"]
             assert _resolve_command(root, "build") == ["uv", "build"]
 
     def test_lint_prefiere_ruff_del_path(self, monkeypatch):
@@ -237,7 +237,7 @@ class TestRunVerifyTools:
             result = run_tests.invoke({"path": tmp})
 
         assert "PASSED" in result
-        mock_run.assert_called_once_with(tmp, ["pytest"])
+        mock_run.assert_called_once_with(tmp, ["pytest", "-q"])
 
     @patch("tools.verify._run_command")
     def test_run_build_invokes_npm(self, mock_run):
@@ -401,3 +401,73 @@ def test_run_npm_script_rejects_non_node_stack(tmp_path):
     assert "solo funciona en repos NODE" in str(exc.value)
     assert "PYTHON" in str(exc.value)
     assert "run_install" in str(exc.value)
+
+
+def test_truncate_keeps_head_and_tail():
+    """Outputs largos: head 2k + tail 6k, no head 40k (el error vive al final)."""
+    from tools.verify import _truncate
+    big = "A" * 5000 + "B" * 5000 + "C" * 5000
+    out = _truncate(big)
+    assert len(out) < len(big)
+    assert out.startswith("A" * 100)
+    assert out.rstrip().endswith("C" * 100)
+    assert "middle truncated" in out
+
+
+def test_shorten_passed_drops_long_green_log():
+    """PASSED largo (uv build 16k) → resumen corto que sigue empezando en [PASSED]."""
+    from tools.verify import _shorten_passed
+    long_pass = "[PASSED] exit=0\n$ uv build\n" + "x" * 20000
+    short = _shorten_passed(long_pass)
+    assert short.startswith("[PASSED]")
+    assert len(short) < 1000
+    assert "output completo omitido" in short
+
+
+def test_shorten_passed_keeps_short_and_fail():
+    from tools.verify import _shorten_passed
+    short = "[PASSED] exit=0\n$ ruff check .\n(no output)"
+    assert _shorten_passed(short) == short
+    fail = "[FAILED] exit=1\n$ pytest\nF test_x"
+    assert _shorten_passed(fail) == fail
+
+
+def test_run_verify_all_green_single_message(tmp_path):
+    """run_verify: 3 checks en UNA tool, un solo mensaje en verde."""
+    from unittest.mock import patch
+
+    from tools import verify as v
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='t'\n")
+    with patch.object(
+        v, "_run_verify",
+        side_effect=["[PASSED] lint ok", "[PASSED] tests ok", "[PASSED] build ok"],
+    ):
+        out = v.run_verify.invoke({"path": str(tmp_path)})
+    assert out.startswith("[PASSED]")
+    assert "lint" in out and "tests" in out and "build" in out
+    assert "no repitas la batería" in out
+
+
+def test_run_verify_one_red_shows_only_failed_tail(tmp_path):
+    from unittest.mock import patch
+
+    from tools import verify as v
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='t'\n")
+    with patch.object(
+        v, "_run_verify",
+        side_effect=["[PASSED] lint ok", "[FAILED] exit=1\nF test_x", "[PASSED] build ok"],
+    ):
+        out = v.run_verify.invoke({"path": str(tmp_path)})
+    assert out.startswith("[FAILED]")
+    assert "❌ test" in out
+    assert "F test_x" in out
+
+
+def test_run_verify_registered_as_verify_tool():
+    """run_verify cuenta como verify (budget, cache, pools por rol)."""
+    from orchestration.tool_dedupe import VERIFY_TOOL_NAMES
+    from tools import EXECUTOR_TOOLS, REVIEWER_TOOLS
+
+    assert "run_verify" in VERIFY_TOOL_NAMES
+    assert "run_verify" in [t.name for t in EXECUTOR_TOOLS]
+    assert "run_verify" in [t.name for t in REVIEWER_TOOLS]

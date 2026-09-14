@@ -13,14 +13,24 @@ try:
 except ImportError:  # pragma: no cover - tests sin config
     AUTO_INSTALL_ON_VERIFY_FAIL = True
 
-_MAX_OUTPUT_BYTES = 40_000
+_MAX_OUTPUT_BYTES = 8_000
+_HEAD_BYTES = 2_000
+_TAIL_BYTES = 6_000
 _DEFAULT_TIMEOUT = 180
+# PASSED corto: el LLM solo necesita el veredicto, no el log completo.
+# El log completo ya lo ve el usuario en consola/disco.
+_MAX_PASSED_BYTES = 500
 
 
 def _truncate(text: str, limit: int = _MAX_OUTPUT_BYTES) -> str:
     if len(text) <= limit:
         return text
-    return text[:limit] + f"\n... (truncated at {limit:,} bytes)"
+    head = text[:_HEAD_BYTES]
+    tail = text[len(text) - _TAIL_BYTES:] if len(text) > _TAIL_BYTES else ""
+    return (
+        f"{head}\n... (middle truncated: {len(text):,} bytes total, "
+        f"showing head {_HEAD_BYTES:,} + tail {_TAIL_BYTES:,}) ...\n{tail}"
+    )
 
 
 def _validate_cwd(path: str) -> str | None:
@@ -220,7 +230,7 @@ def _resolve_command(root: Path, action: str) -> list[str] | str:
             return _ruff_cmd(root, uv_py)
         return "No ruff configuration or dependency found for Python linting"
     if action == "test":
-        return ["uv", "run", "pytest"] if uv_py else ["pytest"]
+        return ["uv", "run", "pytest", "-q"] if uv_py else ["pytest", "-q"]
     if action == "build":
         if _python_has_build_system(root):
             return ["uv", "build"] if uv_py else ["python", "-m", "build"]
@@ -315,6 +325,26 @@ def _run_python_install(root: Path) -> str:
     return _run_command(str(root), [str(pip), "install", "-e", "."])
 
 
+def _shorten_passed(result: str) -> str:
+    """PASSED corto para el contexto del LLM: veredicto + comando, sin log.
+
+    El log completo ya lo ve el usuario en consola. Inyectar 16k de `uv build`
+    en verde al historial es puro gasto de contexto (E2E: batería = 20k chars).
+    Solo `[PASSED]` explícito cuenta; el resto pasa intacto (fallos, timeouts).
+    """
+    if not result.startswith("[PASSED]"):
+        return result
+    if len(result) <= _MAX_PASSED_BYTES:
+        return result
+    lines = result.splitlines()
+    # Primeras 2 líneas = veredicto + comando (acotadas, nunca el log gigante).
+    head = "\n".join(lines[:2] if lines else [result])[:300]
+    return (
+        f"{head}\n... (output completo omitido: {len(result):,} chars, "
+        f"verificación verde — pedí /verify para ver el log)"
+    )
+
+
 def _run_verify(path: str, action: str) -> str:
     error = _validate_cwd(path)
     if error:
@@ -346,7 +376,7 @@ def _run_verify(path: str, action: str) -> str:
         elif stack == "python" and not (root / ".venv").is_dir():
             result += "\n⚠️  .venv missing. Run: run_install(path=...) first."
 
-    return result
+    return _shorten_passed(result)
 
 
 @tool
@@ -377,6 +407,41 @@ def run_build(path: str) -> str:
     Usage: run_build(path="/Users/me/repo")
     """
     return _run_verify(path, "build")
+
+
+@tool
+def run_verify(path: str) -> str:
+    """Run the FULL battery (lint + tests + build) in ONE call.
+
+    Prefer this over calling run_lint + run_tests + run_build separately:
+    one ToolMessage instead of three (3x context). Returns 3 summary lines
+    plus ONLY the failing detail (tail), never three full logs.
+    Usage: run_verify(path="/Users/me/repo")
+    """
+    error = _validate_cwd(path)
+    if error:
+        return error
+    parts: list[tuple[str, bool, str]] = []
+    details: list[str] = []
+    for action in ("lint", "test", "build"):
+        out = _run_verify(path, action)
+        ok = out.startswith("[PASSED]")
+        first = out.splitlines()[0][:120] if out else "(sin salida)"
+        parts.append((action, ok, first))
+        if not ok:
+            tail = out[-3000:] if len(out) > 3000 else out
+            details.append(f"--- {action} FAILED (tail) ---\n{tail}")
+    passed = all(ok for _, ok, _ in parts)
+    report = "\n".join(
+        f"  {'✅' if ok else '❌'} {name}: {first}" for name, ok, first in parts
+    )
+    header = "[PASSED] batería completa verde" if passed else "[FAILED] batería con rojos"
+    body = f"{header}\n{report}"
+    if details:
+        body += "\n\n" + "\n\n".join(details)
+    else:
+        body += "\n(3/3 verdes — no repitas la batería sin haber editado nada)"
+    return body
 
 
 @tool

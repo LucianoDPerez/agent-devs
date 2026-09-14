@@ -69,3 +69,62 @@ def test_prompt_execute_checkpoint_no_por_archivo():
     assert "por checkpoint, no por archivo" in prompt
     assert "Batería COMPLETA" in prompt
     assert "después de CADA subtarea" not in prompt
+
+
+def test_commit_gate_reusa_trio_verde_sin_ejecutar(monkeypatch):
+    """Si el turno ya dejó lint+tests+build en verde, el gate NO re-ejecuta."""
+    import tools.verify as _v
+
+    called = {"n": 0}
+
+    class _FakeCount:
+        def __init__(self, text):
+            self.text = text
+
+        def invoke(self, args):
+            called["n"] += 1
+            return self.text
+
+    monkeypatch.setattr(_v, "run_lint", _FakeCount("[PASSED] x"))
+    monkeypatch.setattr(_v, "run_tests", _FakeCount("[PASSED] x"))
+    monkeypatch.setattr(_v, "run_build", _FakeCount("[PASSED] x"))
+    passed, report = run_commit_verification(
+        "/tmp", reuse={"run_lint": True, "run_tests": True, "run_build": True}
+    )
+    assert passed is True
+    assert "reusa" in report
+    assert called["n"] == 0
+
+
+def test_commit_gate_reusa_run_verify_verde(monkeypatch):
+    import tools.verify as _v
+
+    called = {"n": 0}
+
+    class _FakeCount:
+        def __init__(self, text):
+            self.text = text
+
+        def invoke(self, args):
+            called["n"] += 1
+            return self.text
+
+    monkeypatch.setattr(_v, "run_lint", _FakeCount("[PASSED] x"))
+    monkeypatch.setattr(_v, "run_tests", _FakeCount("[PASSED] x"))
+    monkeypatch.setattr(_v, "run_build", _FakeCount("[PASSED] x"))
+    passed, _ = run_commit_verification("/tmp", reuse={"run_verify": True})
+    assert passed is True
+    assert called["n"] == 0
+
+
+def test_commit_gate_no_reusa_si_hay_rojo(monkeypatch):
+    """Con un rojo en el turno, el gate SÍ re-ejecuta para confirmar."""
+    import tools.verify as _v
+
+    monkeypatch.setattr(_v, "run_lint", _Fake("[PASSED] x"))
+    monkeypatch.setattr(_v, "run_tests", _Fake("[PASSED] x"))
+    monkeypatch.setattr(_v, "run_build", _Fake("[PASSED] x"))
+    passed, _ = run_commit_verification(
+        "/tmp", reuse={"run_lint": True, "run_tests": False, "run_build": True}
+    )
+    assert passed is True  # re-ejecutó y dio verde

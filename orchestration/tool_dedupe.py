@@ -66,7 +66,7 @@ READISH_TOOL_NAMES = frozenset(
 ) | MCP_READ_TOOL_NAMES
 
 # Tools de verificación (lint/tests/build) — acción productiva
-VERIFY_TOOL_NAMES = frozenset({"run_lint", "run_tests", "run_build", "run_install"})
+VERIFY_TOOL_NAMES = frozenset({"run_lint", "run_tests", "run_build", "run_verify", "run_install"})
 
 # Tools que cuentan como "producto final" para evitar max_tools_before_write
 # (REVIEW nunca escribe; estos son sus outputs válidos)
@@ -734,6 +734,40 @@ def _wrap_one(
         (GraphBubbleUp) se re-lanza siempre: es la única forma de frenar el 4B.
         """
         kwargs = _resolve_kwargs(kwargs)
+        # Fail-fast para archivos de PLANIFICACIÓN protegidos (tasks/plan/PRD):
+        # el guard de filesystem devuelve string y el modelo reintenta 3-4
+        # veces el mismo write quemando el turno (E2E: .agent/tasks.json).
+        # Acá se corta ANTES de ejecutar: intento 1 = STOP terminal (no
+        # reintentar), intento 2+ = excepción directa. No pasa por el mensaje
+        # genérico "ya se ejecutó" (mentira: nunca se escribió, está bloqueado).
+        if name in ("write_file", "edit_file", "apply_patch", "delete_file"):
+            _ppath = (kwargs or {}).get("path", "")
+            if _ppath:
+                try:
+                    from tools.filesystem import _is_protected_task_path as _is_prot
+
+                    if _is_prot(_ppath):
+                        n_prot = dedupe.register(name, kwargs)
+                        if n_prot >= 2:
+                            raise ToolBudgetExceeded(
+                                f"⛔ '{_ppath}' es planificación PROTEGIDA "
+                                f"({n_prot} intentos). NO lo toques: es tu fuente "
+                                "de verdad. Implementá el código en el repo y "
+                                "cerrá con texto. No llames más writes a este path."
+                            )
+                        return (
+                            "return",
+                            (
+                                f"⛔ '{_ppath}' es un archivo de PLANIFICACIÓN "
+                                "PROTEGIDO. NO lo escribas ni lo reintentes en "
+                                "este turno: implementá el código en los archivos "
+                                "del repo y cerrá con un resumen en texto."
+                            ),
+                        )
+                except ToolBudgetExceeded:
+                    raise
+                except Exception:
+                    pass
         if explore_budget is not None and name == "read_file":
             _apply_adaptive_read_limit(explore_budget, kwargs.get("path", ""))
         if explore_budget is not None:
