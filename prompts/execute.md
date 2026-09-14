@@ -41,6 +41,7 @@ Recién cuando todas las subtareas estén verificadas, respondé LISTO con un re
 
 ## Reglas
 - VERIFICAR CON EVIDENCIA ANTES DE CONFIRMAR: cada afirmación (bug, causa raíz, fix, "está hecho") se cita con archivo:línea + output real de la tool que lo demuestra. PROHIBIDO afirmar de memoria o dar por hecho lo que no leíste/ejecutaste.
+- TAREA YA IMPLEMENTADA (regla CRÍTICA): si al leer el código confirmás que ya cumple el acceptance criterion, NO la "re-implementes": NO hagas edit_file con old_str==new_str, NO repitas el mismo edit variando el bloque. Respondé el veredicto con evidencia (archivo:línea + lo que leíste) y terminá — un turno de "ya está implementado" con evidencia es un cierre VÁLIDO. NO intentes editar tasks.json/plan para marcar DONE: lo protege el sistema; avisale al usuario en tu resumen (él lo marca).
 - Usá el logging estándar del framework. NUNCA `console.log`/print sin contexto.
 - Timeout HTTP REAL en el cliente (ej: `timeout: 5000`).
 - No inventes CRUD/endpoints/features extra.

@@ -144,6 +144,14 @@ class ToolCallDedupe:
         # retries del turno; reset() NO lo toca, la sesión lo gestiona).
         self.scope_files: frozenset = frozenset()
         self.scope_violations: dict[str, int] = {}
+        # Rechazos de planificación protegida POR PATH y rechazos no-op POR
+        # path: viven EN EL DEDUPE (objeto compartido de la sesión) porque los
+        # retries RECONSTRUYEN el agente (y con él el closure del wrapper) —
+        # un contador por-closure se resetea en cada retry y el fail-fast
+        # pierde memoria (E2E real: PASS1 frenó 2, PASS2 re-metió 2 más).
+        # La sesión los limpia por TURNO (run_turn), no reset().
+        self.protected_rejects: dict[str, int] = {}
+        self.noop_rejects: dict[str, int] = {}
 
     def reset(self) -> None:
         self._counts.clear()
@@ -637,12 +645,6 @@ def wrap_tools_with_dedupe(
     # estrategia — el modelo no converge con cirugía fina en cambios
     # estructurales). El estado vive en este closure: se recrea por agente.
     edit_rejections: dict[str, int] = {}
-    # Intentos de escritura a archivos de PLANIFICACIÓN protegidos, contados
-    # POR PATH (no por args): el modelo varía los bloques (objeto entero →
-    # línea suelta) y el dedupe por args idénticos nunca lo atrapa (E2E real:
-    # 4 edits a tasks.json con old_str distintos). Al 2º intento al MISMO
-    # path se levanta excepción directa.
-    protected_rejects: dict[str, int] = {}
     if explore_budget is not None:
         # El wrapper decide el tope write→verify POST-ejecución (raise solo
         # para writes efectivos + refund de fallidos). consume() directo
@@ -654,7 +656,7 @@ def wrap_tools_with_dedupe(
             _wrap_one(
                 t, dedupe, explore_budget, read_cache, repo_path,
                 tool_call_logger, edit_rejections, allow_overwrite_escalation,
-                confirm_callback, tool_call_results, protected_rejects,
+                confirm_callback, tool_call_results,
             )
         )
     return wrapped
@@ -753,7 +755,6 @@ def _wrap_one(
     allow_overwrite_escalation: bool = True,
     confirm_callback=None,
     tool_call_results: dict | None = None,
-    protected_rejects: dict | None = None,
 ) -> BaseTool:
     name = tool.name
 
@@ -832,25 +833,35 @@ def _wrap_one(
 
                     if _is_prot(_ppath):
                         _pkey = str(_ppath)
-                        if protected_rejects is None:
+                        # Contador EN el dedupe compartido: sobrevive a los
+                        # rebuilds del agente en los retries (un dict por
+                        # closure se reseteaba en cada retry y el fail-fast
+                        # perdía memoria — E2E real: PASS1 frenó 2, PASS2
+                        # re-metió 2 más).
+                        _prejects = getattr(dedupe, "protected_rejects", None)
+                        if _prejects is None:
                             n_prot = dedupe.register(name, {"path": _pkey})
                         else:
-                            n_prot = protected_rejects.get(_pkey, 0) + 1
-                            protected_rejects[_pkey] = n_prot
+                            n_prot = _prejects.get(_pkey, 0) + 1
+                            _prejects[_pkey] = n_prot
                         if n_prot >= 2:
                             raise ToolBudgetExceeded(
                                 f"⛔ '{_ppath}' es planificación PROTEGIDA "
-                                f"({n_prot} intentos). NO lo toques: es tu fuente "
-                                "de verdad. Implementá el código en el repo y "
-                                "cerrá con texto. No llames más writes a este path."
+                                f"({n_prot} intentos). NO lo toques: es tu "
+                                "fuente de verdad. Implementá el código en el "
+                                "repo y cerrá con texto; para marcar la tarea "
+                                "como DONE avisale al USUARIO en tu resumen "
+                                "(él lo hace). No llames más writes a este "
+                                "path."
                             )
                         return (
                             "return",
                             (
                                 f"⛔ '{_ppath}' es un archivo de PLANIFICACIÓN "
                                 "PROTEGIDO. NO lo escribas ni lo reintentes en "
-                                "este turno: implementá el código en los archivos "
-                                "del repo y cerrá con un resumen en texto."
+                                "este turno: implementá el código en los "
+                                "archivos del repo y cerrá con un resumen en "
+                                "texto (para marcar DONE, avisale al usuario)."
                             ),
                         )
                 except ToolBudgetExceeded:
@@ -991,15 +1002,37 @@ def _wrap_one(
             if explore_budget is not None and name in WRITE_TOOL_NAMES:
                 explore_budget.refund_write()
 
+        def _noop_strike(path_key: str, why: str) -> str:
+            """No-op registrado POR PATH en el dedupe compartido. Al 2º no-op
+            al MISMO path levanta excepción: el string ignorable devolvía el
+            modelo al mismo edit 5 veces (E2E real: 5 NO-OP a infra/iam.tf
+            con old_str==new_str hasta quemar el budget)."""
+            _nrej = getattr(dedupe, "noop_rejects", None)
+            if _nrej is None:
+                return why
+            _n = _nrej.get(path_key, 0) + 1
+            _nrej[path_key] = _n
+            if _n >= 2:
+                raise ToolBudgetExceeded(
+                    f"⛔ {path_key}: {_n} edits SIN CAMBIOS (no-op). PARÁ: el "
+                    "archivo YA cumple lo que buscás. NO lo edites de nuevo. "
+                    "Corré run_lint/run_tests/run_build si corresponde y "
+                    "cerrá el turno con el resumen y la evidencia."
+                )
+            return why
+
         if name == "edit_file":
             _old = kwargs.get("old_str", "")
             _new = kwargs.get("new_str", "")
             if _old.strip() == _new.strip() and _old.strip():
                 _refund_idempotent()
-                return (
-                    "⛔ NO-OP edit: old_str == new_str (no cambiarías NADA).\n"
-                    "Si los archivos YA cumplen la tarea, NO llames edit_file: "
-                    "corré run_lint/run_tests para verificarlo y terminá con un resumen."
+                return _noop_strike(
+                    kwargs.get("path", "desconocido"),
+                    (
+                        "⛔ NO-OP edit: old_str == new_str (no cambiarías NADA).\n"
+                        "Si los archivos YA cumplen la tarea, NO llames edit_file: "
+                        "corré run_lint/run_tests para verificarlo y terminá con un resumen."
+                    ),
                 )
             _path = kwargs.get("path", "")
             if _path and _new.strip():
@@ -1007,11 +1040,14 @@ def _wrap_one(
                     _content = Path(_path).read_text(encoding="utf-8")
                     if _new.strip() in _content and _old.strip() not in _content:
                         _refund_idempotent()
-                        return (
-                            f"old_str not found in {_path} — PERO tu new_str YA ESTÁ en el "
-                            "archivo: el cambio ya está aplicado.\n"
-                            "NO repitas este edit. Si venías diciendo 'corro los tests': "
-                            "llamá AHORA run_lint/run_tests/run_build y terminá."
+                        return _noop_strike(
+                            _path,
+                            (
+                                f"old_str not found in {_path} — PERO tu new_str YA ESTÁ en el "
+                                "archivo: el cambio ya está aplicado.\n"
+                                "NO repitas este edit. Si venías diciendo 'corro los tests': "
+                                "llamá AHORA run_lint/run_tests/run_build y terminá."
+                            ),
                         )
                 except OSError:
                     pass
@@ -1030,9 +1066,12 @@ def _wrap_one(
                             for e in _parsed
                         ):
                             _refund_idempotent()
-                            return (
-                                f"All {len(_parsed)} edits already applied in {_path} — no changes needed. "
-                                "Run verification and finish."
+                            return _noop_strike(
+                                _path,
+                                (
+                                    f"All {len(_parsed)} edits already applied in {_path} — no changes needed. "
+                                    "Run verification and finish."
+                                ),
                             )
                 except OSError:
                     pass
@@ -1075,15 +1114,33 @@ def _wrap_one(
             if explore_budget is not None and name in WRITE_TOOL_NAMES:
                 explore_budget.refund_write()
 
+        def _noop_strike_async(path_key: str, why: str) -> str:
+            _nrej = getattr(dedupe, "noop_rejects", None)
+            if _nrej is None:
+                return why
+            _n = _nrej.get(path_key, 0) + 1
+            _nrej[path_key] = _n
+            if _n >= 2:
+                raise ToolBudgetExceeded(
+                    f"⛔ {path_key}: {_n} edits SIN CAMBIOS (no-op). PARÁ: el "
+                    "archivo YA cumple lo que buscás. NO lo edites de nuevo. "
+                    "Corré run_lint/run_tests/run_build si corresponde y "
+                    "cerrá el turno con el resumen y la evidencia."
+                )
+            return why
+
         if name == "edit_file":
             _old = kwargs.get("old_str", "")
             _new = kwargs.get("new_str", "")
             if _old.strip() == _new.strip() and _old.strip():
                 _refund_idempotent_async()
-                return (
-                    "⛔ NO-OP edit: old_str == new_str (no cambiarías NADA).\n"
-                    "Si los archivos YA cumplen la tarea, NO llames edit_file: "
-                    "corré run_lint/run_tests para verificarlo y terminá con un resumen."
+                return _noop_strike_async(
+                    kwargs.get("path", "desconocido"),
+                    (
+                        "⛔ NO-OP edit: old_str == new_str (no cambiarías NADA).\n"
+                        "Si los archivos YA cumplen la tarea, NO llames edit_file: "
+                        "corré run_lint/run_tests para verificarlo y terminá con un resumen."
+                    ),
                 )
             _path = kwargs.get("path", "")
             if _path and _new.strip():
@@ -1091,11 +1148,14 @@ def _wrap_one(
                     _content = Path(_path).read_text(encoding="utf-8")
                     if _new.strip() in _content and _old.strip() not in _content:
                         _refund_idempotent_async()
-                        return (
-                            f"old_str not found in {_path} — PERO tu new_str YA ESTÁ en el "
-                            "archivo: el cambio ya está aplicado.\n"
-                            "NO repitas este edit. Si venías diciendo 'corro los tests': "
-                            "llamá AHORA run_lint/run_tests/run_build y terminá."
+                        return _noop_strike_async(
+                            _path,
+                            (
+                                f"old_str not found in {_path} — PERO tu new_str YA ESTÁ en el "
+                                "archivo: el cambio ya está aplicado.\n"
+                                "NO repitas este edit. Si venías diciendo 'corro los tests': "
+                                "llamá AHORA run_lint/run_tests/run_build y terminá."
+                            ),
                         )
                 except OSError:
                     pass
@@ -1114,9 +1174,12 @@ def _wrap_one(
                             for e in _parsed2
                         ):
                             _refund_idempotent_async()
-                            return (
-                                f"All {len(_parsed2)} edits already applied in {_path} — no changes needed. "
-                                "Run verification and finish."
+                            return _noop_strike_async(
+                                _path,
+                                (
+                                    f"All {len(_parsed2)} edits already applied in {_path} — no changes needed. "
+                                    "Run verification and finish."
+                                ),
                             )
                 except OSError:
                     pass

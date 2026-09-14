@@ -1496,6 +1496,34 @@ class Session:
             return False
         return bool(self._repo_has_recent_commit() or self._verify_tools_called())
 
+    def _readonly_evidence_turn(self, text: str) -> bool:
+        """True si el turno fue SOLO lectura/verify con evidencia citada.
+
+        El modelo leyó ≥2 archivos/tools y respondió un veredicto con
+        archivo:línea (E2E real: 'implementar T003' → leído iam.tf → 'ya está
+        implementada, línea 28 cumple el AC'). Reintentar con foco en
+        escritura lo empuja a edits no-op (5x idénticos). Es el mismo contrato
+        que _is_verification_only pero determinado por LO QUE HIZO el turno,
+        no por el texto del usuario (que dijo 'implementar').
+        """
+        if self._called_tools & WRITE_TOOL_NAMES:
+            return False
+        productive = self._called_tools & (READISH_TOOL_NAMES | VERIFY_TOOL_NAMES)
+        if len(productive) < 2:
+            return False
+        if _response_has_evidence(text):
+            return True
+        # Evidencia en español: el veredicto cita un path REAL del repo
+        # ("infra/iam.tf línea 28"). Anti-fantasma: se valida en DISCO — un
+        # path inventado no cuenta (mismo criterio que find_unverifiable_cites).
+        root = Path(self.repo_path)
+        for m in re.finditer(r"[\w.\-/]+\.(?:tsx?|jsx?|go|py|ts|tf|json|prisma|md)\b", text or ""):
+            cand = m.group(0)
+            p = Path(cand) if Path(cand).is_absolute() else root / cand
+            if p.is_file():
+                return True
+        return False
+
     def _post_write_gate(self) -> tuple[bool, str]:
         """Verifica que el código recién escrito compile. Fail-open: cualquier
         excepción o escenario no soportado devuelve (True, '') para no bloquear."""
@@ -1937,6 +1965,10 @@ class Session:
         self._scope_nums = []
         self._dedupe.scope_files = frozenset()
         self._dedupe.scope_violations = {}
+        # Contadores anti-loop por TURNO (los retries NO los borran): writes
+        # a planificación protegida y edits no-op. Solo la sesión limpia.
+        self._dedupe.protected_rejects = {}
+        self._dedupe.noop_rejects = {}
         self._runtime_healthy = None
         self._runtime_report = None
         # Los overrides de write_file (habilitados tras fallar la cirugía fina
@@ -2650,6 +2682,21 @@ class Session:
                         console.print(
                             "\n[dim]✅ Nada pendiente por escribir (trabajo ya "
                             "commiteado o verificado) — cerrando sin "
+                            "reintentar.[/dim]"
+                        )
+                        break
+                    # Turno ya-implementado con evidencia: el modelo leyó ≥2
+                    # archivos/tools y dictaminó "ya cumple el AC" con
+                    # archivo:línea (E2E real T003: 2 reads + veredicto →
+                    # retry forzado produjo 5 no-ops + 4 protected). Cierre
+                    # honesto sin retry.
+                    if new_role == Role.EXECUTE and self._readonly_evidence_turn(
+                        e.reasoning_text or ""
+                    ):
+                        self._last_response = e.reasoning_text or ""
+                        console.print(
+                            "\n[dim]✅ Turno de verificación con evidencia "
+                            "(0 escrituras necesarias) — cerrando sin "
                             "reintentar.[/dim]"
                         )
                         break

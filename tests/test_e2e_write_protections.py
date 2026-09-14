@@ -422,3 +422,92 @@ def test_e2e_protected_write_varying_blocks_same_path(tmp_path):
     with pytest.raises(ToolBudgetExceeded, match="PROTEGIDA"):
         ef.invoke({"path": str(target), "old_str": "pending", "new_str": "DONE"})
     assert target.read_text() == original
+
+
+def test_e2e_protected_rejects_persist_across_rebuild(tmp_path):
+    """Los retries RECONSTRUYEN el agente (nuevo closure del wrapper): el
+    contador de protegidos vive en el dedupe compartido y sobrevive (E2E real:
+    PASS1 frenó 2 writes, el retry del PASS2 re-metió 2 más)."""
+    import pytest
+
+    from orchestration.tool_dedupe import (
+        ExploreBudget,
+        ToolBudgetExceeded,
+        ToolCallDedupe,
+        wrap_tools_with_dedupe,
+    )
+    from tools.filesystem import edit_file
+
+    target = tmp_path / ".agent" / "tasks.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text('{"tasks": []}')
+    original = target.read_text()
+
+    dd = ToolCallDedupe(max_repeats=9)
+    w1 = wrap_tools_with_dedupe([edit_file], dd, ExploreBudget(),
+                                repo_path=str(tmp_path))[0]
+    r1 = w1.invoke({"path": str(target), "old_str": "bloque A", "new_str": "X"})
+    assert "PROTEGIDO" in r1
+    # Rebuild con el MISMO dedupe (como _enter_budget_retry/_rebuild_agent)
+    w2 = wrap_tools_with_dedupe([edit_file], dd, ExploreBudget(),
+                                repo_path=str(tmp_path))[0]
+    with pytest.raises(ToolBudgetExceeded, match="PROTEGIDA"):
+        w2.invoke({"path": str(target), "old_str": "bloque B", "new_str": "Y"})
+    assert target.read_text() == original
+
+
+def test_e2e_noop_strike_raises_on_second(tmp_path):
+    """5 NO-OP a infra/iam.tf (old_str==new_str) quemaron el budget: el 1er
+    no-op avisa, el 2º al MISMO path levanta excepción y persiste en rebuilds."""
+    import pytest
+
+    from orchestration.tool_dedupe import (
+        ExploreBudget,
+        ToolBudgetExceeded,
+        ToolCallDedupe,
+        wrap_tools_with_dedupe,
+    )
+    from tools.filesystem import edit_file
+
+    iam = tmp_path / "infra" / "iam.tf"
+    iam.parent.mkdir(parents=True, exist_ok=True)
+    iam.write_text("Resource = [x]\n")
+
+    dd = ToolCallDedupe(max_repeats=9)
+    w = wrap_tools_with_dedupe([edit_file], dd, ExploreBudget(),
+                               repo_path=str(tmp_path))[0]
+    warn = w.invoke({"path": str(iam), "old_str": "Resource = [x]",
+                     "new_str": "Resource = [x]"})
+    assert "NO-OP" in warn
+    with pytest.raises(ToolBudgetExceeded, match="SIN CAMBIOS"):
+        w.invoke({"path": str(iam), "old_str": "Resource = [x]",
+                  "new_str": "Resource = [x]"})
+    # Persiste tras rebuild
+    w2 = wrap_tools_with_dedupe([edit_file], dd, ExploreBudget(),
+                                repo_path=str(tmp_path))[0]
+    with pytest.raises(ToolBudgetExceeded, match="SIN CAMBIOS"):
+        w2.invoke({"path": str(iam), "old_str": "Resource = [x]",
+                   "new_str": "Resource = [x]"})
+    assert iam.read_text() == "Resource = [x]\n"
+
+
+def test_e2e_noop_different_paths_not_confused(tmp_path):
+    """El strike es POR PATH: un no-op en a.ts no castiga el primer no-op en b.ts."""
+    from orchestration.tool_dedupe import (
+        ExploreBudget,
+        ToolCallDedupe,
+        wrap_tools_with_dedupe,
+    )
+    from tools.filesystem import edit_file
+
+    a = tmp_path / "a.ts"
+    b = tmp_path / "b.ts"
+    a.write_text("x\n")
+    b.write_text("y\n")
+    dd = ToolCallDedupe(max_repeats=9)
+    w = wrap_tools_with_dedupe([edit_file], dd, ExploreBudget(),
+                               repo_path=str(tmp_path))[0]
+    r1 = w.invoke({"path": str(a), "old_str": "x", "new_str": "x"})
+    assert "NO-OP" in r1
+    r2 = w.invoke({"path": str(b), "old_str": "y", "new_str": "y"})
+    assert "NO-OP" in r2  # aviso, no excepción (primer strike de b.ts)

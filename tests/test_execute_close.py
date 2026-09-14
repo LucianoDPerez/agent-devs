@@ -229,3 +229,51 @@ def test_nothing_pending_falso_escape_vago(tmp_path):
     s = Session(llm=None, repo_path=str(repo))
     s._called_tools = {"read_file"}
     assert s._nothing_pending_to_write() is False
+
+
+def test_readonly_evidence_turn_closes_without_retry(tmp_path):
+    """E2E real T003: 'implementar' → 2 read_file → veredicto 'ya está' con
+    archivo:línea. El no-write NO debe reintentar (5 no-ops después)."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    (repo / "infra").mkdir()
+    (repo / "infra" / "iam.tf").write_text("Resource = [x]\n", encoding="utf-8")
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools = {"read_file", "read_file_x", "git_status"}
+    resp = (
+        "T003 ya está implementada en infra/iam.tf línea 28:\n"
+        'Resource = [aws_sqs_queue.pauta_desactivada.arn]\n'
+        "Cumple el AC grep -q 'aws_sqs_queue.pauta_desactivada.arn' ✅"
+    )
+    assert s._readonly_evidence_turn(resp) is True
+
+
+def test_readonly_evidence_turn_falso_sin_herramientas(tmp_path):
+    """Solo texto sin tools: escape vago, SÍ debe reintentar."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools = set()
+    assert s._readonly_evidence_turn("Ya está implementada, archivo:línea 28 ✅") is False
+
+
+def test_readonly_evidence_turn_falso_con_writes(tmp_path):
+    """Si escribió algo, el turno NO es solo-verificación."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools = {"read_file", "git_status", "edit_file"}
+    assert s._readonly_evidence_turn("edité archivo:línea 28") is False
+
+
+def test_readonly_evidence_turn_falso_sin_evidencia(tmp_path):
+    """Leyó 2 archivos pero no cita archivo:línea ni verify: vago, reintentar."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools = {"read_file", "git_status"}
+    assert s._readonly_evidence_turn("Creo que ya está, no vi nada raro.") is False
