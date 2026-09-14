@@ -324,6 +324,13 @@ def run_fullscreen(session) -> None:
                     if asst:
                         console.print(f"[dim]{asst}[/dim]")
             return
+        elif payload[0] == "/autoapprove":
+            msg = session.toggle_auto_approve(payload[1])
+            if msg.startswith("✅"):
+                console.print(f"[green]{msg}[/green]")
+            else:
+                console.print(f"[red]{msg}[/red]")
+            return
         elif payload[0] == "/help":
             console.print("[bold]Comandos:[/bold]\n" + format_help())
             return
@@ -742,6 +749,13 @@ def main():
                 session.reset()
                 console.print("[green]✅ Nueva sesión iniciada. Historial reseteado.[/green]")
                 console.print(f"[dim]Session ID: {session.session_id}[/dim]\n")
+                continue
+            if kind == "run" and payload[0] == "/autoapprove":
+                msg = session.toggle_auto_approve(payload[1])
+                if msg.startswith("✅"):
+                    console.print(f"[green]{msg}[/green]\n")
+                else:
+                    console.print(f"[red]{msg}[/red]\n")
                 continue
             if kind == "run" and payload[0] == "/help":
                 console.print("[bold]Comandos:[/bold]\n" + format_help() + "\n")

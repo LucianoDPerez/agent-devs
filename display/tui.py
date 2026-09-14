@@ -32,6 +32,7 @@ _STYLE = Style.from_dict({
     "role": "fg:ansicyan bold",
     "repo": "fg:ansiblue",
     "hint": "fg:ansibrightblack",
+    "auto": "bg:#4a4a00 fg:#ffe600 bold",
 })
 
 
@@ -56,9 +57,13 @@ def _short_repo(repo_path: str) -> str:
 
 
 def _make_toolbar(status: dict) -> FormattedText:
+    auto: FormattedText = (
+        [("class:auto", " ✅ auto ")] if status.get("auto_approve") else []
+    )
     return FormattedText([
         ("class:toolbar", " "),
         ("class:branch", f"🌿 {status.get('branch', '-')}"),
+        *auto,
         ("class:toolbar", "  "),
         ("class:tokens", f"⚡ {status.get('tokens', 0):,} tokens"),
         ("class:toolbar", "  "),

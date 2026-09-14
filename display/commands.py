@@ -20,6 +20,7 @@ COMMANDS: tuple[tuple[str, str, bool], ...] = (
     ("/compact", "Resume el historial para liberar contexto", False),
     ("/history", "Muestra los últimos turnos guardados con su id", False),
     ("/resume", "Retoma una sesión anterior: /resume <id>", True),
+    ("/autoapprove", "Aprueba escrituras sin preguntar: /autoapprove [on|off]", True),
     ("/help", "Muestra esta ayuda de comandos", False),
 )
 

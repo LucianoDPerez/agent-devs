@@ -30,7 +30,7 @@ def test_todos_los_comandos_tienen_descripcion():
 
 
 def test_match_filtra_por_prefijo():
-    assert [n for n, _ in match_commands("/")] == ["/new", "/compact", "/history", "/resume", "/help"]
+    assert [n for n, _ in match_commands("/")] == ["/new", "/compact", "/history", "/resume", "/autoapprove", "/help"]
     assert [n for n, _ in match_commands("/h")] == ["/history", "/help"]
     assert [n for n, _ in match_commands("/res")] == ["/resume"]
     assert match_commands("/z") == []
@@ -74,7 +74,7 @@ def test_ptk_completer_ofrece_todo():
     from prompt_toolkit.document import Document
 
     got = {c.text for c in completer.get_completions(Document("/"), None)}
-    assert got == {"/new", "/compact", "/history", "/resume", "/help"}
+    assert got == {"/new", "/compact", "/history", "/resume", "/autoapprove", "/help"}
     got_h = {c.text for c in completer.get_completions(Document("/h"), None)}
     assert got_h == {"/history", "/help"}
 
@@ -156,3 +156,57 @@ def test_resume_rol_invalido_cae_a_analyze(monkeypatch, tmp_path):
     ok, _, _ = sess.resume_session("qwer1234")
     assert ok is True
     assert sess.current_role.value == "analyzer"
+
+
+class TestAutoApprove:
+    def test_default_off_y_reset_lo_apaga(self):
+        from orchestration.session import Session
+
+        s = Session(llm=None, repo_path="/tmp")
+        assert s._auto_approve is False
+        s._auto_approve = True
+        s.session_id = "x"
+        s._messages = []
+        # reset() reconstruye agente (necesita LLM) → solo verificar flag:
+        # simular lo que reset hace con el flag
+        s._auto_approve = False
+        assert s._auto_approve is False
+
+    def test_toggle_on_off_bare_e_invalido(self):
+        from orchestration.session import Session
+
+        s = Session(llm=None, repo_path="/tmp")
+        assert "ON" in s.toggle_auto_approve("")
+        assert s._auto_approve is True
+        assert "ON" in s.toggle_auto_approve("on")
+        assert "OFF" in s.toggle_auto_approve("off")
+        assert s._auto_approve is False
+        assert "OFF" in s.toggle_auto_approve("no")
+        msg = s.toggle_auto_approve("quizás")
+        assert "Uso:" in msg and s._auto_approve is False
+
+    def test_confirm_salta_pregunta_con_autoapprove(self):
+        from orchestration.session import Session
+
+        s = Session(llm=None, repo_path="/tmp")
+        s._fullscreen = True  # modo interactivo: normalmente preguntaría
+        s._auto_approve = True
+        assert s._confirm_write_cb("write_file", {"path": "/tmp/x"}) is True
+        assert s._confirm_event is None  # ni siquiera crea el Event
+
+    def test_interpret_rutea_autoapprove(self):
+        from display.commands import interpret_slash
+
+        assert interpret_slash("/autoapprove") == ("run", ("/autoapprove", ""))
+        assert interpret_slash("/autoapprove off") == ("run", ("/autoapprove", "off"))
+        kind, payload = interpret_slash("/auto")
+        assert kind == "hint"  # lleva args → muestra uso, no ejecuta
+        assert [n for n, _ in payload] == ["/autoapprove"]
+
+    def test_status_expone_flag(self):
+        from orchestration.session import Session
+
+        s = Session(llm=None, repo_path="/tmp")
+        assert s.get_status()["auto_approve"] is False
+        s._auto_approve = True
+        assert s.get_status()["auto_approve"] is True

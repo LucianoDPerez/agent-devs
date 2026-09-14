@@ -375,6 +375,7 @@ El orquestador **detecta automáticamente** la intención y carga el rol adecuad
 >>> /compact       # resume el historial para liberar contexto
 >>> /history       # muestra los últimos 10 turnos guardados en SQLite (con id)
 >>> /resume <id>   # retoma una sesión anterior del mismo repo
+>>> /autoapprove   # aprueba writes sin preguntar (toggle; commit manual; /new lo apaga)
 >>> /help          # lista los comandos (también con "/" + Tab/Esc en el input)
 >>> exit           # cierra la sesión
 ```

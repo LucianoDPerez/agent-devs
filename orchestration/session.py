@@ -691,6 +691,12 @@ class Session:
         self._confirm_event: threading.Event | None = None
         self._confirm_answer: bool | None = None
         self._confirm_timeout: float = EXECUTE_CONFIRM_TIMEOUT
+        # Auto-aprobación (/autoapprove): con True, los writes se aprueban sin
+        # preguntar (igual que en modo no-interactivo). Alcance: SOLO
+        # aprobaciones de escritura/edición (incluido PATH FIX). El commit
+        # sigue siendo manual siempre. Se apaga con /new (re-activar explícito
+        # por sesión, para no olvidar que está prendido).
+        self._auto_approve: bool = False
         self._confirm_lock = threading.Lock()
         # Cancel del turno EN CURSO: lo setea run_turn; lo llama la TUI con ESC.
         self._turn_cancel = None
@@ -824,6 +830,7 @@ class Session:
         self._last_response = ""
         self.session_id = str(uuid.uuid4())[:8]
         self._session_time = 0.0
+        self._auto_approve = False
         self.current_role = Role.ANALYZE
         self._load_previous_sessions()
         self._rebuild_agent(Role.ANALYZE)
@@ -2862,6 +2869,32 @@ class Session:
         """Devuelve los últimos N turnos del repo (de cualquier sesión)."""
         return load_recent_turns(self.repo_path, limit=limit)
 
+    def toggle_auto_approve(self, arg: str = "") -> str:
+        """Prende/apaga/revierte la auto-aprobación de escrituras (/autoapprove).
+
+        Alcance: solo aprobaciones de write/edit/delete (+ PATH FIX). El
+        commit sigue siendo manual siempre. Se apaga solo con /new.
+        """
+        a = (arg or "").strip().lower()
+        if a in ("on", "si", "sí", "s", "1", "true", "activar"):
+            self._auto_approve = True
+        elif a in ("off", "no", "n", "0", "false", "desactivar"):
+            self._auto_approve = False
+        elif a:
+            return (
+                f"⛔ Uso: /autoapprove [on|off] (recibí {arg!r}). "
+                f"Estado actual: {'ON' if self._auto_approve else 'OFF'}."
+            )
+        else:
+            self._auto_approve = not self._auto_approve
+        if self._auto_approve:
+            return (
+                "✅ Auto-approve ON: las escrituras se aprueban sin preguntar "
+                "(vale para esta sesión; /new lo apaga). El commit sigue "
+                "siendo manual."
+            )
+        return "✅ Auto-approve OFF: vuelvo a pedir confirmación por escritura."
+
     def resume_session(self, session_prefix: str) -> tuple[bool, str, list[dict]]:
         """Retoma una sesión previa del MISMO repo por id (completo o prefijo).
 
@@ -3099,7 +3132,7 @@ class Session:
         vencer solo omite ese cambio, sin cancelar el turno ni dejar pendiente
         re-ejecutable.
         """
-        if not EXECUTE_CONFIRM_WRITES or not self._fullscreen:
+        if not EXECUTE_CONFIRM_WRITES or self._auto_approve or not self._fullscreen:
             return True
         # Serializar confirmaciones: un solo slot. Si ya hay una pendiente, el
         # segundo write espera su turno en vez de pisar el Event (carrera que
@@ -3203,6 +3236,7 @@ class Session:
             "tools": f"{self._local_count}+{self._mcp_count}",
             "session_id": self.session_id,
             "confirm_pending": self.confirm_pending(),
+            "auto_approve": self._auto_approve,
         }
 
     def close(self):

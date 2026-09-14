@@ -119,7 +119,7 @@ agent-devs --list         # lista repos ya analizados (cache)
 agent-devs --analyze REPO # pre-analiza un repo sin abrir sesión
 ```
 
-Dentro de la sesión: **ESC** cancela el turno en curso · **Ctrl+C ×2** sale · `/new` sesión nueva (limpia el panel) · `/compact` resume el historial para liberar contexto · `/history` últimos turnos (con id) · `/resume <id>` retoma una sesión anterior · `/help` ayuda. Al tipear `/` aparece el menú de comandos (Enter acepta, Esc lo cierra, Tab completa).
+Dentro de la sesión: **ESC** cancela el turno en curso · **Ctrl+C ×2** sale · `/new` sesión nueva (limpia el panel) · `/compact` resume el historial para liberar contexto · `/history` últimos turnos (con id) · `/resume <id>` retoma una sesión anterior · `/autoapprove [on|off]` aprueba escrituras sin preguntar (el commit sigue manual; `/new` lo apaga) · `/help` ayuda. Al tipear `/` aparece el menú de comandos (Enter acepta, Esc lo cierra, Tab completa).
 
 El límite de contexto se **detecta del server** (`/props` de llama.cpp): cuando la sesión consume ~80%, AgentDevs te avisa y te ofrece compactar; al 90% compacta solo.
 

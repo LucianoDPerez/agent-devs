@@ -447,6 +447,7 @@ class FullscreenTUI(App):
             pass
         txt = Text.assemble(
             (" 🌿 " + str(st.get("branch", "-")), "green"),
+            ((" ✅ auto", "bold black on yellow") if st.get("auto_approve") else ("", "")),
             ("  ·  ", "dim"),
             (f"⚡ {total:,} tok (API)", "dim"),
             ("  ·  ", "dim"),
