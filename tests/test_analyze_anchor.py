@@ -224,7 +224,7 @@ def test_anchor_incluye_snippets_en_hechos(tmp_path):
     sess._called_tools = {"cm__get_code_snippet", "cm__search_graph"}
     anchor = sess._retry_analyze_anchor()
     assert "SOURCE DEL GRAFO ([snippet:backend.Foo])" in anchor
-    assert "[snippet:backend.Foo]" in anchor.split("Leíste estos archivos:")[1]
+    assert "[snippet:backend.Foo]" in anchor.split("Obtuviste contenido de:")[1]
     assert "ninguno" not in anchor
 
 
