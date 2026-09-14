@@ -58,7 +58,6 @@ def extract_metrics(log_text: str) -> dict:
 
     tools = _TOOL_RE.findall(log_text)
     banners = _ROLE_RE.findall(log_text)
-    role = re.search(r"[^\n]*$", "")  # placeholder no-op
     role_first = banners[0] if banners else None
     sess = _SESSION_RE.search(log_text)
     return {
@@ -446,6 +445,7 @@ def main():
     RESTORE_AFTER = args.restore_after
     if args.fresh_analysis:
         import sqlite3 as _sq
+
         from cache import CACHE_DB
         conn = _sq.connect(CACHE_DB)
         cur = conn.execute("DELETE FROM repos WHERE path = ?", (REPO,))
@@ -455,8 +455,8 @@ def main():
         MODEL_LABEL = args.model
     elif MODEL_LABEL == "unknown":
         try:
-            from llm_wrapper import detect_server_model
             from config import LLM_BASE_URL
+            from llm_wrapper import detect_server_model
             MODEL_LABEL = detect_server_model(LLM_BASE_URL) or "unknown"
         except Exception:
             pass

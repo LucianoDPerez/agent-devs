@@ -18,15 +18,22 @@ import sys
 import warnings
 from pathlib import Path
 
-from cache import list_repos, load_analysis, snapshot_diff_files, snapshot_entries, snapshot_hash, save_analysis
-from config import ANALYSIS_LLM_TIMEOUT, ANALYSIS_REUSE_MAX_FILES, LLM_BASE_URL, LLM_MAX_TOKENS, LLM_MODEL_NAME, LLM_TEMPERATURE
-from core.textutil import normalize
-from llm_wrapper import LocalLLM, get_usage, reset_turn_usage
-from orchestration.session import Session
 from analyzer import run_analysis
+from cache import list_repos, load_analysis, save_analysis, snapshot_diff_files, snapshot_entries, snapshot_hash
+from config import (
+    ANALYSIS_LLM_TIMEOUT,
+    ANALYSIS_REUSE_MAX_FILES,
+    LLM_BASE_URL,
+    LLM_MAX_TOKENS,
+    LLM_MODEL_NAME,
+    LLM_TEMPERATURE,
+)
+from core.textutil import normalize
 from display.commands import format_help, interpret_slash
 from display.console import console, print_welcome
 from display.tui import get_user_input
+from llm_wrapper import LocalLLM, get_usage, reset_turn_usage
+from orchestration.session import Session
 from tools import ALL_TOOLS
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -208,8 +215,8 @@ def run_fullscreen(session) -> None:
     Los logs nativos de procesos EXTERNOS (p. ej. llama-server compartiendo la
     terminal) no se pueden capturar desde acá — lanzalos con salida a archivo.
     """
-    from display.console import console
     from display import console as _console_mod
+    from display.console import console
     from display.fullscreen_tui import FullscreenTUI
 
     session._fullscreen = True  # sin EscWatcher ni prompts input() internos
@@ -330,6 +337,17 @@ def run_fullscreen(session) -> None:
                 console.print(f"[green]{msg}[/green]")
             else:
                 console.print(f"[red]{msg}[/red]")
+            return
+        elif payload[0] == "/verify":
+            from orchestration.session import run_commit_verification
+
+            console.print("[dim]🔍 Verificando (lint/tests/build)…[/dim]")
+            passed, report = run_commit_verification(session.repo_path)
+            console.print(report)
+            console.print(
+                "[green]✅ Todo verde.[/green]" if passed
+                else "[yellow]⛔ Hay rojos arriba — corregilos antes de commitear.[/yellow]"
+            )
             return
         elif payload[0] == "/help":
             console.print("[bold]Comandos:[/bold]\n" + format_help())
@@ -520,7 +538,6 @@ def run_doctor() -> int:
     Devuelve exit code: 0 = todo listo para usar agent-devs.
     """
     import importlib.util
-    import platform
     import shutil
     import subprocess as sp
 
@@ -631,8 +648,8 @@ def run_doctor() -> int:
 
     shim = shutil.which("agent-devs")
     if shim:
-        print(f"   cd /ruta/a/tu/proyecto && agent-devs .          # '.' = repo actual")
-        print(f"   agent-devs /ruta/a/otro/repo                   # o ruta explícita")
+        print("   cd /ruta/a/tu/proyecto && agent-devs .          # '.' = repo actual")
+        print("   agent-devs /ruta/a/otro/repo                   # o ruta explícita")
     else:
         print("   El comando global 'agent-devs' no está en tu PATH todavía:")
         print("   • Desde este repo:   .venv/bin/agent-devs .   (mac/linux)")
@@ -757,6 +774,17 @@ def main():
                 else:
                     console.print(f"[red]{msg}[/red]\n")
                 continue
+            if kind == "run" and payload[0] == "/verify":
+                from orchestration.session import run_commit_verification
+
+                console.print("[dim]🔍 Verificando (lint/tests/build)…[/dim]")
+                passed, report = run_commit_verification(session.repo_path)
+                console.print(report + "\n")
+                console.print(
+                    "[green]✅ Todo verde.[/green]\n" if passed
+                    else "[yellow]⛔ Hay rojos arriba — corregilos antes de commitear.[/yellow]\n"
+                )
+                continue
             if kind == "run" and payload[0] == "/help":
                 console.print("[bold]Comandos:[/bold]\n" + format_help() + "\n")
                 continue
@@ -791,7 +819,7 @@ def main():
                         console.print(f"  [bold]Usuario[/bold] [{role}] (sid={sid}, {tokens} tokens):")
                         console.print(f"    {user}")
                         if asst:
-                            console.print(f"  [dim]Agente:[/dim]")
+                            console.print("  [dim]Agente:[/dim]")
                             console.print(f"    [dim]{asst}[/dim]")
                         console.print()
                     console.print("[dim]Retomá una con /resume <id>.[/dim]\n")

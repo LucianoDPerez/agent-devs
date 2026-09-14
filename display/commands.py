@@ -21,6 +21,7 @@ COMMANDS: tuple[tuple[str, str, bool], ...] = (
     ("/history", "Muestra los últimos turnos guardados con su id", False),
     ("/resume", "Retoma una sesión anterior: /resume <id>", True),
     ("/autoapprove", "Aprueba escrituras sin preguntar: /autoapprove [on|off]", True),
+    ("/verify", "Corre lint/tests/build del repo ahora", False),
     ("/help", "Muestra esta ayuda de comandos", False),
 )
 

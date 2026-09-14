@@ -39,7 +39,7 @@ def main():
     models = sorted(data.keys())
 
     lines = ["# Reporte — banco small-llm (Medicos)", ""]
-    lines.append(f"Modelos evaluados: {', '.join('`%s`' % m for m in models)}")
+    lines.append("Modelos evaluados: " + ", ".join("`" + m + "`" for m in models))
     lines.append("")
     lines.append("## Tabla comparativa")
     lines.append("")
@@ -54,7 +54,6 @@ def main():
             verify = r.get("verify") or []
             vok = all(x["ok"] for x in verify) if verify else None
             verdict = "✅" if vok else ("❌" if vok is False else "n/a")
-            role = metrics.get("role_final") or metrics.get("role_initial") or "—"
             lines.append(
                 f"| {tid} | {ROLES.get(tid,'?')} | `{m}` | {verdict} "
                 f"| {fmt(metrics.get('tool_calls'))} "

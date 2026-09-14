@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import lru_cache as _lru_cache
 from pathlib import Path
 
 # Per-stack rules. Order matters: first match wins for monorepos.
@@ -151,9 +152,6 @@ def _detect_framework(root: Path) -> str:
             return "python_general"
 
     return ""
-
-
-from functools import lru_cache as _lru_cache
 
 
 @_lru_cache(maxsize=64)

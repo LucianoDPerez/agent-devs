@@ -15,6 +15,7 @@ Text.from_ansi. ESC cancela el turno; Enter envía; ⌥+Enter salto; Ctrl+C sale
 """
 from __future__ import annotations
 
+import contextlib
 import subprocess
 import sys
 import threading
@@ -26,7 +27,6 @@ from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.widgets import Static, TextArea
 
-from llm_wrapper import get_usage
 from display.console import MD_BEGIN, MD_END
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -134,10 +134,8 @@ class SelectablePane(Static):
         cache, action_copy_or_quit puede usar el texto que YA se capturó
         durante el drag. E2E real: click derecho copiaba, ⌘C no.
         """
-        try:
+        with contextlib.suppress(Exception):
             super().selection_updated(selection)
-        except Exception:
-            pass
         if selection is None:
             # no sobreescribir el cache con None (se limpia por keystroke)
             return
@@ -169,10 +167,8 @@ class SelectablePane(Static):
                                        check=True, timeout=3)
                     except Exception:
                         pass
-                    try:
+                    with contextlib.suppress(Exception):
                         self.app.notify("Copiado", severity="information")
-                    except Exception:
-                        pass
         except Exception:
             pass
         try:
@@ -294,7 +290,8 @@ class FullscreenTUI(App):
         config del LLM.
         """
         from config import (
-            LLM_BASE_URL, LLM_MODEL_NAME,
+            LLM_BASE_URL,
+            LLM_MODEL_NAME,
         )
         from llm_wrapper import detect_server_model
 
@@ -437,14 +434,12 @@ class FullscreenTUI(App):
         # y el placeholder del input dan el aviso visible SIEMPRE, para que el
         # usuario responda sí/no a tiempo y el turno no venza por no verlo.
         confirming = bool(st.get("confirm_pending"))
-        try:
+        with contextlib.suppress(Exception):
             self.query_one("#input", TextArea).placeholder = (
                 "❓ Escribí sí / no y Enter para aprobar o rechazar"
                 if confirming
                 else ""
             )
-        except Exception:
-            pass
         txt = Text.assemble(
             (" 🌿 " + str(st.get("branch", "-")), "green"),
             ((" ✅ auto", "bold black on yellow") if st.get("auto_approve") else ("", "")),
@@ -482,11 +477,9 @@ class FullscreenTUI(App):
 
     def _copy_to_system(self, text: str) -> None:
         """Vuelca texto al portapapeles del SISTEMA (pbcopy en macOS)."""
-        try:
+        with contextlib.suppress(Exception):
             subprocess.run(["pbcopy"], input=text.encode("utf-8"),
                            check=True, timeout=3)
-        except Exception:
-            pass
 
     def action_copy_or_quit(self) -> None:
         """Ctrl+C / ⌘C: copia si hay selección; si no, sale CON CONFIRMACIÓN.
@@ -514,10 +507,8 @@ class FullscreenTUI(App):
             self.exit()
             return
         self._exit_armed = True
-        try:
+        with contextlib.suppress(Exception):
             self.notify("Ctrl+C de nuevo para salir", severity="warning")
-        except Exception:
-            pass
 
     def action_cancel_turn(self) -> None:
         # Con la tira de comandos visible y sin turno en curso, Esc la cierra
@@ -526,10 +517,8 @@ class FullscreenTUI(App):
             self._hide_slash_hint()
             return
         if self.on_cancel is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self.on_cancel()
-            except Exception:
-                pass
         self._exit_armed = False
 
     def action_copy_selection(self) -> None:
@@ -539,10 +528,8 @@ class FullscreenTUI(App):
         action_copy_text() la pasa al clipboard de la app, y acá además la
         volcamos a pbcopy para que sea pegable en cualquier app.
         """
-        try:
+        with contextlib.suppress(Exception):
             self.screen.action_copy_text()
-        except Exception:
-            pass
         txt = self.clipboard
         if txt:
             self._copy_to_system(txt)
@@ -610,19 +597,15 @@ class FullscreenTUI(App):
         self._slash_matches = []
         self._slash_index = 0
         self._slash_visible = False
-        try:
+        with contextlib.suppress(Exception):
             self.query_one("#slash-hint", Static).display = False
-        except Exception:
-            pass
 
     def action_slash_complete(self) -> None:
         """Tab: completa la coincidencia única (o el prefijo común); si no hay
         tira visible, indenta como siempre (cero cambio de conducta normal)."""
         if not self._slash_visible or not self._slash_matches:
-            try:
+            with contextlib.suppress(Exception):
                 self.query_one("#input", TextArea).insert("  ")
-            except Exception:
-                pass
             return
         import os as _os
 
@@ -651,10 +634,8 @@ class FullscreenTUI(App):
             self.pane_writer.write(traceback.format_exc())
         finally:
             self._busy = False
-            try:
+            with contextlib.suppress(Exception):
                 self.call_from_thread(self._refresh_toolbar)
-            except Exception:
-                pass
 
     # ── API ────────────────────────────────────────────────────────────
     def clear_pane(self) -> None:
@@ -662,10 +643,8 @@ class FullscreenTUI(App):
         self._pane_text = Text()
         self._md_active = False
         self._md_raw = ""
-        try:
+        with contextlib.suppress(Exception):
             self.query_one("#pane_text", Static).update(self._pane_text)
-        except Exception:
-            pass
 
     def write(self, text: str) -> None:
         """Output del harness → panel (thread-safe)."""

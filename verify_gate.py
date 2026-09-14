@@ -122,9 +122,7 @@ def _implicated(changed_file: str, error_text: str) -> bool:
     # "pacientesRoutes" matchea tanto "src/.../pacientesRoutes.ts(20,5)"
     # como "Cannot find module './pacientesRoutes'".
     stem = Path(changed_file).stem
-    if stem and len(stem) >= 4 and stem in error_text:
-        return True
-    return False
+    return bool(stem and len(stem) >= 4 and stem in error_text)
 
 
 def _syntax_errors(repo_path: str, files: list[str]) -> tuple[bool, str]:

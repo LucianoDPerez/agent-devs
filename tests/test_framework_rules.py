@@ -4,8 +4,8 @@ import tempfile
 from pathlib import Path
 
 from orchestration.framework_rules import (
-    _detect_framework,
     _FRAMEWORK_RULES,
+    _detect_framework,
     inject_framework_rules,
 )
 

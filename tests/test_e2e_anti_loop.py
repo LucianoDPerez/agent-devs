@@ -75,13 +75,13 @@ def test_e2e_keyword_resolution_with_real_repo():
 
     # Test B: integrated via preload_cited_files
     enriched = preload_cited_files("corregir bug en /pacientes que muestra error", str(repo))
-    assert "PacientesPage.tsx" in enriched, f"preload_cited_files must include path hint"
-    print(f"  ✅ preload_cited_files integrates keyword resolution")
+    assert "PacientesPage.tsx" in enriched, "preload_cited_files must include path hint"
+    print("  ✅ preload_cited_files integrates keyword resolution")
 
     # Test C: no false positives
     hint2 = _resolve_keyword_paths("implementar feature X sin explorar", str(repo))
     assert hint2 == "", f"Expected empty for no match, got: {hint2}"
-    print(f"  ✅ No false positives for non-matching input")
+    print("  ✅ No false positives for non-matching input")
 
 
 # ── Test 2: Write pressure — read_file NO es productivo ────────────────────
@@ -94,7 +94,9 @@ def test_e2e_read_file_triggers_write_pressure():
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
     from orchestration.tool_dedupe import (
-        ExploreBudget, ToolBudgetExceeded, VERIFY_TOOL_NAMES, PRODUCTIVE_TOOL_NAMES,
+        VERIFY_TOOL_NAMES,
+        ExploreBudget,
+        ToolBudgetExceeded,
     )
 
     # Budget con productive_names=VERIFY_TOOL_NAMES (sin read_file)
@@ -115,10 +117,10 @@ def test_e2e_read_file_triggers_write_pressure():
     # La 6ta tool call (no write, no verify) debe disparar ToolBudgetExceeded
     try:
         budget.consume("list_files", {"path": "/tmp"})
-        assert False, "Should have raised ToolBudgetExceeded after 5 non-productive calls"
+        raise AssertionError("Should have raised ToolBudgetExceeded after 5 non-productive calls")
     except ToolBudgetExceeded:
         pass  # Expected
-    print(f"  ✅ read_file does NOT count as productive — ToolBudgetExceeded after 5 calls")
+    print("  ✅ read_file does NOT count as productive — ToolBudgetExceeded after 5 calls")
 
     # Pero run_lint SÍ es productivo → no debería disparar excepción
     budget2 = ExploreBudget(
@@ -130,7 +132,7 @@ def test_e2e_read_file_triggers_write_pressure():
     # 5ta call es verify → productiva → no excepción
     result = budget2.consume("run_lint", {"path": "/tmp"})
     assert result is None, "run_lint should be allowed (productive)"
-    print(f"  ✅ run_lint IS productive — no exception for verify calls")
+    print("  ✅ run_lint IS productive — no exception for verify calls")
 
 
 # ── Test 3: Verify gate no da falsos positivos ─────────────────────────────
@@ -149,12 +151,12 @@ def test_e2e_verify_gate_correct_detection():
     session._called_tools = {"read_file", "run_lint", "run_tests", "run_build"}
 
     assert session._verify_tools_called() is True, "Should detect verify tools"
-    print(f"  ✅ Verify gate correctly detects verify tools")
+    print("  ✅ Verify gate correctly detects verify tools")
 
     # Sin verify tools
     session._called_tools = {"read_file", "edit_file"}
     assert session._verify_tools_called() is False, "Should NOT detect verify tools"
-    print(f"  ✅ Verify gate correctly rejects turns without verify")
+    print("  ✅ Verify gate correctly rejects turns without verify")
 
 
 # ── Test 4: Dedupe bloquea repeticiones ────────────────────────────────────
@@ -174,10 +176,10 @@ def test_e2e_dedupe_blocks_repeats():
     # Segunda idéntica: debe bloquear
     try:
         dedupe.check("read_file", {"path": "/tmp/a.ts"})
-        assert False, "Should block repeated identical call"
+        raise AssertionError("Should block repeated identical call")
     except Exception:
         pass  # Expected
-    print(f"  ✅ Dedupe max_repeats=1 blocks second identical call")
+    print("  ✅ Dedupe max_repeats=1 blocks second identical call")
 
 
 # ── Test 5: write_file guard en repositorio real ───────────────────────────

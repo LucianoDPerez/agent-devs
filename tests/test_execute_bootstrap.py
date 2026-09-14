@@ -4,18 +4,18 @@ import tempfile
 from pathlib import Path
 
 from orchestration.execute_bootstrap import (
+    build_paste_correction_suffix,
     detect_bulk_file_count,
     detect_repo_stacks,
-    inject_repo_hints,
-    suggest_minimal_files,
-    build_paste_correction_suffix,
     extract_checklist_items,
     extract_requested_task_numbers,
     extract_review_findings,
     filter_task_sections,
     format_done_checklist,
+    inject_repo_hints,
     preload_cited_files,
     preload_for_review,
+    suggest_minimal_files,
 )
 
 _SAMPLE_TASKS = """# Plan
@@ -145,8 +145,8 @@ class TestReviewPreload:
 
     def test_preload_for_review_clean_tree_shows_commits(self):
         """When tree is clean (code committed), review gets diff against main."""
-        import subprocess
         import shutil
+        import subprocess
         tmp = tempfile.mkdtemp()
         try:
             subprocess.run(["git", "init"], cwd=tmp, capture_output=True, check=True)

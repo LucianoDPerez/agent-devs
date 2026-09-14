@@ -1,0 +1,71 @@
+"""Gate de verificación en commit + comando /verify (híbido de contexto).
+
+Decisión: verificar por checkpoint (no por archivo) + batería obligatoria
+al commitear + /verify manual. Nada roto llega a git.
+"""
+
+import tools.verify as _verify_mod
+from display.commands import interpret_slash
+from orchestration.session import run_commit_verification
+
+
+class _Fake:
+    def __init__(self, text):
+        self.text = text
+
+    def invoke(self, args):
+        return self.text
+
+
+def test_bateria_todo_verde(monkeypatch):
+    monkeypatch.setattr(_verify_mod, "run_lint", _Fake("[PASSED] exit=0\n$ tsc"))
+    monkeypatch.setattr(_verify_mod, "run_tests", _Fake("[PASSED] exit=0\n$ pytest"))
+    monkeypatch.setattr(_verify_mod, "run_build", _Fake("[PASSED] exit=0\n$ build"))
+    passed, report = run_commit_verification("/tmp")
+    assert passed is True
+    assert "✅ lint" in report and "✅ tests" in report and "✅ build" in report
+
+
+def test_bateria_un_rojo_falla(monkeypatch):
+    monkeypatch.setattr(_verify_mod, "run_lint", _Fake("[PASSED] exit=0"))
+    monkeypatch.setattr(_verify_mod, "run_tests", _Fake("[FAILED] exit=1\n$ pytest\nF test_x"))
+    monkeypatch.setattr(_verify_mod, "run_build", _Fake("[PASSED] exit=0"))
+    passed, report = run_commit_verification("/tmp")
+    assert passed is False
+    assert "❌ tests" in report
+
+
+def test_bateria_tool_que_explota_cuenta_como_rojo(monkeypatch):
+    class Boom:
+        def invoke(self, args):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(_verify_mod, "run_lint", Boom())
+    monkeypatch.setattr(_verify_mod, "run_tests", _Fake("[PASSED] x"))
+    monkeypatch.setattr(_verify_mod, "run_build", _Fake("[PASSED] x"))
+    passed, _ = run_commit_verification("/tmp")
+    assert passed is False
+
+
+def test_bateria_sin_linter_cuenta_como_rojo(monkeypatch):
+    # Mensaje "no hay linter" NO es [PASSED] → no valida como verde.
+    monkeypatch.setattr(_verify_mod, "run_lint", _Fake("No hay linter configurado"))
+    monkeypatch.setattr(_verify_mod, "run_tests", _Fake("[PASSED] x"))
+    monkeypatch.setattr(_verify_mod, "run_build", _Fake("[PASSED] x"))
+    passed, _ = run_commit_verification("/tmp")
+    assert passed is False
+
+
+def test_interpret_verify():
+    assert interpret_slash("/verify") == ("run", ("/verify", ""))
+    # Único con ese prefijo → corre directo
+    assert interpret_slash("/ver") == ("run", ("/verify", ""))
+
+
+def test_prompt_execute_checkpoint_no_por_archivo():
+    from core.roles import Role, load_prompt
+
+    prompt = load_prompt(Role.EXECUTE)
+    assert "por checkpoint, no por archivo" in prompt
+    assert "Batería COMPLETA" in prompt
+    assert "después de CADA subtarea" not in prompt

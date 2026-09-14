@@ -13,13 +13,13 @@ import sys
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import Layout, HSplit, Window
+from prompt_toolkit.layout import HSplit, Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.styles import Style, merge_styles
 from prompt_toolkit.widgets import TextArea
 
-from display.tui import _make_toolbar, _STYLE
+from display.tui import _STYLE, _make_toolbar
 
 _MIN_LINES = 3
 _MAX_LINES = 14

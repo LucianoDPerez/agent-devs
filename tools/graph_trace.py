@@ -20,7 +20,7 @@ from typing import Any
 
 from langchain_core.tools import StructuredTool, tool
 
-from tools._helpers import _read_text, _is_excluded
+from tools._helpers import _is_excluded, _read_text
 from tools.search import search_code
 
 # Output limits: el 4B no puede razonar sobre 16K chars de source. Reducido
@@ -247,7 +247,7 @@ async def _find_page_for_term(
     if src:
         parts.append(f"SOURCE DE '{exported}':\n{_cap(src, _SNIPPET_MAX_CHARS)}")
     if usages_lines:
-        parts.append(f"USOS EN PÁGINAS:\n" + "\n".join(usages_lines))
+        parts.append("USOS EN PÁGINAS:\n" + "\n".join(usages_lines))
     return "\n".join(parts)
 
 

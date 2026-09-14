@@ -18,20 +18,20 @@ from pathlib import Path
 
 from tools._helpers import _is_excluded, _read_text
 from tools.routes import (
+    _ASPNET_MAP_RE,
+    _DJANGO_RE,
     _EXPRESS_RE,
-    _NEST_RE,
     _FASTAPI_RE,
     _FLASK_RE,
-    _DJANGO_RE,
     _GO_RE,
+    _LARAVEL_RE,
+    _NEST_RE,
+    _RAILS_RE,
     _RUST_ATTR_RE,
     _RUST_ROUTE_RE,
-    _SPRING_MAPPING_RE,
-    _LARAVEL_RE,
-    _SYMFONY_RE,
     _SLIM_RE,
-    _ASPNET_MAP_RE,
-    _RAILS_RE,
+    _SPRING_MAPPING_RE,
+    _SYMFONY_RE,
 )
 
 # Todos los patrones de rutas por framework (framework-agnóstico: el detector

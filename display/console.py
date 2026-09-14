@@ -110,7 +110,6 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
     response_started = False
     response_parts: list[str] = []
     reasoning_text: list[str] = []
-    saw_tool_call = False
     produced_output = False
     reasoning_since: float | None = None
     total_tool_calls = 0
@@ -126,7 +125,6 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
     # infinitamente ("Would you like me to commit this change?" ×17). El
     # idle_timeout NO lo atrapa (el modelo sigue emitiendo chunks — nunca
     # es idle). Se detecta por sufijo repetido en el texto acumulado.
-    loop_detected = False
     # Duración de generación continua de CONTENIDO (sin tool calls): el 4B
     # a veces no emite EOS y sigue generando texto nuevo indefinidamente.
     # Timer por bloque de contenido: arranca con el primer chunk de texto y
@@ -269,7 +267,6 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                             break
                     if tc.get("args"):
                         console.print(f"[blue]{escape(tc['args'])}[/blue]", end="", highlight=False)
-                    saw_tool_call = True
                     produced_output = True
                 if produced_output:
                     # Reset del timer: el próximo bloque de razonamiento

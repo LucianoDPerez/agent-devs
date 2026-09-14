@@ -141,7 +141,9 @@ def test_e2e_execute_prompt_has_bug_diagnostic_step():
 
 def test_e2e_execute_prompt_has_mandatory_verification():
     """El prompt EXECUTE debe exigir run_lint/run_tests/run_build como
-    OBLIGATORIO, no como opcional."""
+    OBLIGATORIO, no como opcional. Contrato híbrido: 1 tool por subtarea +
+    batería completa obligatoria al cierre y antes de commitear (verificar
+    por archivo quemaba contexto)."""
     from core.roles import Role
     from orchestration.agent_builder import load_prompt
 
@@ -150,7 +152,8 @@ def test_e2e_execute_prompt_has_mandatory_verification():
     assert "run_lint" in prompt
     assert "run_tests" in prompt
     assert "run_build" in prompt
-    assert "Después de escribir CADA subtarea" in prompt, "Verify must run per-subtask"
+    assert "Batería COMPLETA" in prompt, "Full battery mandatory at close/commit"
+    assert "por checkpoint, no por archivo" in prompt
     assert "respondé LISTO" in prompt, (
         "Must block completion until verify is done"
     )
@@ -352,4 +355,5 @@ def test_e2e_main_warns_on_dirty_repo():
     import main
 
     assert hasattr(main, "_warn_dirty_repo")
-    assert "_warn_dirty_repo(repo_path)" in open(main.__file__).read()
+    with open(main.__file__, encoding="utf-8") as fh:
+        assert "_warn_dirty_repo(repo_path)" in fh.read()

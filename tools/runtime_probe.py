@@ -6,9 +6,9 @@ y reemplazó el import de globals.css sin demostrar NADA). La regla pasa a ser:
 causa raíz DEMOSTRADA con evidencia runtime antes de escribir un cambio.
 """
 
+import contextlib
 import json
 import re
-import signal
 import subprocess
 import threading
 import time
@@ -61,10 +61,8 @@ def probe_http(url: str, timeout_s: float = 5.0) -> str:
             loc = e.headers.get("Location", "?") if e.headers else "?"
             return f"HTTP {e.code} redirect — {url} → {loc} (no seguido por seguridad)"
         body = ""
-        try:
+        with contextlib.suppress(Exception):
             body = e.read(_MAX_BODY).decode("utf-8", errors="replace")
-        except Exception:
-            pass
         return f"HTTP {e.code} — {url}\n\n{body[: _MAX_BODY]}"
     except Exception as e:
         return (
@@ -136,10 +134,8 @@ def capture_dev_server(path: str, script: str = "dev", wait_s: int = 25) -> str:
         except (OSError, ProcessLookupError):
             proc.terminate()
     except Exception:
-        try:
+        with contextlib.suppress(Exception):
             proc.terminate()
-        except Exception:
-            pass
     try:
         proc.wait(timeout=5)
     except Exception:

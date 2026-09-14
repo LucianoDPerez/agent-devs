@@ -5,15 +5,15 @@ import asyncio
 from langchain.agents import create_agent
 
 from config import (
-    EXECUTE_MAX_TOKENS,
-    EXECUTE_MAX_REASONING_TOKENS,
-    REVIEW_MAX_TOKENS,
-    REVIEW_MAX_REASONING_TOKENS,
-    ANALYZE_MAX_TOKENS,
     ANALYZE_MAX_REASONING_TOKENS,
-    PLAN_MAX_TOKENS,
-    PLAN_MAX_REASONING_TOKENS,
+    ANALYZE_MAX_TOKENS,
+    EXECUTE_MAX_REASONING_TOKENS,
+    EXECUTE_MAX_TOKENS,
     MCP_CONNECT_TIMEOUT,
+    PLAN_MAX_REASONING_TOKENS,
+    PLAN_MAX_TOKENS,
+    REVIEW_MAX_REASONING_TOKENS,
+    REVIEW_MAX_TOKENS,
 )
 from core.roles import Role, load_prompt, tools_for_role
 from display.console import console
@@ -23,9 +23,9 @@ from orchestration.tool_dedupe import (
     ToolCallDedupe,
     wrap_tools_with_dedupe,
 )
-from tools.mcp_client import load_mcp_tools, mcp_tool_count
+from tools import WRITE_ONLY_TOOLS
 from tools.graph_trace import build_trace_component
-from tools import GATE_RETRY_TOOLS, WRITE_ONLY_TOOLS
+from tools.mcp_client import load_mcp_tools, mcp_tool_count
 
 # ANALYZE/PLAN usan las tools MCP crudas (search_graph, trace_path, etc).
 # EXECUTE NO recibe MCP crudo (el 4B se pierde entre 14 schemas y loops de

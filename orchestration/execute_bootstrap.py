@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import re
 from pathlib import Path
 
@@ -817,10 +818,8 @@ def inject_repo_hints(repo_path: str | None, *, max_chars: int = 8_000) -> str:
             break
         env_ex = root / name
         if env_ex.is_file():
-            try:
+            with contextlib.suppress(OSError):
                 _take(name, env_ex.read_text(encoding="utf-8", errors="replace"))
-            except OSError:
-                pass
             break
 
     loaded_entries = 0
@@ -939,6 +938,13 @@ def inject_git_context(repo_path: str | None, *, max_chars: int = 6_000) -> str:
         "ESTADO DE GIT (qué código ya existe — usalo para decidir qué falta):\n\n"
         + "\n".join(parts)
     )
+
+
+def _insert_before_marker(out: str, marker: str, hints: str) -> str:
+    """Inserta hints antes del marcador (o al final si no está)."""
+    if marker in out:
+        return out.replace(marker, hints + "\n" + marker, 1)
+    return out + "\n\n" + hints
 
 
 def _build_preload_parts(
@@ -1099,10 +1105,7 @@ def preload_cited_files(user_input: str, repo_path: str | None = None) -> str:
         if git_ctx:
             out = out + "\n\n" + git_ctx
         if hints:
-            if marker in out:
-                out = out.replace(marker, hints + "\n" + marker, 1)
-            else:
-                out = out + "\n\n" + hints
+            out = _insert_before_marker(out, marker, hints)
         # Banner al INICIO: leé los archivos de la tarea (para el read_cache) y
         # luego escribí. Sin list_files — los paths de la tarea bastan.
         banner = (
@@ -1170,11 +1173,7 @@ def preload_for_analyze(user_input: str, repo_path: str | None = None) -> str:
     remaining = max(2000, 12000 - len(out))
     hints = inject_repo_hints(repo_path, max_chars=min(4000, remaining))
     if hints:
-        marker = "INSTRUCCIÓN OBLIGATORIA:"
-        if marker in out:
-            out = out.replace(marker, hints + "\n" + marker, 1)
-        else:
-            out = out + "\n\n" + hints
+        out = _insert_before_marker(out, "INSTRUCCIÓN OBLIGATORIA:", hints)
     return out
 
 

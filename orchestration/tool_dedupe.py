@@ -452,12 +452,12 @@ class ExploreBudget:
             self.write_pressure
             and not self._wrote
             and self._total > self.max_tools_before_write
+            and name not in self._productive_names
         ):
-            if name not in self._productive_names:
-                raise ToolBudgetExceeded(
-                    f"{self._total} tool calls sin escribir código ni verificar. "
-                    "NO explores ni leas más. TU ÚNICA ACCIÓN: write_file o edit_file AHORA."
-                )
+            raise ToolBudgetExceeded(
+                f"{self._total} tool calls sin escribir código ni verificar. "
+                "NO explores ni leas más. TU ÚNICA ACCIÓN: write_file o edit_file AHORA."
+            )
 
         if name in EXPLORE_TOOL_NAMES:
             self._count += 1
@@ -485,24 +485,23 @@ class ExploreBudget:
             return None
 
         # Tras agotar explore, limitar read_file / git_status loops
-        if self._explore_exhausted:
-            if name in READISH_TOOL_NAMES:
-                self._reads_after += 1
-                if self._reads_after > self.max_reads_after_explore:
-                    if not self.write_pressure:
-                        raise ToolBudgetExceeded(
-                            "Demasiadas lecturas. NO leas más. "
-                            "Respondé TU ANÁLISIS/PLAN AHORA con lo que ya leíste."
-                        )
-                    if self.max_calls <= 0:
-                        raise ToolBudgetExceeded(
-                            "Demasiados read_file. NO leas más. "
-                            "TU ÚNICA ACCIÓN: write_file o edit_file AHORA."
-                        )
-                    return (
-                        "⛔ Demasiados read_file. NO leas más archivos. "
+        if self._explore_exhausted and name in READISH_TOOL_NAMES:
+            self._reads_after += 1
+            if self._reads_after > self.max_reads_after_explore:
+                if not self.write_pressure:
+                    raise ToolBudgetExceeded(
+                        "Demasiadas lecturas. NO leas más. "
+                        "Respondé TU ANÁLISIS/PLAN AHORA con lo que ya leíste."
+                    )
+                if self.max_calls <= 0:
+                    raise ToolBudgetExceeded(
+                        "Demasiados read_file. NO leas más. "
                         "TU ÚNICA ACCIÓN: write_file o edit_file AHORA."
                     )
+                return (
+                    "⛔ Demasiados read_file. NO leas más archivos. "
+                    "TU ÚNICA ACCIÓN: write_file o edit_file AHORA."
+                )
 
         return None
 
@@ -891,9 +890,12 @@ def _wrap_one(
                     pass
                 except Exception:
                     pass
-        if confirm_callback is not None and name in CONFIRM_TOOL_NAMES:
-            if not confirm_callback(name, kwargs):
-                return _rejected_message(kwargs)
+        if (
+            confirm_callback is not None
+            and name in CONFIRM_TOOL_NAMES
+            and not confirm_callback(name, kwargs)
+        ):
+            return _rejected_message(kwargs)
         if tool_call_logger is not None:
             tool_call_logger.add(name)
         result = tool.invoke(kwargs)
@@ -966,9 +968,12 @@ def _wrap_one(
                     pass
                 except Exception:
                     pass
-        if confirm_callback is not None and name in CONFIRM_TOOL_NAMES:
-            if not await _confirm_async(kwargs):
-                return _rejected_message(kwargs)
+        if (
+            confirm_callback is not None
+            and name in CONFIRM_TOOL_NAMES
+            and not await _confirm_async(kwargs)
+        ):
+            return _rejected_message(kwargs)
         if tool_call_logger is not None:
             tool_call_logger.add(name)
         result = await tool.ainvoke(kwargs)

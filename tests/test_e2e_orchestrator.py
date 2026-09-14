@@ -1,3 +1,4 @@
+# ruff: noqa: E402 - sys.path bootstrap intencional: los imports van debajo
 """Prueba end-to-end del orquestador multicapa de AgentDevs.
 
 Testea clasificador (instantáneo), session flow con role switching, y
@@ -18,10 +19,10 @@ REPO_PATH = "~/demo/demo-academy"
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import LLM_BASE_URL, LLM_MODEL_NAME
+from core.intents import Intent
+from core.roles import Role, load_prompt, role_for_intent, tools_for_role
 from llm_wrapper import LocalLLM, get_usage, reset_turn_usage
 from orchestration.router import classify_intent
-from core.intents import Intent
-from core.roles import Role, role_for_intent, tools_for_role, load_prompt
 
 results = []
 

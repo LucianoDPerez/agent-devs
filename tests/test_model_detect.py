@@ -17,6 +17,7 @@ def test_vacio():
 
 def test_detect_sin_server_devuelve_none(monkeypatch):
     import urllib.request
+
     from llm_wrapper import detect_server_model
 
     def boom(*a, **k):

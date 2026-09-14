@@ -18,13 +18,14 @@ invalidada por snapshot_hash igual que `repos`.
 """
 
 import asyncio
+import contextlib
 import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from config import CACHE_DB, EXCLUDED_DIRS, EXCLUDED_FILES
 from cache import normalize_path, snapshot_hash
+from config import CACHE_DB, EXCLUDED_DIRS, EXCLUDED_FILES
 
 # Carpetas donde suele vivir la lógica de dominio / entrada
 _DOMAIN_DIR_HINTS = (
@@ -179,7 +180,7 @@ def extract_business(repo_path: str) -> dict:
     for e in entities:
         by_name.setdefault(e["name"], []).append(e)
     unique = []
-    for name, versions in by_name.items():
+    for _name, versions in by_name.items():
         best = max(versions, key=lambda v: sum(1 for f in v["fields"] if f["required"]))
         unique.append(best)
     entities = unique
@@ -376,8 +377,6 @@ def get_business_context(repo_path: str, mcp_tools: list = None, force: bool = F
         report = cached.get("rules_json") or {}
     else:
         report = build_business_report(repo_path, mcp_tools)
-        try:
+        with contextlib.suppress(Exception):
             save_business_rules(repo_path, report)
-        except Exception:
-            pass
     return format_for_prompt(report)

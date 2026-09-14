@@ -187,7 +187,6 @@ def test_enter_budget_retry_falla_cerrado_fuera_de_execute(tmp_path):
     """Fail-closed: el retry de escritura otorga edit_file/write_file. Si un
     rol de solo-lectura llega acá, fallar LOUD en vez de regalar escritura."""
     from core.roles import Role
-
     from orchestration.tool_dedupe import ToolBudgetExceeded
 
     sess = _session(tmp_path)

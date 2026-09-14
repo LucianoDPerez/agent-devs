@@ -1,7 +1,8 @@
 """Unit tests for tool budget and dedupe logic."""
 import pytest
+
 from config import EXECUTE_BULK_MAX_ATTEMPTS
-from orchestration.session import _bulk_budget, _CONTEXT_LIMIT
+from orchestration.session import _CONTEXT_LIMIT, _bulk_budget
 from orchestration.tool_dedupe import (
     ExploreBudget,
     ToolBudgetExceeded,

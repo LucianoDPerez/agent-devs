@@ -11,7 +11,8 @@ import json
 import tempfile
 from pathlib import Path
 
-from tools.graph_trace import build_trace_component, _find_file_named
+from tools.graph_trace import _find_file_named, build_trace_component
+
 
 class FakeMCP:
     """Tool MCP falsa: devuelve siempre el mismo payload de texto."""

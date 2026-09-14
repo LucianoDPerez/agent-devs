@@ -1,5 +1,6 @@
 """Tools de operaciones sobre el sistema de archivos."""
 
+import contextlib
 import re
 from pathlib import Path
 
@@ -14,6 +15,8 @@ from config import (
     WRITE_FILE_OVERWRITE_MAX_LINES,
 )
 
+from ._helpers import _is_excluded
+
 # Extensión → lenguaje para el chequeo de sintaxis post-write. Solo se valida
 # cuando el binario del intérprete está disponible; en caso contrario se omite
 # (fail-open, nunca bloquea el write ni genera falsos positivos).
@@ -24,9 +27,6 @@ _SYNTAX_CHECKERS = {
 # Extensiones cuyo contenido se valida por balance de delimitadores. Las cadenas
 # y comentarios se respetan para evitar falsos positivos.
 _INTEGRITY_EXTS = {".sh", ".py", ".go", ".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte", ".md"}
-
-from ._helpers import _is_excluded
-
 
 # Paths autorizados por el ORQUESTADOR para sobrescribir con write_file pese al
 # guard anti-destrucción. Se habilita SOLO tras N rechazos del guard quirúrgico
@@ -89,9 +89,7 @@ def _is_protected_task_path(path: str) -> bool:
     if name_lower in PROTECTED_TASK_FILENAMES:
         return True
     parts_lower = {part.lower() for part in p.parts}
-    if parts_lower & PROTECTED_TASK_DIRS:
-        return True
-    return False
+    return bool(parts_lower & PROTECTED_TASK_DIRS)
 
 
 @tool
@@ -368,10 +366,8 @@ def _syntax_check(path: str, content: str) -> str | None:
                 timeout=30,
             )
         finally:
-            try:
+            with contextlib.suppress(OSError):
                 Path(tmp_path).unlink(missing_ok=True)
-            except OSError:
-                pass
     except (OSError, subprocess.SubprocessError):
         # intérprete ausente o fallo de entorno → no podemos verificar, omitir
         return None
@@ -894,8 +890,8 @@ def _anchor_spans(content: str, old_str: str) -> list[tuple[int, int]]:
         window = content_lines[i : i + len(old_lines)]
         for j, wln in enumerate(window):
             if wln.strip() == last:
-                start = sum(len(l) + 1 for l in content_lines[:i])
-                end = start + sum(len(l) + 1 for l in content_lines[i : i + j + 1])
+                start = sum(len(s) + 1 for s in content_lines[:i])
+                end = start + sum(len(s) + 1 for s in content_lines[i : i + j + 1])
                 spans.append((start, end))
                 break
     return spans

@@ -9,6 +9,7 @@ Este índice reexporta todas y expone un pool por tipo de agente para que cada
 agente (analyzer, planner, executor, reviewer) use solo las que necesita.
 """
 
+from .env import inspect_env
 from .filesystem import apply_patch, delete_file, edit_file, list_files, read_file, write_file
 from .git import (
     changed_files,
@@ -24,9 +25,8 @@ from .git import (
     read_pr,
     stage_files,
 )
-from .routes import inspect_routes
 from .models import inspect_models
-from .env import inspect_env
+from .routes import inspect_routes
 from .runtime_probe import capture_dev_server, probe_http
 from .search import search_code
 from .verify import run_build, run_install, run_lint, run_npm_script, run_tests

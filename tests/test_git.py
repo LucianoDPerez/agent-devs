@@ -144,7 +144,6 @@ class TestCreateBranch:
 
     def test_nombres_invalidos(self):
         import pytest
-
         from langchain_core.tools import ToolException
 
         from tools.git import create_branch

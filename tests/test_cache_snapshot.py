@@ -5,7 +5,6 @@ git: una carpeta untracked nueva (ej: lucho-plans/) NO debe invalidar el
 caché, mientras que editar un archivo tracked SÍ debe cambiarlo.
 """
 
-import os
 import subprocess
 import tempfile
 from pathlib import Path

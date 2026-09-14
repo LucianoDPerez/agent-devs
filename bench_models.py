@@ -5,13 +5,11 @@ Usage: python bench_models.py
 """
 
 import json
-import os
-import signal
 import subprocess
 import sys
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 
 REPO_PATH = "~/demo/demo-academy"
 AGENT_DIR = "~/agent-lucho"
@@ -135,9 +133,9 @@ def tool_call_test(model_alias):
 def run_analysis(model_alias):
     """Corre el analyzer del agente contra el repo."""
     sys.path.insert(0, AGENT_DIR)
+    from analyzer import run_analysis
     from config import LLM_BASE_URL
     from llm_wrapper import LocalLLM
-    from analyzer import run_analysis
 
     llm = LocalLLM(
         base_url=LLM_BASE_URL,
@@ -158,7 +156,7 @@ def run_analysis(model_alias):
 
 def test_basic_chat(model_alias):
     """1. Test básico: saludo + pregunta simple de codigo."""
-    log(f"[BASIC CHAT] Preguntando sobre el repo...")
+    log("[BASIC CHAT] Preguntando sobre el repo...")
     resp = chat_completion(
         "Describime la arquitectura de este proyecto Java en 3 lineas maximas. "
         "El proyecto está en ~/demo/demo-academy",
@@ -178,7 +176,7 @@ def test_basic_chat(model_alias):
 
 def test_tool_calling(model_alias):
     """2. Test de tool calling: debe llamar list_files."""
-    log(f"[TOOL CALLING] Probando tool calling...")
+    log("[TOOL CALLING] Probando tool calling...")
     resp = tool_call_test(model_alias)
     msg = resp["choices"][0]["message"]
     usage = resp.get("usage", {})
@@ -205,7 +203,7 @@ def test_tool_calling(model_alias):
 
 def test_analysis(model_alias):
     """3. Test de análisis estructurado (JSON output)."""
-    log(f"[ANALYSIS] Generando análisis del repo...")
+    log("[ANALYSIS] Generando análisis del repo...")
     result, raw_output = run_analysis(model_alias)
     print(f"Lenguaje detectado: {result['language']}")
     print(f"Stack detectado: {result['tech_stack']}")

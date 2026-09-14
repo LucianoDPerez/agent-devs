@@ -5,7 +5,6 @@ Evidencia de los faltantes originales:
   load_session_turns (cache.py) existía pero nadie la llamaba.
 - Sin autocompletado: TextArea pelado, cero Completer en el repo.
 """
-import pytest
 
 import cache
 from cache import save_turn
@@ -17,12 +16,11 @@ from display.commands import (
 )
 from orchestration.session import Session
 
-
 # ── registro y matching ──────────────────────────────────────────────
 
 def test_todos_los_comandos_tienen_descripcion():
     help_text = format_help()
-    for name in ("/new", "/compact", "/history", "/resume", "/help"):
+    for name in ("/new", "/compact", "/history", "/resume", "/autoapprove", "/verify", "/help"):
         assert name in help_text
     # Descripciones breves pedidas (una por comando)
     assert "nueva sesión" in help_text
@@ -30,7 +28,7 @@ def test_todos_los_comandos_tienen_descripcion():
 
 
 def test_match_filtra_por_prefijo():
-    assert [n for n, _ in match_commands("/")] == ["/new", "/compact", "/history", "/resume", "/autoapprove", "/help"]
+    assert [n for n, _ in match_commands("/")] == ["/new", "/compact", "/history", "/resume", "/autoapprove", "/verify", "/help"]
     assert [n for n, _ in match_commands("/h")] == ["/history", "/help"]
     assert [n for n, _ in match_commands("/res")] == ["/resume"]
     assert match_commands("/z") == []
@@ -74,7 +72,7 @@ def test_ptk_completer_ofrece_todo():
     from prompt_toolkit.document import Document
 
     got = {c.text for c in completer.get_completions(Document("/"), None)}
-    assert got == {"/new", "/compact", "/history", "/resume", "/autoapprove", "/help"}
+    assert got == {"/new", "/compact", "/history", "/resume", "/autoapprove", "/verify", "/help"}
     got_h = {c.text for c in completer.get_completions(Document("/h"), None)}
     assert got_h == {"/history", "/help"}
 

@@ -4,6 +4,7 @@ Guarda el análisis generado por `--analyze` en ~/.agent-cache/repo_lens.db.
 El `snapshot_hash` permite detectar si el repo cambió y requiere re-análisis.
 """
 
+import contextlib
 import hashlib
 import json
 import sqlite3
@@ -68,10 +69,8 @@ def _connect() -> sqlite3.Connection:
     conn.executescript(_SCHEMA)
     # Migración liviana: lista de archivos del snapshot para el reuso por
     # diff chico. Fail-open: si la columna ya existe, se ignora el error.
-    try:
+    with contextlib.suppress(sqlite3.OperationalError):
         conn.execute("ALTER TABLE repos ADD COLUMN snapshot_files TEXT")
-    except sqlite3.OperationalError:
-        pass
     conn.commit()
     return conn
 
@@ -117,10 +116,7 @@ def _repo_files(root: Path):
     """
     count = 0
     tracked = _git_tracked_files(root) if (root / ".git").exists() else []
-    if tracked:
-        candidates = tracked
-    else:
-        candidates = None
+    candidates = tracked or None
 
     def _iter():
         if candidates is not None:
@@ -333,7 +329,7 @@ def ensure_bulk_plan(task_hash: str, batches: list[list[str]]) -> bool:
         len(existing) == len(batches)
         and all(
             row["files_json"] == json.dumps(b, ensure_ascii=False)
-            for row, b in zip(existing, batches)
+            for row, b in zip(existing, batches, strict=True)
         )
     )
     if not same and existing:
@@ -351,10 +347,8 @@ def ensure_bulk_plan(task_hash: str, batches: list[list[str]]) -> bool:
             )
             conn.commit()
         except sqlite3.OperationalError:
-            try:
+            with contextlib.suppress(Exception):
                 conn.rollback()
-            except Exception:
-                pass
         existing = []
         conn.close()
         return True

@@ -95,7 +95,7 @@ agent-devs --list         # list already-analyzed repos (cache)
 agent-devs --analyze REPO # pre-analyze a repo without opening a session
 ```
 
-Inside the session: **ESC** cancels the running turn · **Ctrl+C ×2** quits · `/new` new session (clears the panel) · `/compact` summarizes the history to free context · `/history` last turns (with id) · `/resume <id>` resumes a previous session · `/autoapprove [on|off]` approves writes without asking (commit stays manual; `/new` turns it off) · `/help` help. Typing `/` opens the command menu (Enter accepts, Esc closes, Tab completes).
+Inside the session: **ESC** cancels the running turn · **Ctrl+C ×2** quits · `/new` new session (clears the panel) · `/compact` summarizes the history to free context · `/history` last turns (with id) · `/resume <id>` resumes a previous session · `/autoapprove [on|off]` approves writes without asking (commit stays manual; `/new` turns it off) · `/verify` runs lint/tests/build now · `/help` help. Typing `/` opens the command menu (Enter accepts, Esc closes, Tab completes).
 
 The context limit is **detected from the server** (`/props` of llama.cpp): when the session reaches ~80%, AgentDevs warns you and offers to compact; at 90% it compacts automatically.
 

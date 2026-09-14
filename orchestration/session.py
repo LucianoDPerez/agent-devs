@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 import subprocess
 import sys
@@ -12,59 +13,100 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from cache import load_recent_turns, load_session_turns, save_turn
 from cache import (
     bulk_progress,
     ensure_bulk_plan,
     fail_or_keep_batch,
+    load_recent_turns,
+    load_session_turns,
     mark_batch,
     next_pending_batch,
+    save_turn,
 )
 from config import (
     AGENT_RECURSION_LIMIT,
     ANALYZE_EXPLORE_BUDGET,
     ANALYZE_MAX_READS_AFTER_EXPLORE,
+    BULK_MAX_BATCH_ATTEMPTS,
+    BULK_SESSION_ROTATION_CTX,
     EXECUTE_ASK_COMMIT,
-    EXECUTE_CONFIRM_WRITES,
+    EXECUTE_BULK_MAX_ATTEMPTS,
+    EXECUTE_BULK_MIN_FILES,
     EXECUTE_CONFIRM_TIMEOUT,
-    PATH_FIX_ENABLED,
+    EXECUTE_CONFIRM_WRITES,
     EXECUTE_EXPLORE_BUDGET,
-    LLM_BASE_URL,
+    EXECUTE_MAX_CONTENT_SECONDS,
     EXECUTE_MAX_READS_AFTER_EXPLORE,
+    EXECUTE_MAX_REASONING_SECONDS,
     EXECUTE_MAX_TOOLS_BEFORE_WRITE,
     EXECUTE_MAX_VERIFY_BEFORE_WRITE,
     EXECUTE_MAX_WRITES_BEFORE_VERIFY,
     EXECUTE_RECURSION_LIMIT,
-    EXECUTE_MAX_REASONING_SECONDS,
-    EXECUTE_MAX_CONTENT_SECONDS,
     EXECUTE_REQUIRE_WRITE,
-    EXECUTE_BULK_MIN_FILES,
     JUDGE_BASE_URL,
-    PLAN_EXPLORE_BUDGET,
-    PLAN_MAX_READS_AFTER_EXPLORE,
-    REVIEW_EXPLORE_BUDGET,
-    REVIEW_MAX_READS_AFTER_EXPLORE,
-    REVIEW_MAX_TOOLS_BEFORE_WRITE,
-    EXECUTE_BULK_MAX_ATTEMPTS,
-    BULK_BATCH_SIZE,
-    BULK_MAX_BATCH_ATTEMPTS,
-    BULK_SESSION_ROTATION_CTX,
     JUDGE_ENABLED,
     JUDGE_MAX_TOKENS,
     JUDGE_MODEL_NAME,
     JUDGE_TEMPERATURE,
-    POST_WRITE_GATE_ENABLED,
-    POST_WRITE_GATE_MAX_RETRIES,
-    TURN_IDLE_TIMEOUT,
-    REASONING_RETRY_ENABLED,
+    LLM_BASE_URL,
     MAX_REASONING_SECONDS,
     MAX_TOOL_CALLS_PER_TURN,
+    PATH_FIX_ENABLED,
+    PLAN_EXPLORE_BUDGET,
+    PLAN_MAX_READS_AFTER_EXPLORE,
+    POST_WRITE_GATE_ENABLED,
+    POST_WRITE_GATE_MAX_RETRIES,
+    REASONING_RETRY_ENABLED,
+    REVIEW_EXPLORE_BUDGET,
+    REVIEW_MAX_READS_AFTER_EXPLORE,
+    REVIEW_MAX_TOOLS_BEFORE_WRITE,
+    TURN_IDLE_TIMEOUT,
     VERIFY_GATE_MAX_INJECTIONS,
 )
 from core.intents import Intent
 from core.roles import Role, role_for_intent
 from core.textutil import normalize
-from display.console import console, print_role_switch, print_turn_summary, stream_agent_turn, ReasoningOnlyResponse, ToolCallLimitExceeded
+from display.console import (
+    ReasoningOnlyResponse,
+    ToolCallLimitExceeded,
+    console,
+    print_role_switch,
+    print_turn_summary,
+    stream_agent_turn,
+)
+from display.esc_watcher import EscWatcher
+from llm_wrapper import LocalLLM, get_usage, reset_turn_usage
+from orchestration.agent_builder import build_agent, init_mcp
+from orchestration.bulk_planner import (
+    build_batch_scope,
+    bulk_task_hash,
+    canonical_task_text,
+    detect_bulk_targets,
+    split_into_batches,
+)
+from orchestration.execute_bootstrap import (
+    _collect_cited_paths,
+    build_paste_correction_suffix,
+    detect_bulk_file_count,
+    extract_requested_task_numbers,
+    inject_repo_hints,
+    preload_cited_files,
+    preload_for_analyze,
+    preload_for_review,
+)
+from orchestration.path_mismatch import apply_mismatch_fixes, detect_path_mismatches
+from orchestration.router import _extract_command_prefix, classify_intent
+from orchestration.runtime_diagnostics import runtime_status
+from orchestration.tool_dedupe import (
+    EXPLORE_TOOL_NAMES,
+    READISH_TOOL_NAMES,
+    VERIFY_TOOL_NAMES,
+    WRITE_TOOL_NAMES,
+    ExploreBudget,
+    ToolBudgetExceeded,
+    ToolCallDedupe,
+    VerifyRequired,
+)
 from tools import BUDGET_RETRY_TOOLS, GATE_RETRY_TOOLS
 
 
@@ -93,40 +135,6 @@ def _llama_down_console_msg() -> None:
     console.print("[yellow]   Encendelo antes de seguir, por ejemplo:[/yellow]")
     console.print("[dim]     llama-server -hf unsloth/Qwen3-6B-GGUF --port 8080[/dim]")
     console.print("[dim]   Verificá con: agent-devs --doctor[/dim]\n")
-from display.esc_watcher import EscWatcher
-from llm_wrapper import LocalLLM, get_usage, reset_turn_usage
-from orchestration.agent_builder import build_agent, init_mcp
-from orchestration.bulk_planner import (
-    bulk_task_hash,
-    build_batch_scope,
-    canonical_task_text,
-    detect_bulk_targets,
-    split_into_batches,
-)
-from orchestration.execute_bootstrap import (
-    _collect_cited_paths,
-    build_paste_correction_suffix,
-    detect_bulk_file_count,
-    extract_requested_task_numbers,
-    inject_repo_hints,
-    preload_cited_files,
-    preload_for_analyze,
-    preload_for_review,
-)
-from orchestration.framework_rules import inject_framework_rules
-from orchestration.path_mismatch import apply_mismatch_fixes, detect_path_mismatches
-from orchestration.runtime_diagnostics import runtime_status
-from orchestration.router import _extract_command_prefix, classify_intent
-from orchestration.tool_dedupe import (
-    EXPLORE_TOOL_NAMES,
-    ExploreBudget,
-    READISH_TOOL_NAMES,
-    ToolBudgetExceeded,
-    ToolCallDedupe,
-    VERIFY_TOOL_NAMES,
-    VerifyRequired,
-    WRITE_TOOL_NAMES,
-)
 
 _ROLE_LABELS = {
     Role.ANALYZE: "🔍 Análisis", Role.PLAN: "📋 Planificación",
@@ -338,11 +346,10 @@ def _has_grounded_evidence(task: str) -> bool:
     """
     if not task:
         return False
-    if _GROUNDED_EVIDENCE_RE.search(task):
-        return True
-    if _CODE_BLOCK_RE.search(task) and _TARGET_FILE_RE.search(task):
-        return True
-    return False
+    return bool(
+        _GROUNDED_EVIDENCE_RE.search(task)
+        or (_CODE_BLOCK_RE.search(task) and _TARGET_FILE_RE.search(task))
+    )
 
 
 def _response_has_evidence(text: str | None) -> bool:
@@ -416,13 +423,11 @@ def _is_verification_only(text: str) -> bool:
     satisfacer la presión de escritura.
     """
     t = text.strip().lower()
-    if not _VERIFY_ONLY_RE.search(t):
-        return False
-    if _IMPL_VERBS_RE.search(t):
-        return False
-    if _IMPL_STEM_RE.search(t):
-        return False
-    return True
+    return bool(
+        _VERIFY_ONLY_RE.search(t)
+        and not _IMPL_VERBS_RE.search(t)
+        and not _IMPL_STEM_RE.search(t)
+    )
 
 
 def _is_selfcontained_analysis(user_input: str) -> bool:
@@ -469,7 +474,7 @@ def _extract_edit_instruction(analysis: str, target_files: list[str]) -> str | N
     new = None
     correct_match = re.search(r"correcto[::]?[^}]*\{([^}]*)\}", analysis, re.IGNORECASE)
     if correct_match:
-        new = f"disabled={{{{correct_match.group(1)}}}}"
+        new = "disabled={{correct_match.group(1)}}"
     else:
         # Heurística: si el análisis menciona 'documento' como campo faltante
         # y old no tiene || !documento.trim(), lo agregamos.
@@ -583,6 +588,33 @@ Resumen:"""
         return "Sesión previa resumida automáticamente."
     finally:
         loop.close()
+
+
+def run_commit_verification(repo_path: str) -> tuple[bool, str]:
+    """Batería lint/tests/build para el gate de commit y /verify.
+
+    Retorna (pasó_todo, reporte_corto). Solo `[PASSED]` explícito cuenta;
+    cualquier fallo, timeout o tool ausente → False. Fail-open ante errores
+    del propio harness (nunca raisea).
+    """
+    try:
+        from tools.verify import run_build, run_lint, run_tests
+    except Exception as e:
+        return False, f"no se pudo cargar verificación: {e}"
+    results: list[tuple[str, bool, str]] = []
+    for name, fn in (("lint", run_lint), ("tests", run_tests), ("build", run_build)):
+        try:
+            out = str(fn.invoke({"path": repo_path}))
+        except Exception as e:
+            out = f"[FAILED] {type(e).__name__}: {e}"
+        ok = out.startswith("[PASSED]")
+        first = out.splitlines()[0][:120] if out else "(sin salida)"
+        results.append((name, ok, first))
+    passed = all(ok for _, ok, _ in results)
+    report = "\n".join(
+        f"  {'✅' if ok else '❌'} {name}: {first}" for name, ok, first in results
+    )
+    return passed, report
 
 
 class Session:
@@ -1156,8 +1188,11 @@ class Session:
         garantizando que el ancla tenga la cadena correcta sin depender de que
         el 4B orqueste la exploración."""
         try:
+            import asyncio
+            import json
+            import threading
+
             from tools.graph_trace import build_trace_component
-            import asyncio, json, threading
 
             async def _run():
                 # 1) project key: el indexado del repo actual (sandbox o repo del usuario)
@@ -1246,11 +1281,11 @@ class Session:
         # Traces primero (son la pista principal del PASS1); el trace del
         # sistema (que puede duplicar contenido) solo como fallback cuando el
         # PASS1 no cacheó nada propio.
-        traces = [k for k in self._read_cache.keys() if k.startswith("[trace:")]
+        traces = [k for k in self._read_cache if k.startswith("[trace:")]
         own_traces = [k for k in traces if k != "[trace:sistema]"]
-        snippets = [k for k in self._read_cache.keys() if k.startswith("[snippet:")]
+        snippets = [k for k in self._read_cache if k.startswith("[snippet:")]
         ordered = (own_traces or traces) + snippets + [
-            k for k in self._read_cache.keys()
+            k for k in self._read_cache
             if not k.startswith("[trace:") and not k.startswith("[snippet:")
         ]
         blocks: list[str] = []
@@ -1675,6 +1710,22 @@ class Session:
             console.print("[dim]OK, no se commitea.[/dim]")
             return
 
+        # Gate de commit: verificar ANTES de commitear. Nada roto llega a git:
+        # si la batería falla, se aborta y se pide corregir primero.
+        console.print("[dim]🔍 Verificando antes de commitear (lint/tests/build)…[/dim]")
+        try:
+            passed, report = run_commit_verification(self.repo_path)
+        except Exception as e:
+            console.print(f"[dim]No se pudo verificar ({e}): commiteo igual bajo tu responsabilidad.[/dim]")
+            passed, report = True, ""
+        console.print(report)
+        if not passed:
+            console.print(
+                "[yellow]⛔ Verificación en rojo — NO commiteo. Corregí lo de "
+                "arriba y volvé a pedir el commit (o usá /verify cuando quieras).[/yellow]"
+            )
+            return
+
         try:
                 # git add -u: SOLO cambios en archivos TRACKED. Los untracked
                 # quedan fuera A PROPÓSITO: E2E real Task 7 — 'git add -A'
@@ -1720,6 +1771,7 @@ class Session:
         # (también usa LLM). Evita 60s de timeout + traceback crudo.
         try:
             import urllib.request
+
             from config import LLM_BASE_URL as _BU
             _base = _BU.split("/v1")[0]
             _alive = False
@@ -1748,9 +1800,12 @@ class Session:
         # reaplica pendiente si trae instrucción extra.
         _norm_pending = normalize(user_input)
         _pending_exact = _norm_pending in {normalize(w) for w in _CONTINUATION_WORDS}
-        if self._pending_write is not None and _pending_exact:
-            if self._try_execute_pending_write(user_input):
-                return
+        if (
+            self._pending_write is not None
+            and _pending_exact
+            and self._try_execute_pending_write(user_input)
+        ):
+            return
         try:
             intent = classify_intent(self.llm, user_input)
         except BaseException as e:
@@ -1767,9 +1822,12 @@ class Session:
         # verbos EXECUTE pero el usuario claramente quiere seguir con lo
         # que estaba haciendo. Mantener el rol del turno anterior si era
         # EXECUTE o REVIEW (nunca forzar ANALYZE/PLAN).
-        if intent == Intent.ANALYZE and self.current_role in (Role.EXECUTE, Role.REVIEW):
-            if _is_continuation(user_input):
-                new_role = self.current_role
+        if (
+            intent == Intent.ANALYZE
+            and self.current_role in (Role.EXECUTE, Role.REVIEW)
+            and _is_continuation(user_input)
+        ):
+            new_role = self.current_role
 
         # Pregunta autocontenida (error + código inline): ANALYZE no necesita
         # explorar. El Qwen3.5 razonador responde BIEN y rápido single-shot con
@@ -2168,10 +2226,16 @@ class Session:
             watcher = None
             if not self._fullscreen:
                 watcher = EscWatcher(
-                    cancel_cb=lambda: loop.call_soon_threadsafe(task.cancel)
+                    # Bindeo por valor (B023): el callback puede dispararse
+                    # tarde desde el thread del watcher, cuando `loop`/`task`
+                    # ya apuntan al reintento siguiente — cancelaría el turno
+                    # equivocado. _turn_cancel sí quiere lo último (noqa).
+                    cancel_cb=lambda _loop=loop, _task=task: _loop.call_soon_threadsafe(
+                        _task.cancel
+                    )
                 )
                 watcher.start()
-            self._turn_cancel = lambda: loop.call_soon_threadsafe(task.cancel)
+            self._turn_cancel = lambda: loop.call_soon_threadsafe(task.cancel)  # noqa: B023
 
             try:
                 loop.run_until_complete(task)
@@ -2374,10 +2438,10 @@ class Session:
             except KeyboardInterrupt:
                 interrupted = True
                 task.cancel()
-                try:
+                with contextlib.suppress(
+                    asyncio.TimeoutError, asyncio.CancelledError, Exception
+                ):
                     loop.run_until_complete(asyncio.wait_for(task, timeout=2.0))
-                except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
-                    pass
                 break
             except asyncio.CancelledError:
                 interrupted = True
@@ -2388,7 +2452,7 @@ class Session:
                     True if watcher is None else watcher.interrupted.is_set()
                 )
                 break
-            except VerifyRequired as e:
+            except VerifyRequired:
                 # El modelo escribió N veces sin verificar: inyectar la
                 # compuerta de verificación AHORA (GATE_RETRY_TOOLS tiene
                 # run_lint/run_tests/run_build). El retry write-only NO tiene
@@ -2651,7 +2715,7 @@ class Session:
         if new_role == Role.REVIEW and not interrupted:
             self._maybe_judge_review(user_input)
 
-        try:
+        with contextlib.suppress(Exception):
             save_turn(
                 session_id=self.session_id,
                 repo_path=self.repo_path,
@@ -2660,8 +2724,6 @@ class Session:
                 assistant_message=self._last_response or "",
                 tokens_used=turn_tokens,
             )
-        except Exception:
-            pass
 
         # Summary del turno: en modo --tui (full-screen) se omite — el panel
         # queda limpio solo con "vos ›" + respuesta del LLM; el summary era
@@ -2744,7 +2806,7 @@ class Session:
                         # Reintento el turno con la credencial como nuevo input
                         # (el usuario pegó algo, p. ej. una variable de entorno).
                         console.print(
-                            f"[dim]Credencial recibida — reintentando con tu input…[/dim]\n"
+                            "[dim]Credencial recibida — reintentando con tu input…[/dim]\n"
                         )
                         # Procesar el input como un nuevo turno
                         self.run_turn(answer)
@@ -2820,8 +2882,10 @@ class Session:
         # Load judge prompt
         judge_prompt = _load_judge_prompt()
 
-        # Build judge message
+        # Build judge message (con el prompt del judge: sin esto el LLM
+        # juzgaba sin instrucciones — el prompt se cargaba y se tiraba).
         judge_message = (
+            f"{judge_prompt}\n\n"
             f"## DIFF DE LA RAMA\n\n{diff}\n\n"
             f"## INFORME DE REVIEW DEL AGENTE\n\n{response}\n\n"
             f"## CONTEXTO DEL USUARIO\n\n{user_input}\n\n"
@@ -3001,10 +3065,8 @@ class Session:
         """Cancela el turno en curso (thread-safe, mismo camino que ESC)."""
         cb = self._turn_cancel
         if cb is not None:
-            try:
+            with contextlib.suppress(Exception):
                 cb()
-            except Exception:
-                pass
 
     def request_cancel(self) -> None:
         """Cancela el turno en curso (lo llama la TUI full-screen con ESC).

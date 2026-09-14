@@ -185,7 +185,7 @@ def build_context(repo_path: str) -> str:
     """Construye un contexto genérico, focalizado, sin referencias a lenguajes."""
     root = Path(repo_path)
     sections = []
-    
+
     # 1. Estructura principal (directorios de nivel raíz, genérico)
     dirs = [d for d in root.iterdir() if d.is_dir() and not d.name.startswith('.')]
     sections.append("# Estructura principal")
@@ -193,17 +193,17 @@ def build_context(repo_path: str) -> str:
         sections.append(f"📁 {d.name}/")
     if len(dirs) > 10:
         sections.append(f"  ... ({len(dirs)} dirs más)")
-    
+
     # 2. Manifiestos (todos los conocidos, genérico)
     manifest = _read_manifest(root)
     if manifest:
         sections.append(manifest)
-    
+
     # 3. README
     readme = _read_readme(root)
     if readme:
         sections.append(readme)
-    
+
     # 4. Top 10 archivos por tamaño (solo archivos de proyecto, sin binarios)
     # Se usa _is_project_file (único punto de verdad): filtra directorios
     # de dependencias/build de cualquier ecosistema + binarios por contenido
@@ -224,7 +224,7 @@ def build_context(repo_path: str) -> str:
     for f in files[:10]:
         if f.suffix:
             sections.append(f"📄 {f.relative_to(root).as_posix()} ({f.stat().st_size//1024}kb)")
-    
+
     context = "\n\n".join(sections)
     return context[: int(MAX_CONTEXT_CHARS * 0.7)]  # usar solo 70% del límite para dejar margen
 
@@ -379,9 +379,7 @@ def _is_valid_summary(summary: str) -> bool:
         "qué hace el proyecto, arquitectura general y estructura de carpetas",
         "respondé únicamente con un json",
     )
-    if any(p in low for p in poison):
-        return False
-    return True
+    return not any(p in low for p in poison)
 
 
 def run_analysis(repo_path: str, llm: LocalLLM, on_token=None, timeout: float = 150.0) -> dict:

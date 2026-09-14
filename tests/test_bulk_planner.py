@@ -11,8 +11,8 @@ from cache import (
     next_pending_batch,
 )
 from orchestration.bulk_planner import (
-    bulk_task_hash,
     build_batch_scope,
+    bulk_task_hash,
     detect_bulk_targets,
     split_into_batches,
 )

@@ -317,7 +317,6 @@ class TestWriteOverride:
         assert (Path(repo) / "big.ts").read_text() == "// full rewrite\n"
 
     def test_override_still_blocks_protected_paths(self):
-        from tools.filesystem import clear_write_overrides
         repo = _create_repo({"tasks.md": "plan"})
         path = str(Path(repo) / "tasks.md")
         self._set.add(path)
@@ -578,8 +577,6 @@ class TestTaskAllowExplicitUserCite:
             TASK_PATH_ALLOW.clear()
 
     def test_sin_cita_sigue_bloqueado(self):
-        from tools.filesystem import _is_protected_task_path
-
         repo = tempfile.mkdtemp()
         p = Path(repo) / ".agent" / "tasks.json"
         p.parent.mkdir(parents=True)

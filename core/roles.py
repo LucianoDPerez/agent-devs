@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from functools import lru_cache as _lru_cache
 from pathlib import Path
 
 from core.intents import Intent
@@ -42,9 +43,6 @@ def tools_for_role(role: Role) -> list:
     return get_tools_for(role.value)
 
 
-from functools import lru_cache as _lru_cache
-
-
 @_lru_cache(maxsize=8)
 def _load_prompt_cached(filename: str) -> str:
     prompt_path = Path(__file__).resolve().parent.parent / "prompts" / f"{filename}.md"
@@ -55,7 +53,7 @@ def load_prompt(role: Role) -> str:
     filename = _ROLE_TO_PROMPT_FILE[role]
     try:
         return _load_prompt_cached(filename)
-    except FileNotFoundError:
+    except FileNotFoundError as err:
         raise FileNotFoundError(
             f"Prompt faltante para rol {role.value}: prompts/{filename}.md"
-        )
+        ) from err
