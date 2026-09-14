@@ -51,6 +51,24 @@ def test_no_falsos_positivos_comunes(tmp_path):
     assert find_unverifiable_cites(text, str(repo)) == []
 
 
+def test_backticks_y_rangos(tmp_path):
+    # E2E real T2/9B: `CreatePaciente.ts:15` en archivo de 14 líneas.
+    repo = _repo(tmp_path)
+    (repo / "backend" / "src" / "x.ts").write_text("a\n", encoding="utf-8")
+    bad = find_unverifiable_cites(
+        "ver `backend/src/a.ts:99` y `backend/src/x.ts:5-27`", str(repo))
+    assert bad == ["backend/src/a.ts:99", "backend/src/x.ts:5"]
+    ok = find_unverifiable_cites(
+        "ver `backend/src/a.ts:2` y `backend/src/x.ts:1`", str(repo))
+    assert ok == []
+
+
+def test_backticks_sin_extension_no_matchean(tmp_path):
+    repo = _repo(tmp_path)
+    assert find_unverifiable_cites("el `arr[0:2]` falló a las `12:30`",
+                                   str(repo)) == []
+
+
 def test_paths_absolutos_y_relativos(tmp_path):
     repo = _repo(tmp_path)
     abs_cite = f"**[{repo / 'backend' / 'src' / 'a.ts'}:3]**"
