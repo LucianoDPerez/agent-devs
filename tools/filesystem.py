@@ -36,6 +36,37 @@ _INTEGRITY_EXTS = {".sh", ".py", ".go", ".ts", ".tsx", ".js", ".jsx", ".vue", ".
 WRITE_OVERRIDE_PATHS: set[str] = set()
 
 
+def _status_only_flip(before: object, after: object) -> bool:
+    """True si between/after difieren ÚNICAMENTE en campos "status" cuyo valor
+    nuevo es DONE (pending/in_progress → done).
+
+    Flujo del usuario: el agente MANTIENE tasks.json marcando tareas Done
+    (decisión de producto). La protección anti-corrupción frena iniciativa
+    propia; esta excepción quirúrgica permite el flip de status sin permitir
+    tocar NADA más (ids, diffs, estructura). Cualquier otro cambio → False.
+    """
+    if isinstance(before, dict) and isinstance(after, dict):
+        if before.keys() != after.keys():
+            return False
+        for k, vb in after.items():
+            va = before[k]
+            if k == "status" and va != vb:
+                if not (
+                    isinstance(va, str) and isinstance(vb, str)
+                    and va.strip().lower() != "done"
+                    and vb.strip().lower() == "done"
+                ):
+                    return False
+            elif not _status_only_flip(va, vb):
+                return False
+        return True
+    if isinstance(before, list) and isinstance(after, list):
+        return len(before) == len(after) and all(
+            _status_only_flip(x, y) for x, y in zip(before, after, strict=False)
+        )
+    return before == after
+
+
 def clear_write_overrides() -> None:
     WRITE_OVERRIDE_PATHS.clear()
 
@@ -427,13 +458,37 @@ def write_file(path: str, content: str) -> str:
     accept it and choose a different path.
     Usage: write_file(path="/Users/me/repo/report.md", content="# Report")
     """
-    if _is_protected_task_path(path):
-        return (
-            f"⛔ '{path}' es un archivo de PLANIFICACIÓN (tasks/PRD/plan) PROHIBIDO de escribir. "
-            "NO lo toques: es tu fuente de verdad de la tarea. Implementá el código "
-            "en los archivos del repo, no reescribas tasks.md ni planes."
-        )
     p = Path(path)
+    _allowed_status_flip = False
+    if _is_protected_task_path(path):
+        # Excepción quirúrgica (flujo del usuario: el agente mantiene el
+        # status de las tareas): si el contenido nuevo es EXACTAMENTE el
+        # anterior con status→DONE, se permite (validado abajo con
+        # _status_only_flip). Cualquier otra cosa sigue PROHIBIDA.
+        import json as _json
+
+        try:
+            _json.loads(content)
+        except Exception:
+            return (
+                f"⛔ '{path}' es un archivo de PLANIFICACIÓN (tasks/PRD/plan) PROHIBIDO de escribir. "
+                "NO lo toques: es tu fuente de verdad de la tarea. Implementá el código "
+                "en los archivos del repo, no reescribas tasks.md ni planes."
+            )
+        if p.exists() and p.is_file():
+            try:
+                _allowed_status_flip = _status_only_flip(
+                    _json.loads(p.read_text(encoding="utf-8")),
+                    _json.loads(content),
+                )
+            except Exception:
+                _allowed_status_flip = False
+        if not _allowed_status_flip:
+            return (
+                f"⛔ '{path}' es un archivo de PLANIFICACIÓN (tasks/PRD/plan) PROHIBIDO de escribir. "
+                "NO lo toques: es tu fuente de verdad de la tarea. Implementá el código "
+                "en los archivos del repo, no reescribas tasks.md ni planes."
+            )
     if p.exists() and p.is_dir():
         return (
             f"⛔ '{path}' is a DIRECTORY, not a file. "
@@ -443,7 +498,13 @@ def write_file(path: str, content: str) -> str:
         )
     resolved = _resolved_key(path)
     resolved_overrides = {_resolved_key(o) for o in WRITE_OVERRIDE_PATHS}
-    if p.exists() and p.is_file() and resolved not in resolved_overrides:
+    # status-flip de tasks.json (agente marca DONE) no pasa por el guard
+    # anti-sobrescritura: el flip ya fue validado estructura-completa.
+    if (
+        p.exists() and p.is_file()
+        and resolved not in resolved_overrides
+        and not _allowed_status_flip
+    ):
         # Guard anti-destrucción: write_file NO puede sobrescribir archivos
         # existentes (salvo configs triviales de ≤5 líneas). Reescribir desde
         # memoria pierde imports/hooks/lógica — el 4B mutiló PacientesPage.tsx.
@@ -596,11 +657,22 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
     matches by the first/last anchor lines of your block.
     Usage: edit_file(path="file.py", old_str="old code block", new_str="new code block")
     """
-    if _is_protected_task_path(path):
-        return (
-            f"⛔ '{path}' es un archivo de PLANIFICACIÓN (tasks/PRD/plan) PROHIBIDO de editar. "
-            "NO lo toques: es tu fuente de verdad. Implementá el código en los archivos del repo."
-        )
+    _protected = _is_protected_task_path(path)
+    if _protected:
+        # Excepción quirúrgica (flujo del usuario: el agente mantiene el
+        # status de las tareas): un edit SOLO status pending→DONE se permite
+        # (validado estrictamente abajo sobre el JSON completo). Cualquier
+        # otro cambio sigue PROHIBIDO — se rechaza después de calcular el
+        # new_content (más abajo, post-spans).
+        o_low = (old_str or "").lower()
+        n_low = (new_str or "").lower()
+        if not ("status" in o_low and "status" in n_low and "done" in n_low):
+            return (
+                f"⛔ '{path}' es un archivo de PLANIFICACIÓN (tasks/PRD/plan) "
+                "PROHIBIDO de editar. ÚNICA excepción: marcar status "
+                "pending→DONE con edit_file. NO cambies nada más: es tu "
+                "fuente de verdad. Implementá el código en los archivos del repo."
+            )
     p = Path(path)
     if not p.exists():
         return (
@@ -737,6 +809,25 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
         violation = _json_check(path, new_content)
         if violation:
             return violation
+
+    # Autorización final del status-flip en protegidos: el JSON resultante
+    # debe ser EXACTAMENTE el anterior con status→DONE (nada más).
+    if _protected:
+        import json as _jsonf
+
+        try:
+            ok_flip = _status_only_flip(
+                _jsonf.loads(content), _jsonf.loads(new_content)
+            )
+        except Exception:
+            ok_flip = False
+        if not ok_flip:
+            return (
+                f"⛔ '{path}' es de PLANIFICACIÓN: solo se permite marcar "
+                "status pending→DONE (el flip se valida sobre el JSON "
+                "completo). Tu edit cambiaría MÁS COSAS — no está permitido. "
+                "NO lo reintentes."
+            )
 
     p.write_text(new_content, encoding="utf-8")
     return f"✅ Replaced block in {path}"

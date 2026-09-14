@@ -352,6 +352,53 @@ def _has_grounded_evidence(task: str) -> bool:
     )
 
 
+class _ToolCallLog:
+    """Registro de tool calls del turno: set de nombres + CONTADOR de llamadas.
+
+    La interfaz es la de set (add/clear/__contains__/__and__/__iter__/__len__)
+    para que todo el código existente siga funcionando; agrega ``counts`` y
+    ``total_of()``: distinguir 2 read_file de 1 (T006: 2 lecturas + veredicto
+    con evidencia → cierre válido; contar por NOMBRE lo daba como 1 → retry
+    forzado que re-exploró todo).
+    """
+
+    def __init__(self) -> None:
+        self.names: set[str] = set()
+        self.counts: dict[str, int] = {}
+
+    def add(self, name: str) -> None:
+        self.names.add(name)
+        self.counts[name] = self.counts.get(name, 0) + 1
+
+    def discard(self, name: str) -> None:
+        self.names.discard(name)
+        self.counts.pop(name, None)
+
+    def clear(self) -> None:
+        self.names.clear()
+        self.counts.clear()
+
+    def total_of(self, names: frozenset[str] | set[str]) -> int:
+        return sum(self.counts.get(n, 0) for n in names)
+
+    def __contains__(self, x: object) -> bool:
+        return x in self.names
+
+    def __iter__(self):
+        return iter(self.names)
+
+    def __len__(self) -> int:
+        return len(self.names)
+
+    def __and__(self, other):
+        return self.names & other
+
+    __rand__ = __and__
+
+    def __repr__(self) -> str:
+        return repr(self.names)
+
+
 def _response_has_evidence(text: str | None) -> bool:
     """True si la respuesta del modelo cita evidencia verificable.
 
@@ -669,7 +716,12 @@ class Session:
         # Tool calls reales del turno (los tool calls viven en el estado del
         # grafo, NO en self._messages — la compuerta de verificación escaneaba
         # self._messages y daba falsos positivos: "no corrió verify" cuando sí).
-        self._called_tools: set[str] = set()
+        # Tool calls reales del turno (los tool calls viven en el estado del
+        # grafo, NO en self._messages — la compuerta de verificación escaneaba
+        # self._messages y daba falsos positivos: "no corrió verify" cuando sí).
+        # _ToolCallLog: set + contador de llamadas (T006: 2 read_file = turno
+        # de verificación legítimo; contar por nombre daba 1 y forzaba retry).
+        self._called_tools = _ToolCallLog()
         # Resultado ([PASSED]/[FAILED]) de cada verify tool del turno. Sin esto
         # el cierre decía "build ✅" con solo haber LLAMADO la tool (E2E real:
         # run_build en raíz rota contó como verificado). Solo `[PASSED]`
@@ -1508,9 +1560,20 @@ class Session:
         """
         if self._called_tools & WRITE_TOOL_NAMES:
             return False
-        productive = self._called_tools & (READISH_TOOL_NAMES | VERIFY_TOOL_NAMES)
-        if len(productive) < 2:
-            return False
+        # Contar LLAMADAS (no nombres): 2 read_file a archivos distintos es
+        # un turno de verificación legítimo (E2E real T006: tasks.json +
+        # home-client.ts + veredicto con archivo:línea → cerrar sin retry).
+        counts = getattr(self._called_tools, "counts", None)
+        if counts is not None:
+            productive_calls = self._called_tools.total_of(
+                READISH_TOOL_NAMES | VERIFY_TOOL_NAMES
+            )
+            if productive_calls < 2:
+                return False
+        else:
+            productive = self._called_tools & (READISH_TOOL_NAMES | VERIFY_TOOL_NAMES)
+            if len(productive) < 2:
+                return False
         if _response_has_evidence(text):
             return True
         # Evidencia en español: el veredicto cita un path REAL del repo

@@ -623,3 +623,82 @@ class TestJsonGate:
         })
         assert "JSON inválido" in result
         assert not p.exists()
+
+
+def test_status_flip_pending_a_done_en_tasks_json(tmp_path):
+    """Flujo del usuario: el agente MANTIENE tasks.json (marca DONE). Un edit
+    que SOLO cambia status pending→DONE se permite; cualquier otro cambio
+    sigue PROHIBIDO."""
+    import json
+
+    p = tmp_path / ".agent" / "tasks.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"tasks": [
+        {"id": "T006", "title": "x", "status": "pending", "file": "src/a.ts"},
+        {"id": "T007", "title": "y", "status": "pending"},
+    ]}, indent=2))
+
+    r = edit_file.invoke({
+        "path": str(p),
+        "old_str": '"status": "pending",\n      "file": "src/a.ts"',
+        "new_str": '"status": "DONE",\n      "file": "src/a.ts"',
+    })
+    assert r.startswith("✅")
+    d = json.loads(p.read_text())
+    assert d["tasks"][0]["status"] == "DONE"
+    assert d["tasks"][1]["status"] == "pending"  # solo la pinnada cambió
+
+
+def test_status_flip_rechaza_otros_cambios(tmp_path):
+    """Cambiar campos que NO sean status en tasks.json sigue bloqueado."""
+    import json
+
+    p = tmp_path / ".agent" / "tasks.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"tasks": [
+        {"id": "T006", "title": "x", "status": "pending", "file": "src/a.ts"},
+    ]}, indent=2))
+    r = edit_file.invoke({
+        "path": str(p),
+        "old_str": '"file": "src/a.ts"',
+        "new_str": '"file": "src/b.ts"',
+    })
+    assert "PROHIBIDO" in r
+    assert json.loads(p.read_text())["tasks"][0]["file"] == "src/a.ts"
+
+
+def test_write_file_status_flip_permite_sobrescribir(tmp_path):
+    """write_file completo sobre tasks.json permitido SOLO si el resultado es
+    el anterior con status→DONE (el guard anti-sobrescritura se saltea)."""
+    import json
+
+    p = tmp_path / ".agent" / "tasks.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    d = {"tasks": [{"id": "T006", "title": "x", "status": "pending"}]}
+    p.write_text(json.dumps(d, indent=2))
+
+    d["tasks"][0]["status"] = "DONE"
+    r = write_file.invoke({"path": str(p), "content": json.dumps(d, indent=2)})
+    assert r.startswith("✅")
+    assert json.loads(p.read_text())["tasks"][0]["status"] == "DONE"
+
+    d["tasks"][0]["hacked"] = True
+    r2 = write_file.invoke({"path": str(p), "content": json.dumps(d, indent=2)})
+    assert "PROHIBIDO" in r2
+    assert "hacked" not in p.read_text()
+
+
+def test_status_only_flip_puro():
+    from tools.filesystem import _status_only_flip
+
+    before = {"tasks": [{"id": "T1", "status": "pending"}]}
+    after = {"tasks": [{"id": "T1", "status": "DONE"}]}
+    assert _status_only_flip(before, after) is True
+    assert _status_only_flip(before, before) is True
+    assert _status_only_flip(after, before) is False  # un-done NO
+    after2 = {"tasks": [{"id": "T1", "status": "pending", "extra": 1}]}
+    assert _status_only_flip(before, after2) is False
+    assert _status_only_flip(
+        {"tasks": [{"id": "T1", "status": "pending"}]},
+        {"tasks": [{"id": "T1", "status": "DONE"}, {"id": "T2", "status": "DONE"}]},
+    ) is False

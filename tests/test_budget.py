@@ -597,3 +597,62 @@ class TestNpmScriptVerifyEquivalence:
             "run_npm_script", "db ok", res2, {"path": "/r", "script": "db:generate"}
         )
         assert res2 == {}
+
+
+class TestStatusFlipPassthrough:
+    """Pasillo del flujo del usuario: status pending→DONE en tasks.json no se
+    intercepta en el wrapper; filesystem valida el JSON completo."""
+
+    def test_wrapper_permite_flip_y_bloquea_otros(self, tmp_path):
+        import json
+
+        from orchestration.tool_dedupe import (
+            ExploreBudget,
+            ToolCallDedupe,
+            wrap_tools_with_dedupe,
+        )
+        from tools.filesystem import edit_file
+
+        p = tmp_path / ".agent" / "tasks.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(
+            {"tasks": [{"id": "T006", "status": "pending", "file": "a.ts"}]},
+            indent=2,
+        ))
+        dd = ToolCallDedupe(max_repeats=9)
+        w = wrap_tools_with_dedupe([edit_file], dd, ExploreBudget(),
+                                   repo_path=str(tmp_path))[0]
+        r1 = w.invoke({"path": str(p), "old_str": '"status": "pending"',
+                       "new_str": '"status": "DONE"'})
+        assert "Replaced" in r1
+        assert json.loads(p.read_text())["tasks"][0]["status"] == "DONE"
+
+        r2 = w.invoke({"path": str(p), "old_str": '"file": "a.ts"',
+                       "new_str": '"file": "b.ts"'})
+        assert "PROTEGIDO" in r2
+        assert "ÚNICA edición permitida" in r2
+
+    def test_flip_candidate_heuristica(self):
+        from orchestration.tool_dedupe import _status_flip_candidate as f
+
+        assert f("edit_file", {"old_str": '"status": "pending"', "new_str": '"status": "DONE"'}) is True
+        assert f("edit_file", {"old_str": '"file": "a.ts"', "new_str": '"file": "b.ts"'}) is False
+        # un-done: old ya tiene done → NO es candidate (el wrapper lo frena)
+        assert f("edit_file", {"old_str": '"status": "DONE"', "new_str": '"status": "pending"'}) is False
+        assert f("write_file", {"content": '{"status": "DONE"}'}) is True
+
+
+def test_verify_validacion_no_registra_como_falso():
+    """T005: run_lint sobre un ARCHIVO → 'is not a directory' (mensaje de
+    validación). NO debe registrar False que envenene el cierre."""
+    from orchestration.tool_dedupe import _record_verify_result
+
+    res: dict = {}
+    _record_verify_result(
+        "run_lint", "'/repo/x.ts' is not a directory.", res, {"path": "/repo/x.ts"}
+    )
+    assert res == {}  # no es veredicto, es mal uso
+    _record_verify_result(
+        "run_lint", "[FAILED] exit=1\nF test", res, {"path": "/repo"}
+    )
+    assert res == {"run_lint": False}

@@ -626,8 +626,17 @@ def _record_verify_result(
     eff = _effective_verify_name(name, kwargs)
     if eff is None:
         return
-    if isinstance(result, str):
-        tool_call_results[eff] = result.startswith("[PASSED]")
+    if not isinstance(result, str):
+        return
+    # Solo veredictos reales: [PASSED]→True, [FAILED]→False. Los mensajes de
+    # validación (path inválido, "No 'build' script") NO se registran: no son
+    # un fallo de verificación sino un mal uso de la tool (E2E T005: run_lint
+    # sobre un ARCHIVO → 'is not a directory' envenenó el cierre con "FALLÓ"
+    # mientras los tests estaban verdes).
+    if result.startswith("[PASSED]"):
+        tool_call_results[eff] = True
+    elif result.startswith("[FAILED]"):
+        tool_call_results[eff] = False
 
 
 def wrap_tools_with_dedupe(
@@ -771,6 +780,26 @@ def _strip_read_artifacts(content: str) -> str:
     return "\n".join(lines)
 
 
+def _status_flip_candidate(name: str, kwargs: dict[str, Any]) -> bool:
+    """True si el write/edit a un protegido parece un flip pending→DONE.
+
+    Heurística de PASILLO (la autoridad es filesystem._status_only_flip sobre
+    el JSON completo): si parece flip, no se intercepta en el wrapper y la
+    tool decide. Flujo del usuario: el agente marca tareas Done en tasks.json.
+    """
+    if name == "edit_file":
+        o = (kwargs or {}).get("old_str") or ""
+        n = (kwargs or {}).get("new_str") or ""
+        return bool(
+            "status" in o and "status" in n
+            and "done" in n.lower() and "done" not in o.lower()
+        )
+    if name == "write_file":
+        c = (kwargs or {}).get("content") or ""
+        return bool("status" in c and '"done"' in c.lower().replace(" ", ""))
+    return False
+
+
 def _wrap_one(
     tool: BaseTool,
     dedupe: ToolCallDedupe,
@@ -858,7 +887,13 @@ def _wrap_one(
                 try:
                     from tools.filesystem import _is_protected_task_path as _is_prot
 
-                    if _is_prot(_ppath):
+                    if (
+                        _is_prot(_ppath)
+                        and not _status_flip_candidate(name, kwargs or {})
+                    ):
+                        # Pasillo del flujo del usuario: marcar tasks DONE es
+                        # legítimo (status pending→DONE). Si parece flip no se
+                        # intercepta: filesystem valida el JSON completo.
                         _pkey = str(_ppath)
                         # Contador EN el dedupe compartido: sobrevive a los
                         # rebuilds del agente en los retries (un dict por
@@ -874,21 +909,19 @@ def _wrap_one(
                         if n_prot >= 2:
                             raise ToolBudgetExceeded(
                                 f"⛔ '{_ppath}' es planificación PROTEGIDA "
-                                f"({n_prot} intentos). NO lo toques: es tu "
-                                "fuente de verdad. Implementá el código en el "
-                                "repo y cerrá con texto; para marcar la tarea "
-                                "como DONE avisale al USUARIO en tu resumen "
-                                "(él lo hace). No llames más writes a este "
-                                "path."
+                                f"({n_prot} intentos). ÚNICA excepción "
+                                "permitida: marcar status pending→DONE en "
+                                "tasks.json con edit_file. Cualquier otro "
+                                "cambio está PROHIBIDO: cerrá con texto y "
+                                "avisale al usuario."
                             )
                         return (
                             "return",
                             (
                                 f"⛔ '{_ppath}' es un archivo de PLANIFICACIÓN "
-                                "PROTEGIDO. NO lo escribas ni lo reintentes en "
-                                "este turno: implementá el código en los "
-                                "archivos del repo y cerrá con un resumen en "
-                                "texto (para marcar DONE, avisale al usuario)."
+                                "PROTEGIDO. ÚNICA edición permitida: marcar "
+                                "status pending→DONE. Implementá el código en "
+                                "los archivos del repo y cerrá con un resumen."
                             ),
                         )
                 except ToolBudgetExceeded:
@@ -1119,6 +1152,19 @@ def _wrap_one(
             if _eff_log is not None and _eff_log != name:
                 tool_call_logger.add(_eff_log)
         result = tool.invoke(kwargs)
+        # Mal uso de verify (mensaje de validación, sin veredicto): no cuenta
+        # como verificación del turno (T005: run_lint sobre un archivo
+        # envenenó el cierre). Se descarta del logger y de los resultados.
+        _bad_verify_call = (
+            _effective_verify_name(name, kwargs) is not None
+            and isinstance(result, str)
+            and not result.startswith(("[PASSED]", "[FAILED]"))
+        )
+        if _bad_verify_call and tool_call_logger is not None:
+            tool_call_logger.discard(name)
+            _eff_bad = _effective_verify_name(name, kwargs)
+            if _eff_bad and _eff_bad != name:
+                tool_call_logger.discard(_eff_bad)
         _record_verify_result(name, result, tool_call_results, kwargs)
         if explore_budget is not None:
             explore_budget.note_verify(name, kwargs, result)
@@ -1226,6 +1272,18 @@ def _wrap_one(
             if _eff_log_a is not None and _eff_log_a != name:
                 tool_call_logger.add(_eff_log_a)
         result = await tool.ainvoke(kwargs)
+        # Mal uso de verify (mensaje de validación): no cuenta como
+        # verificación del turno (ver _invoke).
+        _bad_verify_call_a = (
+            _effective_verify_name(name, kwargs) is not None
+            and isinstance(result, str)
+            and not result.startswith(("[PASSED]", "[FAILED]"))
+        )
+        if _bad_verify_call_a and tool_call_logger is not None:
+            tool_call_logger.discard(name)
+            _eff_bad_a = _effective_verify_name(name, kwargs)
+            if _eff_bad_a and _eff_bad_a != name:
+                tool_call_logger.discard(_eff_bad_a)
         _record_verify_result(name, result, tool_call_results, kwargs)
         if explore_budget is not None:
             explore_budget.note_verify(name, kwargs, result)

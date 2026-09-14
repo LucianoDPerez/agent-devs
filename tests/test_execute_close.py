@@ -277,3 +277,44 @@ def test_readonly_evidence_turn_falso_sin_evidencia(tmp_path):
     s = Session(llm=None, repo_path=str(repo))
     s._called_tools = {"read_file", "git_status"}
     assert s._readonly_evidence_turn("Creo que ya está, no vi nada raro.") is False
+
+
+def test_readonly_evidence_turn_cuenta_llamadas_no_nombres(tmp_path):
+    """T006: 2 read_file a archivos distintos + veredicto con path real =
+    turno de verificación válido. Contar por NOMBRE daba 1 → retry forzado."""
+    from orchestration.session import Session, _ToolCallLog
+
+    repo = _init_repo(tmp_path)
+    (repo / "infra").mkdir()
+    (repo / "infra" / "iam.tf").write_text("x\n", encoding="utf-8")
+    s = Session(llm=None, repo_path=str(repo))
+    log = _ToolCallLog()
+    log.add("read_file")
+    log.add("read_file")
+    s._called_tools = log
+    resp = "T006 ya implementada en infra/iam.tf líneas 248-271 ✅"
+    assert s._readonly_evidence_turn(resp) is True
+    # Con UNA sola llamada sigue reintentando
+    log1 = _ToolCallLog()
+    log1.add("read_file")
+    s._called_tools = log1
+    assert s._readonly_evidence_turn(resp) is False
+
+
+def test_tool_call_log_interfaz_set():
+    """_ToolCallLog respeta la interfaz de set que usa el resto del código."""
+    from orchestration.session import READISH_TOOL_NAMES, _ToolCallLog
+
+    log = _ToolCallLog()
+    log.add("read_file")
+    log.add("read_file")
+    log.add("git_status")
+    assert "read_file" in log
+    assert len(log) == 2
+    assert sorted(log) == ["git_status", "read_file"]
+    inter = log & READISH_TOOL_NAMES
+    assert "read_file" in inter and "git_status" in inter
+    log.discard("git_status")
+    assert "git_status" not in log and log.counts == {"read_file": 2}
+    log.clear()
+    assert log.counts == {} and len(log) == 0

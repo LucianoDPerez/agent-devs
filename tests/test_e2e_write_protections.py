@@ -384,7 +384,7 @@ def test_e2e_protected_write_failfast_no_retry(tmp_path):
     wf = wrapped[0]
     r1 = wf.invoke({"path": str(target), "content": "hola"})
     assert "PROTEGIDO" in r1
-    assert "NO lo" in r1 and "reintentes" in r1
+    assert "ÚNICA edición permitida" in r1
     assert target.read_text() == original  # no se ejecutó el write
     with pytest.raises(ToolBudgetExceeded, match="PROTEGIDA"):
         wf.invoke({"path": str(target), "content": "hola"})
