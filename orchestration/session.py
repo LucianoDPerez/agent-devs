@@ -1100,7 +1100,17 @@ class Session:
         devuelve messages_for_agent para el siguiente intento.
 
         _called_tools.clear(): la compuerta final debe exigir verify en ESTE
-        intento — no dejar pasar verify stale del intento anterior."""
+        intento — no dejar pasar verify stale del intento anterior.
+
+        FAIL-CLOSED por rol: este retry otorga edit_file/write_file. Si llega
+        acá un rol que nunca escribe (REVIEW/CHAT/...) es un bug de ruteo del
+        retry — fallar LOUD en vez de regalar escritura (E2E real T1b/9B:
+        un review terminó con edit_file a package.json)."""
+        if self.current_role != Role.EXECUTE:
+            raise ToolBudgetExceeded(
+                f"retry de escritura inválido en rol {self.current_role.value}: "
+                "los roles de solo-lectura usan el retry de solo-lectura."
+            )
         self._trim_for_retry()
         self._messages.append(HumanMessage(self._retry_with_read_anchor()))
         messages_for_agent = list(self._messages)
@@ -1275,7 +1285,8 @@ class Session:
         return "\n".join(parts)
 
     def _retry_analyze_readonly(self, new_role: Role, reason: str) -> None:
-        """Retry de ANALYZE/PLAN en dos etapas:
+        """Retry de solo-lectura para roles que NUNCA escriben (ANALYZE/PLAN/
+        REVIEW), en dos etapas:
 
         1ª vez: SOLO read_file (sin búsqueda ni listados). El retry anterior
         (0 tools) no podía convertir listados en lecturas: el PASS1 moría en
@@ -1286,6 +1297,13 @@ class Session:
         con lo leído. Dos etapas calzan justo en max_attempts=3.
         """
         from tools.filesystem import read_file
+
+        # REVIEW usa el budget de explore (no el de analyze).
+        budget = (
+            self._analyze_budget if new_role in (Role.ANALYZE, Role.PLAN)
+            else self._explore_budget
+        )
+        doc = "el informe" if new_role == Role.REVIEW else "el análisis"
 
         # Pregunta ORIGINAL del turno (no el último HumanMessage: ese puede ser
         # un retry inyectado y anidaría "Reanalizá: Reanalizá: ..." — E2E T1).
@@ -1352,8 +1370,8 @@ class Session:
             "tiempo; los nombres citados en la pregunta son tus objetivos). "
             "PROHIBIDO responder con un plan de pasos futuros ('voy a leer…'): "
             "tu PRÓXIMA ACCIÓN debe ser una tool call read_file real. Recién "
-            "con el contenido leído respondé citando archivo:línea. Si con "
-            "esas lecturas no alcanza, decí QUÉ falta en vez de completar."
+            f"con el contenido leído respondé {doc} citando archivo:línea. Si "
+            "con esas lecturas no alcanza, decí QUÉ falta en vez de completar."
         )
         # Sin trim: los listados del PASS1 deben quedar visibles para elegir
         # qué leer. El agente restringido no puede hacer crecer el contexto
@@ -1361,8 +1379,8 @@ class Session:
         self._messages.append(HumanMessage(retry_body))
         # Orden: primero topes (explore=0 bloquea listas/búsquedas, reads
         # acotados), DESPUÉS reset (calcula _explore_exhausted con lo nuevo).
-        self._analyze_budget.max_calls = 0
-        self._analyze_budget.reset()
+        budget.max_calls = 0
+        budget.reset()
         self._rebuild_agent(new_role, tools_override=[read_file])
         console.print(
             f"\n[yellow]⚠️  {reason} — Reintentando en modo solo-lectura "
@@ -1863,8 +1881,11 @@ class Session:
             agent_input = preload_for_review(user_input, self.repo_path)
             self._dedupe.max_repeats = 1
             if agent_input != user_input:
-                # Con git context precargado, no necesita explorar
-                self._explore_budget.max_calls = 1
+                # Con git context precargado necesita IGUAL explorar un poco:
+                # ubicar código por search/list antes de leer (con 1 sola el
+                # budget muere al primer search y el turno escalaba a retry de
+                # escritura — E2E real T1b/9B). Las lecturas siguen acotadas.
+                self._explore_budget.max_calls = 4
                 # Reviewer needs to read ALL modified files + run verify tools
                 self._explore_budget.max_reads_after_explore = 15
                 self._explore_budget.max_tools_before_write = 30
@@ -2270,9 +2291,11 @@ class Session:
                     )
                     break
                 attempt += 1
-                if new_role in (Role.ANALYZE, Role.PLAN):
-                    # Retry de solo-lectura (no write-only): ANALYZE/PLAN no
+                if new_role in (Role.ANALYZE, Role.PLAN, Role.REVIEW):
+                    # Retry de solo-lectura (NUNCA write-only): estos roles no
                     # escriben; leen archivos clave y responden con evidencia.
+                    # REVIEW caía en _enter_budget_retry y GANABA edit_file
+                    # (E2E real T1b/9B: 5 edits a package.json en un review).
                     self._retry_analyze_no_explore(
                         new_role,
                         f"Exploración agotada en {role_label}: {e}",
@@ -2324,9 +2347,9 @@ class Session:
                         )
                     break
                 attempt += 1
-                if new_role in (Role.ANALYZE, Role.PLAN):
-                    # ANALYZE/PLAN nunca van write-only: retry de solo-lectura
-                    # y respuesta con evidencia.
+                if new_role in (Role.ANALYZE, Role.PLAN, Role.REVIEW):
+                    # Estos roles nunca van write-only: retry de solo-lectura
+                    # y respuesta con evidencia (ver fix del handler de arriba).
                     if isinstance(e, ToolCallLimitExceeded):
                         reason = f"El modelo hizo {e.total_calls} tool calls (loop)"
                     elif getattr(e, "reason", "") == "empty-after-tools":

@@ -161,6 +161,44 @@ def test_segunda_vuelta_contexto_minimo_y_pregunta_original(tmp_path):
     assert "PROHIBIDO decir que no tenés acceso" in body
 
 
+def test_readonly_retry_para_review_usa_explore_budget(tmp_path):
+    """E2E real T1b/9B: REVIEW agotaba budget e iba al retry de ESCRITURA
+    (5 edits a package.json). Ahora usa el retry de solo-lectura con el
+    budget de explore y mensaje de informe."""
+    from langchain_core.messages import HumanMessage
+
+    from core.roles import Role
+
+    sess = _session(tmp_path)
+    sess._read_cache = {"src/a.ts": "contenido A " * 100}
+    sess._messages = [HumanMessage("revisá esto")]
+    sess.current_role = Role.REVIEW
+    sess._rebuild_agent = lambda *a, **k: True
+    sess._retry_analyze_no_explore(Role.REVIEW, "budget")
+    body = str(sess._messages[-1].content)
+    assert "respondé el informe" in body
+    assert sess._explore_budget.max_calls == 0
+    # El budget de analyze ni se toca en REVIEW
+    assert sess._analyze_budget.max_calls == 4
+
+
+def test_enter_budget_retry_falla_cerrado_fuera_de_execute(tmp_path):
+    """Fail-closed: el retry de escritura otorga edit_file/write_file. Si un
+    rol de solo-lectura llega acá, fallar LOUD en vez de regalar escritura."""
+    from core.roles import Role
+
+    from orchestration.tool_dedupe import ToolBudgetExceeded
+
+    sess = _session(tmp_path)
+    sess.current_role = Role.REVIEW
+    sess._rebuild_agent_write_only = lambda: (_ for _ in ()).throw(
+        AssertionError("no debe reconstruir writes en REVIEW"))
+    import pytest
+
+    with pytest.raises(ToolBudgetExceeded, match="solo-lectura"):
+        sess._enter_budget_retry("x")
+
+
 def test_readonly_retry_preserva_traces_sin_system_trace(tmp_path, monkeypatch):
     """Con traces del PASS1 no se dispara _system_trace_for (evita duplicar
     contenido que distrae al 4B)."""
