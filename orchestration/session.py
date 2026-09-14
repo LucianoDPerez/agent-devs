@@ -2000,6 +2000,12 @@ class Session:
             # EXCEPCIÓN BULK: en batches ya completos el cierre correcto es
             # "verifico (lint/tests) + resumen SIN edits" — exigir escritura
             # empuja al modelo a no-op edits en loop (E2E real Task 8 batch 1).
+            # require_write es SOLO de EXECUTE. REVIEW también lo tenía en
+            # retries (attempt>0) y castigaba al reviewer por no escribir:
+            # un review que termina con informe y sin writes es CORRECTO
+            # (E2E real T1b/9B: dos retries "con foco en escritura" en un
+            # review que ya había leído todo → cierre vacío). REVIEW exige
+            # TEXTO (require_text), nunca escritura.
             require_write = (
                 new_role == Role.EXECUTE
                 and EXECUTE_REQUIRE_WRITE
@@ -2009,10 +2015,6 @@ class Session:
                 # con no-write retry empuja al modelo a inventar fixes
                 # destructivos (E2E real: 'main.go truncado' inexistente).
                 and not _is_verification_only(user_input)
-            ) or (
-                attempt > 0
-                and REASONING_RETRY_ENABLED
-                and new_role == Role.REVIEW
             )
             task = loop.create_task(
                 stream_agent_turn(
@@ -2045,12 +2047,12 @@ class Session:
                         if new_role == Role.EXECUTE
                         else None
                     ),
-                    # ANALYZE/PLAN deben cerrar con texto: si corrieron tools
-                    # pero la respuesta quedó vacía (corte o cierre vacío del
-                    # modelo), reintentar con el ancla en vez de guardar ''.
-                    # EXECUTE/REVIEW no lo usan (cierre determinístico / flujo
-                    # propio).
-                    require_text=new_role in (Role.ANALYZE, Role.PLAN),
+                    # ANALYZE/PLAN/REVIEW deben cerrar con texto: si corrieron
+                    # tools pero la respuesta quedó vacía (corte o cierre vacío
+                    # del modelo), reintentar con el ancla en vez de guardar ''.
+                    # REVIEW exige informe en texto (nunca escritura).
+                    # EXECUTE no lo usa (cierre determinístico propio).
+                    require_text=new_role in (Role.ANALYZE, Role.PLAN, Role.REVIEW),
                 )
             )
 
