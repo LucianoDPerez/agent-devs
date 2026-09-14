@@ -1254,22 +1254,25 @@ class Session:
                     used += take
                     continue
             indexed.append(key)
-        # HECHOS del intento anterior: el modelo no puede reescribir su propia
-        # historia ("respondí sin tools" cuando sí leyó). Van en el ancla para
-        # que el veredicto parta de lo realmente ejecutado.
+        # EVIDENCIA VIGENTE del turno (presente, no "intento anterior": ese
+        # encuadre hacía que el modelo descartara lo leído como invalidado —
+        # E2E real T2/9B: leyó 3 archivos exactos y declaró "no fueron leídos
+        # con contenido"). Lo de abajo CUENTA como lectura: citalo.
         tools = ", ".join(sorted(self._called_tools)) or "ninguna"
         # TODAS las claves del caché son código obtenido (archivos, snippets
         # del grafo, traces): filtrar las [trace:/[snippet: mentía ("ninguno")
         # aunque el modelo sí había leído source (E2E real T1).
         read_paths = ", ".join(self._read_cache.keys()) or "ninguno"
         parts = [
-            "\n\nCONTENIDO QUE YA LEÍSTE EN EL INTENTO ANTERIOR. Analizá EN BASE "
-            "A ESTO y citá archivo:línea de lo que cada tool devolvió. PROHIBIDO "
-            "inventar paths, firmas o archivos fuera de esta lista y del "
-            "historial del turno.",
-            f"HECHOS DE TU INTENTO ANTERIOR: ejecutaste estas tools: {tools}. "
-            f"Leíste estos archivos: {read_paths}. Todo archivo fuera de esa "
-            f"lista que menciones debe marcarse como NO verificado.",
+            "\n\nEVIDENCIA VERIFICADA DE ESTE TURNO (contenido real obtenido "
+            "por vos con tools, vigente AHORA). Analizá EN BASE A ESTO y citá "
+            "archivo:línea de lo que cada tool devolvió. PROHIBIDO inventar "
+            "paths, firmas o archivos fuera de esta lista y del historial "
+            "del turno.",
+            f"REGISTRO DEL TURNO: ejecutaste estas tools: {tools}. "
+            f"Obtuviste contenido de: {read_paths}. Este contenido CUENTA "
+            f"como lectura válida — citalo con archivo:línea. Todo archivo "
+            f"fuera de esa lista que menciones debe marcarse como NO verificado.",
         ]
         if indexed:
             parts.append(

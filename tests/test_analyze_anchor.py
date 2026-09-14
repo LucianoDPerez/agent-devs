@@ -41,7 +41,8 @@ def test_anchor_inyecta_hechos_del_turno(tmp_path):
     sess._read_cache = {"src/a.ts": "x = 1\n" * 100}
     sess._called_tools = {"read_file", "list_files"}
     anchor = sess._retry_analyze_anchor()
-    assert "HECHOS DE TU INTENTO ANTERIOR" in anchor
+    assert "EVIDENCIA VERIFICADA DE ESTE TURNO" in anchor
+    assert "CUENTA" in anchor and "como lectura válida" in anchor
     assert "read_file" in anchor and "list_files" in anchor
     assert "src/a.ts" in anchor
     assert "NO verificado" in anchor
