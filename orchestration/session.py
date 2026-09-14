@@ -1980,6 +1980,7 @@ class Session:
         gate_retries = 0
         verify_injections = 0
         evidence_retried = False
+        cite_retried = False
         interrupted = False
         interrupted_by_esc = False
         auto_stopped = False
@@ -2230,6 +2231,41 @@ class Session:
                     ))
                     messages_for_agent = list(self._messages)
                     continue
+                # GUARD CITAS-FANTASMA: el informe cita [archivo:línea] que no
+                # existe en disco (archivo inexistente, línea 0 o fuera de
+                # rango — E2E real T1b/9B: `src/lib/patient.service.ts:0` en
+                # un repo NestJS). UNA vez se reintenta exigiendo corregir.
+                # Negativa honesta SIN citas pasa (no se castiga pedir datos).
+                # Solo REVIEW/ANALYZE: PLAN cita archivos por crear.
+                if (
+                    new_role in (Role.ANALYZE, Role.REVIEW)
+                    and not cite_retried
+                    and attempt + 1 < max_attempts
+                ):
+                    from orchestration.evidence import find_unverifiable_cites
+
+                    bad = find_unverifiable_cites(
+                        self._last_response, self.repo_path)
+                    if bad:
+                        cite_retried = True
+                        attempt += 1
+                        shown = ", ".join(bad[:8])
+                        console.print(
+                            "\n[yellow]🔍 Citas sin respaldo en disco "
+                            f"({shown}) — reintentando con exigencia de "
+                            "corregir…[/yellow]\n"
+                        )
+                        self._messages.append(HumanMessage(
+                            f"⛔ Tu respuesta cita evidencia que NO existe en "
+                            f"disco: {shown}. Cada [archivo:línea] debe ser un "
+                            f"archivo REAL del repo con la línea dentro del "
+                            f"rango (la línea 0 no existe). Corregí el informe "
+                            f"citando SOLO paths que leíste con tools, o marcá "
+                            f"esos puntos como NO verificados sin citarlos. "
+                            f"Respondé el informe corregido AHORA."
+                        ))
+                        messages_for_agent = list(self._messages)
+                        continue
                 break
             except KeyboardInterrupt:
                 interrupted = True
