@@ -122,3 +122,45 @@ def test_git_restore_requires_files(tmp_path):
     from tools.git import git_restore
     with pytest.raises(ToolException):
         git_restore.invoke({"path": str(tmp_path), "files": ""})
+
+
+class TestCreateBranch:
+    def test_crea_y_cambia(self):
+        from tools.git import create_branch
+
+        repo = _init_repo()
+        out = create_branch.invoke({"path": repo, "name": "feat/x"})
+        assert "creada" in out
+        assert current_branch.invoke({"path": repo}) == "feat/x"
+
+    def test_existente_cambia_sin_error(self):
+        from tools.git import create_branch
+
+        repo = _init_repo()
+        create_branch.invoke({"path": repo, "name": "feat/x"})
+        out = create_branch.invoke({"path": repo, "name": "feat/x"})
+        assert "ya existía" in out
+        assert current_branch.invoke({"path": repo}) == "feat/x"
+
+    def test_nombres_invalidos(self):
+        import pytest
+
+        from langchain_core.tools import ToolException
+
+        from tools.git import create_branch
+
+        repo = _init_repo()
+        for bad in ("", "  ", "--help", "a..b", "con espacios", "a~b"):
+            with pytest.raises(ToolException):
+                create_branch.invoke({"path": repo, "name": bad})
+        # La rama actual no cambió por los intentos fallidos
+        assert current_branch.invoke({"path": repo}) == "main"
+
+    def test_dirty_viaja_con_el_working_tree(self):
+        from tools.git import create_branch
+
+        repo = _init_repo()
+        (Path(repo) / "nuevo.txt").write_text("wip", encoding="utf-8")
+        create_branch.invoke({"path": repo, "name": "feat/wip"})
+        assert (Path(repo) / "nuevo.txt").exists()
+        assert current_branch.invoke({"path": repo}) == "feat/wip"

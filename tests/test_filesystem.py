@@ -520,3 +520,34 @@ class TestNoopEditGuard:
             "new_str": "hola mundo  ",
         })
         assert "NO-OP" in result
+
+
+class TestProtectedDirsRecortados:
+    """E2E real: plan.md ordena guardar en plans/<ruta del usuario> pero el
+    guard bloqueaba todo plans/. Solo dirs del sistema + nombres canónicos."""
+
+    def test_write_plans_mi_tarea_permitido(self):
+        repo = tempfile.mkdtemp()
+        result = write_file.invoke({
+            "path": str(Path(repo) / "plans" / "mi-tarea.md"),
+            "content": "# plan",
+        })
+        assert "Written" in result
+        assert (Path(repo) / "plans" / "mi-tarea.md").exists()
+
+    def test_write_plans_plan_md_sigue_bloqueado(self):
+        repo = tempfile.mkdtemp()
+        result = write_file.invoke({
+            "path": str(Path(repo) / "plans" / "plan.md"),
+            "content": "# plan",
+        })
+        assert "PROHIBIDO" in result
+        assert not (Path(repo) / "plans" / "plan.md").exists()
+
+    def test_write_agent_devs_sigue_bloqueado(self):
+        repo = tempfile.mkdtemp()
+        result = write_file.invoke({
+            "path": str(Path(repo) / ".agent-devs" / "notas.md"),
+            "content": "x",
+        })
+        assert "PROHIBIDO" in result

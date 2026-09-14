@@ -469,3 +469,50 @@ def test_trace_component_dedupe_by_component_ignores_project():
     # componentes DISTINTAS no colisionan
     k3 = dedupe.key("trace_component", {"component": "OtraComponente"})
     assert k3 != k1
+
+
+class TestVerifyResults:
+    """El wrapper registra el RESULTADO de verify tools (E2E real T3/12B:
+    run_build en raíz rota contaba como 'build ✅' en el cierre)."""
+
+    def _wrapped(self, fn, results):
+        from orchestration.tool_dedupe import ToolCallDedupe, wrap_tools_with_dedupe
+
+        return wrap_tools_with_dedupe(
+            [fn], ToolCallDedupe(), None, None, None, set(), results,
+        )[0]
+
+    def test_passed_se_registra_true(self):
+        from langchain_core.tools import tool as dec
+
+        @dec
+        def run_tests(path: str) -> str:
+            """fake"""
+            return "[PASSED] exit=0\n$ pytest\nok"
+
+        results: dict = {}
+        out = self._wrapped(run_tests, results).invoke({"path": "/tmp"})
+        assert "[PASSED]" in out
+        assert results == {"run_tests": True}
+
+    def test_failed_se_registra_false(self):
+        from langchain_core.tools import tool as dec
+
+        @dec
+        def run_lint(path: str) -> str:
+            """fake"""
+            return "[FAILED] exit=1\n$ tsc\nerror TS1"
+
+        results: dict = {}
+        self._wrapped(run_lint, results).invoke({"path": "/tmp"})
+        assert results == {"run_lint": False}
+
+    def test_no_verify_no_registra(self):
+        from orchestration.tool_dedupe import ToolCallDedupe, wrap_tools_with_dedupe
+
+        results: dict = {}
+        w = wrap_tools_with_dedupe(
+            [read_file], ToolCallDedupe(), None, None, None, set(), results,
+        )[0]
+        assert results == {}
+        assert w is not None

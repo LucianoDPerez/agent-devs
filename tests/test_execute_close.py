@@ -90,3 +90,67 @@ def test_cambio_ya_escrito_no_dispara_retry_write_only(tmp_path):
     # La guarda usa WRITE_TOOL_NAMES ∩ _called_tools:
     from orchestration.session import WRITE_TOOL_NAMES
     assert bool(s._called_tools & WRITE_TOOL_NAMES)
+
+
+def test_close_marca_fallo_si_verify_fallo(tmp_path):
+    """E2E real T3/12B: run_build en raíz rota contaba como 'build ✅'.
+    Con resultado [FAILED] registrado, el cierre debe decir FALLÓ."""
+    repo = _init_repo(tmp_path)
+    (repo / "README.md").write_text("# repo\n\nEDITADO\n")
+    s = _make_session(repo)
+    s._called_tools = {"edit_file", "run_build"}
+    s._verify_results = {"run_build": False}
+    close = s._deterministic_close()
+    assert "FALLÓ" in close
+    assert "no commitear sin revisar" in close
+
+
+def test_close_ok_solo_si_todo_paso(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "README.md").write_text("# repo\n\nEDITADO\n")
+    s = _make_session(repo)
+    s._called_tools = {"edit_file", "run_lint", "run_build"}
+    s._verify_results = {"run_lint": True, "run_build": False}
+    assert "FALLÓ" in s._deterministic_close()
+    s._verify_results = {"run_lint": True, "run_build": True}
+    close = s._deterministic_close()
+    assert "Verificación: lint/tests/build ✅" in close
+
+
+def test_close_sin_cambios_con_fallo_avisa(tmp_path):
+    repo = _init_repo(tmp_path)
+    s = _make_session(repo)
+    s._called_tools = {"run_tests"}
+    s._verify_results = {"run_tests": False}
+    assert "FALLÓ" in s._deterministic_close()
+
+
+def test_failed_close_con_commit_reciente_informa_completado(tmp_path):
+    """E2E real: turno que commiteó y luego loo interesting narrando cerraba
+    como 'fallido' aunque todo estaba hecho. Con árbol limpio + commit
+    reciente, informa completado."""
+    repo = _init_repo(tmp_path)
+    (repo / "x.txt").write_text("v2", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "feat: x")
+    s = _make_session(repo)
+    msg = s._failed_turn_close()
+    assert "ya commiteados" in msg
+    assert "fallido" not in msg.lower()
+
+
+def test_failed_close_con_cambios_mantiene_cautela(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "README.md").write_text("# repo\n\nPENDIENTE\n")
+    s = _make_session(repo)
+    msg = s._failed_turn_close()
+    assert "fallido" in msg.lower()
+
+
+def test_failed_close_codigo_roto_reporta_archivo(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "roto.py").write_text("def f(:\n", encoding="utf-8")
+    s = _make_session(repo)
+    msg = s._failed_turn_close()
+    assert "ROTO" in msg
+    assert "roto.py" in msg

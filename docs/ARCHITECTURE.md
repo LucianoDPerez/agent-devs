@@ -411,6 +411,7 @@ El orquestador **detecta automáticamente** la intención y carga el rol adecuad
 | `git_status(path)` | Resumen: rama, ahead/behind, cambios |
 | `git_log(path, limit)` | Historial de commits (oneline) |
 | `stage_files(path, files)` | Stagea archivos antes de commitear |
+| `create_branch(path, name)` | Crea rama y se cambia (idempotente); flujo diario antes de implementar |
 | `create_commit(path, message)` | Commitea staged (conventional commits) |
 | `push(path, remote, branch)` | Pusha la rama (setea upstream) |
 | `create_pr(path, title, body, base)` | Pusha + abre PR con `gh` |

@@ -621,6 +621,11 @@ class Session:
         # grafo, NO en self._messages — la compuerta de verificación escaneaba
         # self._messages y daba falsos positivos: "no corrió verify" cuando sí).
         self._called_tools: set[str] = set()
+        # Resultado ([PASSED]/[FAILED]) de cada verify tool del turno. Sin esto
+        # el cierre decía "build ✅" con solo haber LLAMADO la tool (E2E real:
+        # run_build en raíz rota contó como verificado). Solo `[PASSED]`
+        # explícito cuenta como pasado.
+        self._verify_results: dict[str, bool] = {}
         # Resultado del diagnóstico de runtime del turno actual (True=entorno
         # sano, False=hallazgos, None=no se ejecutó). Lo usa _closing_message
         # para concluir "probablemente ya está resuelto" cuando corresponde.
@@ -778,6 +783,7 @@ class Session:
                     self.cached_analysis, self._tools, self._dedupe,
                     self._explore_budget, self._analyze_budget,
                     tool_call_logger=self._called_tools,
+                    tool_call_results=self._verify_results,
                     graph_project=self._graph_project,
                 )
             )
@@ -849,6 +855,7 @@ class Session:
                     no_explore=no_explore,
                     tools_override=tools_override,
                     tool_call_logger=self._called_tools,
+                    tool_call_results=self._verify_results,
                     graph_project=self._graph_project,
                     confirm_callback=(
                         self._confirm_write_cb
@@ -900,6 +907,7 @@ class Session:
                     force_tool_calls=True,
                     read_cache=self._read_cache,
                     tool_call_logger=self._called_tools,
+                    tool_call_results=self._verify_results,
                     allow_overwrite_escalation=False,
                     confirm_callback=(
                         self._confirm_write_cb if EXECUTE_CONFIRM_WRITES else None
@@ -960,6 +968,7 @@ class Session:
                     tools_override=GATE_RETRY_TOOLS,
                     force_tool_calls=True,
                     tool_call_logger=self._called_tools,
+                    tool_call_results=self._verify_results,
                     confirm_callback=(
                         self._confirm_write_cb if EXECUTE_CONFIRM_WRITES else None
                     ),
@@ -1115,6 +1124,7 @@ class Session:
         self._messages.append(HumanMessage(self._retry_with_read_anchor()))
         messages_for_agent = list(self._messages)
         self._called_tools.clear()
+        self._verify_results.clear()
         self._dedupe.reset()
         self._dedupe.max_repeats = 2
         self._explore_budget.max_calls = 0
@@ -1431,6 +1441,19 @@ class Session:
         turno extra de verificación aunque el modelo YA había verificado."""
         return bool(self._called_tools & VERIFY_TOOL_NAMES)
 
+    def _verify_all_passed(self) -> bool | None:
+        """Estado de la verificación del turno: True si corrió ≥1 verify tool
+        y TODAS pasaron (`[PASSED]`); False si alguna falló; None si no corrió
+        ninguna. Sin resultados registrados (tests que setean el set a mano)
+        se conserva la semántica vieja: llamado = verificado."""
+        called = self._called_tools & VERIFY_TOOL_NAMES
+        if not called:
+            return None
+        known = {k: v for k, v in self._verify_results.items() if k in called}
+        if not known:
+            return True  # compat: sin registro de resultados
+        return all(known.values())
+
     def _changed_files(self) -> list[str]:
         """Archivos realmente modificados en el working tree (git, determinístico).
 
@@ -1502,27 +1525,61 @@ class Session:
         decir que está hecho.
         """
         files = self._changed_files()
-        verified = self._verify_tools_called()
+        verify_state = self._verify_all_passed()
         if files:
             head = f"✅ Tarea realizada: {len(files)} archivo(s) modificado(s)"
             detail = "   · " + "\n   · ".join(files[:8])
             if len(files) > 8:
                 detail += f"\n   · …y {len(files) - 8} más"
-            verify_line = (
-                "   Verificación: lint/tests/build ✅" if verified
-                else "   Verificación: no se corrió (podés pedirla con 'revisá los cambios')"
-            )
+            if verify_state is True:
+                verify_line = "   Verificación: lint/tests/build ✅"
+            elif verify_state is False:
+                verify_line = (
+                    "   Verificación: ⚠️ FALLÓ o quedó incompleta "
+                    "(ver output arriba) — no commitear sin revisar"
+                )
+            else:
+                verify_line = "   Verificación: no se corrió (podés pedirla con 'revisá los cambios')"
             evidence_line = ""
-            if not verified or not _response_has_evidence(self._last_response):
+            if verify_state is not True or not _response_has_evidence(self._last_response):
                 evidence_line = (
                     "\n   Evidencia: ⚠️ la respuesta no cita archivo:línea ni "
-                    "verificación — VERIFICAR CON EVIDENCIA ANTES DE CONFIRMAR "
-                    "(revisá el diff antes de commitear)"
+                    "verificación exitosa — VERIFICAR CON EVIDENCIA ANTES DE "
+                    "CONFIRMAR (revisá el diff antes de commitear)"
                 )
             return f"{head}\n{detail}\n{verify_line}{evidence_line}"
-        if verified:
-            return "✅ Turno completado (verificación corrida, sin cambios en disco)."
+        if verify_state is True:
+            return "✅ Turno completado (verificación corrida y exitosa, sin cambios en disco)."
+        if verify_state is False:
+            return "⚠️ Turno sin cambios en disco y la verificación FALLÓ (ver output arriba)."
         return "↻ El turno terminó sin cambios detectados en disco."
+
+    def _failed_turn_close(self) -> str:
+        """Mensaje de cierre para turnos EXECUTE fallidos (sin oferta de commit).
+
+        Tres casos, en orden:
+        1. Código ROTO en disco → reportar el archivo exacto (no commitear).
+        2. Árbol limpio + commit reciente → el trabajo se hizo y commiteó; el
+           "fallo" fue solo del cierre (E2E real: loop narrativo post-push
+           declarado "fallido" con todo commiteado). Informar, no alarmar.
+        3. Resto → mensaje cauteloso original.
+        """
+        gate_ok, gate_err = self._post_write_gate()
+        if not gate_ok:
+            return (
+                "\n[bold red]⛔ El turno falló y además el código quedó ROTO.[/bold red]\n"
+                f"{gate_err}\n"
+                "[dim]Revisá y corregí el archivo señalado ANTES de commitear.[/dim]\n"
+            )
+        if not self._changed_files() and self._repo_has_recent_commit():
+            return (
+                "\n[dim]✅ Turno completado (cambios ya commiteados — el cierre "
+                "final no tenía nada que verificar).[/dim]"
+            )
+        return (
+            "\n[dim]↻ Turno fallido (sin verificación) — no se ofrece "
+            "commit. Revisá los cambios antes de commitearlos.[/dim]"
+        )
 
     def _closing_message(self, base: str) -> str:
         """Mensaje de cierre contexto-dependiente: si el entorno fue chequeado
@@ -1753,6 +1810,7 @@ class Session:
         self._explore_budget.reset()
         self._analyze_budget.reset()
         self._called_tools.clear()
+        self._verify_results.clear()
         self._runtime_healthy = None
         self._runtime_report = None
         # Los overrides de write_file (habilitados tras fallar la cirugía fina
@@ -1793,7 +1851,16 @@ class Session:
             # Opt-in: PATH_FIX_ENABLED (config) — modifica código REAL del
             # usuario, se disclosia en consola.
             if PATH_FIX_ENABLED and detect_path_mismatches(self.repo_path):
-                fix_report = apply_mismatch_fixes(self.repo_path)
+                def _path_fix_confirm(path: str, desc: str) -> bool:
+                    # Sin TUI interactiva: fail-open (igual que antes). Con TUI:
+                    # una aprobación por archivo; rechazar/vencer solo omite
+                    # ese archivo, sin cancelar el turno ni dejar pendiente.
+                    return self._confirm_write_cb(
+                        "path_fix", {"path": path, "desc": desc},
+                        cancel_on_reject=False, keep_pending=False,
+                    )
+                fix_report = apply_mismatch_fixes(
+                    self.repo_path, confirm_fn=_path_fix_confirm)
                 if fix_report:
                     console.print(
                         "[yellow]🔧 PATH FIX: corregí mismatches de paths "
@@ -2309,6 +2376,7 @@ class Session:
                     break
                 verify_injections += 1
                 self._called_tools.clear()
+                self._verify_results.clear()
                 self._inject_verify_gate()
                 messages_for_agent = list(self._messages)
                 console.print(
@@ -2476,6 +2544,7 @@ class Session:
                     ))
                     messages_for_agent = list(self._messages)
                     self._called_tools.clear()
+                    self._verify_results.clear()
                     self._dedupe.reset()
                     self._explore_budget.max_calls = 0
                     self._explore_budget.max_reads_after_explore = EXECUTE_MAX_READS_AFTER_EXPLORE
@@ -2621,24 +2690,7 @@ class Session:
             if not _bulk_more_pending:
                 self._maybe_ask_commit(user_input)
         elif new_role == Role.EXECUTE and turn_failed and not interrupted:
-            # Turno fallido: además de no ofrecer commit, verificar si el árbol
-            # quedó con código ROTO (archivo truncado/sintaxis inválida). El
-            # write_file ahora avisa INTEGRIDAD/SINTAXIS, pero si el modelo igual
-            # cerró, esta compuerta detecta y REPORTE el archivo exacto para que
-            # el usuario no commitee código roto a ciegas (E2E real: e2e_verify.sh
-            # truncado sin que nadie lo notara).
-            gate_ok, gate_err = self._post_write_gate()
-            if not gate_ok:
-                console.print(
-                    "\n[bold red]⛔ El turno falló y además el código quedó ROTO.[/bold red]\n"
-                    f"{gate_err}\n"
-                    "[dim]Revisá y corregí el archivo señalado ANTES de commitear.[/dim]\n"
-                )
-            else:
-                console.print(
-                    "\n[dim]↻ Turno fallido (sin verificación) — no se ofrece "
-                    "commit. Revisá los cambios antes de commitearlos.[/dim]"
-                )
+            console.print(self._failed_turn_close(), end="")
             # CREDENCIALES / ENTORNO EXTERNO: si el turno falló (probablemente
             # porque la tarea requiere una credencial/entorno que el agente no
             # tiene), invitar al usuario a proveerla o pedir los pasos manuales.
@@ -3028,7 +3080,10 @@ class Session:
             pass
         return True
 
-    def _confirm_write_cb(self, name: str, kwargs: dict) -> bool:
+    def _confirm_write_cb(
+        self, name: str, kwargs: dict,
+        *, cancel_on_reject: bool = True, keep_pending: bool = True,
+    ) -> bool:
         """Callback del wrapper de tools: pedir aprobación antes de ejecutar.
 
         Se llama desde el wrapper (orchestration/tool_dedupe) para
@@ -3038,6 +3093,11 @@ class Session:
 
         Fail-open sin TUI interactiva (tests/scripts): no hay usuario que
         responder, mismo criterio que EXECUTE_ASK_COMMIT.
+
+        ``cancel_on_reject=False`` + ``keep_pending=False``: para aprobaciones
+        puntuales que NO son writes del turno (codemod PATH FIX): rechazar o
+        vencer solo omite ese cambio, sin cancelar el turno ni dejar pendiente
+        re-ejecutable.
         """
         if not EXECUTE_CONFIRM_WRITES or not self._fullscreen:
             return True
@@ -3048,16 +3108,22 @@ class Session:
             if self._confirm_event is not None:
                 return False
             path = kwargs.get("path", "?")
+            extra = f"\n[dim]{kwargs['desc']}[/dim]\n" if kwargs.get("desc") else ""
+            continua_hint = (
+                "Podés decir 'continua' o 'sí' para reintentarlo sin perder contexto."
+                if keep_pending else "Si vence, se omite este cambio."
+            )
             console.print(
                 f"\n[bold yellow]❓ ¿Aprobás {name} sobre '{path}'?[/bold yellow]\n"
+                f"{extra}"
                 "[dim]Escribí 'sí'/'no' (o 's'/'n') en el input y Enter. "
                 f"Sin respuesta en {int(self._confirm_timeout)}s se venció. "
-                "Podés decir 'continua' o 'sí' para reintentarlo sin perder contexto.[/dim]"
+                f"{continua_hint}[/dim]"
             )
             self._confirm_answer = None
             self._confirm_event = threading.Event()
             # Guardar pendiente ANTES de esperar: si vence, queda para 'continua'
-            self._pending_write = (name, dict(kwargs))
+            self._pending_write = (name, dict(kwargs)) if keep_pending else None
             event = self._confirm_event
         try:
             answered = event.wait(self._confirm_timeout)
@@ -3079,10 +3145,13 @@ class Session:
                     "con otra estrategia o aprobá dentro del timeout.[/yellow]"
                 )
                 return False
-            console.print(
-                "[yellow]⏱️  Confirmación vencida — podés reintentarlo con 'continua' o 'sí' "
-                "(sin re-explorar, sin perder lo ya leído).[/yellow]"
-            )
+            if keep_pending:
+                console.print(
+                    "[yellow]⏱️  Confirmación vencida — podés reintentarlo con 'continua' o 'sí' "
+                    "(sin re-explorar, sin perder lo ya leído).[/yellow]"
+                )
+            else:
+                console.print("[yellow]⏱️  Confirmación vencida — se omite este cambio.[/yellow]")
             # NO cancelar el turno: dejar que el wrapper devuelva 'rechazado'
             # y el turno cierre normal (interrupted=False) para que el historial
             # y el read_cache se preserven para el próximo 'continua'.
@@ -3092,10 +3161,14 @@ class Session:
             self._pending_write = None
             self._pending_timeouts.pop(self._pending_key(name, kwargs), None)
             return True
-        console.print("[red]⛔ Rechazado — se cancela el turno.[/red]")
+        if cancel_on_reject:
+            console.print("[red]⛔ Rechazado — se cancela el turno.[/red]")
+        else:
+            console.print("[red]⛔ Rechazado — se omite este cambio.[/red]")
         self._pending_write = None
         self._pending_timeouts.pop(self._pending_key(name, kwargs), None)
-        self._cancel_turn()
+        if cancel_on_reject:
+            self._cancel_turn()
         return False
 
     def confirm_pending(self) -> bool:

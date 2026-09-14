@@ -118,6 +118,7 @@ async def build_agent(
     tools_override: list | None = None,
     force_tool_calls: bool = False,
     tool_call_logger: set | None = None,
+    tool_call_results: dict | None = None,
     allow_overwrite_escalation: bool | None = None,
     graph_project: str = "",
     confirm_callback=None,
@@ -213,6 +214,7 @@ async def build_agent(
         all_tools = wrap_tools_with_dedupe(
             all_tools, dedupe, budget, read_cache,
             repo_path=repo_path, tool_call_logger=tool_call_logger,
+            tool_call_results=tool_call_results,
             allow_overwrite_escalation=allow_overwrite_escalation,
             confirm_callback=confirm_callback,
         )

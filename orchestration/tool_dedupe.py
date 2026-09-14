@@ -465,6 +465,20 @@ class ExploreBudget:
         return None
 
 
+def _record_verify_result(
+    name: str, result: object, tool_call_results: dict | None,
+) -> None:
+    """Registra el RESULTADO de verify tools (no solo la llamada).
+
+    Solo `[PASSED]` explícito cuenta como pasado; `[FAILED]`, timeouts y
+    mensajes de validación cuentan como no-pasado. Así el cierre
+    determinístico distingue "se corrió y pasó" de "se corrió y falló"."""
+    if tool_call_results is None or name not in VERIFY_TOOL_NAMES:
+        return
+    if isinstance(result, str):
+        tool_call_results[name] = result.startswith("[PASSED]")
+
+
 def wrap_tools_with_dedupe(
     tools: list,
     dedupe: ToolCallDedupe,
@@ -472,6 +486,7 @@ def wrap_tools_with_dedupe(
     read_cache: dict | None = None,
     repo_path: str | None = None,
     tool_call_logger: set | None = None,
+    tool_call_results: dict | None = None,
     allow_overwrite_escalation: bool = True,
     confirm_callback=None,
 ) -> list:
@@ -489,6 +504,11 @@ def wrap_tools_with_dedupe(
     nombre al set. La sesión lo usa para saber si el modelo corrió verify
     tools (la compuerta de verificación NO puede ver los tool calls en el
     estado del grafo — escanear self._messages daba falsos positivos).
+
+    ``tool_call_results`` (dict): si se provee, cada verify tool ejecutada
+    guarda name → bool (True solo con `[PASSED]` explícito). Permite al
+    cierre determinístico distinguir "se verificó y pasó" de "se corrió y
+    falló" (E2E real: `run_build` en raíz rota contaba como "build ✅").
 
     ``allow_overwrite_escalation``: si es False, el escalamiento de edit_file
     → write_file completo queda DESHABILITADO (write_file nunca se desbloquea
@@ -512,7 +532,7 @@ def wrap_tools_with_dedupe(
             _wrap_one(
                 t, dedupe, explore_budget, read_cache, repo_path,
                 tool_call_logger, edit_rejections, allow_overwrite_escalation,
-                confirm_callback,
+                confirm_callback, tool_call_results,
             )
         )
     return wrapped
@@ -610,6 +630,7 @@ def _wrap_one(
     edit_rejections: dict | None = None,
     allow_overwrite_escalation: bool = True,
     confirm_callback=None,
+    tool_call_results: dict | None = None,
 ) -> BaseTool:
     name = tool.name
 
@@ -834,6 +855,7 @@ def _wrap_one(
         if tool_call_logger is not None:
             tool_call_logger.add(name)
         result = tool.invoke(kwargs)
+        _record_verify_result(name, result, tool_call_results)
         if explore_budget is not None and name in WRITE_TOOL_NAMES:
             if _write_succeeded(result):
                 explore_budget.maybe_raise_verify_required()
@@ -906,6 +928,7 @@ def _wrap_one(
         if tool_call_logger is not None:
             tool_call_logger.add(name)
         result = await tool.ainvoke(kwargs)
+        _record_verify_result(name, result, tool_call_results)
         if explore_budget is not None and name in WRITE_TOOL_NAMES:
             if _write_succeeded(result):
                 explore_budget.maybe_raise_verify_required()

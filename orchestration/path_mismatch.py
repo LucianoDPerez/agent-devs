@@ -358,12 +358,19 @@ def _format_findings(findings: list[dict]) -> str:
     )
 
 
-def apply_mismatch_fixes(repo_path: str, *, max_findings: int = 25) -> str:
+def apply_mismatch_fixes(
+    repo_path: str, *, max_findings: int = 25, confirm_fn=None,
+) -> str:
     """Aplica DETERMINÍSTICAMENTE los fixes de path (codemod).
 
     El modelo chico aplica fixes mecánicos a medias (en E2E real arregló 6
     paths y se saltó otros 6 reescribiendo el archivo entero). El SISTEMA
     reemplaza los literales exactos (file:line) con su target grounded.
+
+    ``confirm_fn(path, description) -> bool``: si se provee, se pide
+    aprobación UNA vez por archivo antes de tocarlo (E2E real: el codemod
+    tocaba código sin confirmación aunque EXECUTE_CONFIRM_WRITES estuviera
+    activo). Sin confirm_fn se aplica directo (scripts/tests).
 
     Devuelve un reporte de lo aplicado ('' si no hubo nada que aplicar).
     """
@@ -380,37 +387,74 @@ def apply_mismatch_fixes(repo_path: str, *, max_findings: int = 25) -> str:
         max_findings=max_findings,
         frontend_base_has_api=base_has_api,
     )
-    applied: list[str] = []
     try:
         from tools.filesystem import _is_protected_task_path
     except Exception:
         _is_protected_task_path = lambda _p: False  # noqa: E731
+    # Agrupar por archivo: una confirmación por archivo, no por línea.
+    by_file: dict[str, list] = {}
     for f in findings:
         target = f["target"]
         if not target or target == f["literal"]:
             continue
-        p = root / f["rel"]
-        if _is_protected_task_path(str(p)):
+        if _is_protected_task_path(str(root / f["rel"])):
             continue
+        by_file.setdefault(f["rel"], []).append(f)
+    applied: list[str] = []
+    skipped: list[str] = []
+    for rel, items in by_file.items():
+        p = root / rel
         try:
             lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
         except OSError:
             continue
-        idx = f["line"] - 1
-        if not (0 <= idx < len(lines)):
+        pending = []
+        for f in items:
+            idx = f["line"] - 1
+            if not (0 <= idx < len(lines)):
+                continue
+            # Reemplazo SOLO en la línea detectada. content.replace() GLOBAL
+            # era un bug: el literal '/pacientes' es substring de
+            # '/api/pacientes' ya arreglado → duplicaba el prefijo
+            # (/api/api/pacientes, E2E real).
+            if f["literal"] in lines[idx]:
+                pending.append(f)
+        if not pending:
             continue
-        # Reemplazo SOLO en la línea detectada. content.replace() GLOBAL era un
-        # bug: el literal '/pacientes' es substring de '/api/pacientes' ya
-        # arreglado → duplicaba el prefijo (/api/api/pacientes, E2E real).
-        if f["literal"] in lines[idx]:
-            lines[idx] = lines[idx].replace(f["literal"], target)
-            p.write_text("".join(lines), encoding="utf-8")
-            applied.append(
-                f"'{f['literal']}' → '{target}' ({f['rel']}:{f['line']})"
+        if confirm_fn is not None:
+            desc = "; ".join(
+                f"'{f['literal']}' → '{f['target']}' (línea {f['line']})"
+                for f in pending[:3]
             )
-    if not applied:
+            if len(pending) > 3:
+                desc += f"; …y {len(pending) - 3} más"
+            try:
+                if not confirm_fn(str(p), desc):
+                    skipped.append(rel)
+                    continue
+            except Exception:
+                skipped.append(rel)
+                continue
+        before = len(applied)
+        for f in pending:
+            idx = f["line"] - 1
+            # Re-chequear contra el contenido ya modificado (un fix previo en
+            # la misma línea pudo haberlo alterado): evita reportar aplicados
+            # que fueron no-op.
+            if f["literal"] not in lines[idx]:
+                continue
+            lines[idx] = lines[idx].replace(f["literal"], f["target"])
+            applied.append(
+                f"'{f['literal']}' → '{f['target']}' ({f['rel']}:{f['line']})"
+            )
+        if len(applied) > before:
+            p.write_text("".join(lines), encoding="utf-8")
+    if not applied and not skipped:
         return ""
-    return (
+    out = (
         "✅ PATH FIX APLICADO POR EL SISTEMA (codemod determinístico — NO lo "
         "rehagas ni lo reviertas):\n" + "\n".join(f"  - {a}" for a in applied)
     )
+    if skipped:
+        out += "\nOmitidos por el usuario:\n" + "\n".join(f"  - {s}" for s in skipped)
+    return out

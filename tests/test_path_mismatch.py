@@ -214,3 +214,40 @@ class TestApplyFixes:
         ).read_text()
         assert "/api/api" not in content, f"Quedó doble: {content}"
         assert content.count("/api/pacientes") == 2, content
+
+
+class TestConfirmFn:
+    """El codemod pide aprobación por archivo cuando hay confirm_fn
+    (E2E real: tocaba código sin confirmación con EXECUTE_CONFIRM_WRITES)."""
+
+    def test_sin_confirm_fn_aplica_directo(self):
+        repo = _medicos_like_repo()
+        out = apply_mismatch_fixes(repo)
+        assert "/api/pacientes" in out
+        content = (Path(repo) / "frontend/src/application/services/api.ts").read_text()
+        assert "/api/pacientes" in content
+
+    def test_rechazo_omite_archivo_y_reporta(self):
+        repo = _medicos_like_repo()
+        seen = []
+
+        def deny(path, desc):
+            seen.append((path, desc))
+            return False
+
+        out = apply_mismatch_fixes(repo, confirm_fn=deny)
+        assert seen, "debió pedir confirmación por el archivo"
+        assert "Omitidos por el usuario" in out
+        content = (Path(repo) / "frontend/src/application/services/api.ts").read_text()
+        assert "/api/pacientes" not in content  # intacto
+
+    def test_excepcion_en_confirm_equivale_a_rechazo(self):
+        repo = _medicos_like_repo()
+
+        def boom(path, desc):
+            raise RuntimeError("ui caída")
+
+        out = apply_mismatch_fixes(repo, confirm_fn=boom)
+        assert "Omitidos por el usuario" in out
+        content = (Path(repo) / "frontend/src/application/services/api.ts").read_text()
+        assert "'/pacientes'" in content  # intacto

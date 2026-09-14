@@ -25,6 +25,12 @@ CODE_EXTS = {
 # extensión → (comando, descripción). Fail-open si el binario no existe.
 _SYNTAX_EXTS = {
     ".sh": ("bash", "-n"),
+    # .py con ast.parse (NO py_compile: ese escribe __pycache__ en el repo
+    # del usuario como efecto colateral). Solo parseo, sin ejecutar nada.
+    ".py": (
+        "python3", "-c",
+        "import ast,sys; ast.parse(open(sys.argv[1], encoding='utf-8').read())",
+    ),
 }
 
 _MAX_ERROR_CHARS = 3_500

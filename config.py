@@ -60,17 +60,22 @@ MAX_REASONING_SECONDS = 180
 TURN_IDLE_TIMEOUT = 360  # 6 min — el modelo 4B tarda en razonar análisis complejos
 
 # Archivos de PLANIFICACIÓN PROTEGIDOS: el agente NUNCA debe escribir/editar/
-# borrar sobre ellos. El 4B tiende a reescribir tasks.md (precargado en el
-# prompt) como "primer objetivo", corrompiendo el plan. Estos patterns matchean
-# por nombre de archivo o por subdirectorio (case-insensitive).
+# borrar sobre ellos por iniciativa propia. El 4B tiende a reescribir tasks.md
+# (precargado en el prompt) como "primer objetivo", corrompiendo el plan.
+# Estos patterns matchean por nombre de archivo o por subdirectorio
+# (case-insensitive). Los dirs son SOLO del sistema (.agent-devs/.agent/.atl):
+# los dirs genéricos de docs (plans/, tasks/) se sacaron a propósito — el
+# prompt de PLAN ordena guardar ahí con ruta explícita del usuario y el guard
+# lo bloqueaba contradiciendo la orden (E2E real: "guardalo en plans/tarea.md"
+# → "PROHIBIDO"). Los nombres canónicos (tasks.md, plan.md, …) siguen
+# protegidos en CUALQUIER directorio.
 PROTECTED_TASK_FILENAMES = frozenset({
     "tasks.md", "task.md", "plan.md", "prd.md", "roadmap.md",
     "backlog.md", "agenda.md", "user-stories.md", "stories.md",
     "task-dependency-analyzer.md", "story-to-plan.md",
 })
 PROTECTED_TASK_DIRS = frozenset({
-    ".agent-devs", ".agent", "plans", "planning", "_plans",
-    ".atl", "docsplans", "tasks",
+    ".agent-devs", ".agent", ".atl",
 })
 
 # Judge LLM: modelo más grande que valida reviews antes de aprobar.

@@ -182,6 +182,33 @@ def push(path: str, remote: str | None = None, branch: str | None = None) -> str
 
 
 @tool
+def create_branch(path: str, name: str) -> str:
+    """Create a git branch and switch to it (`git checkout -b`).
+
+    Flujo diario: ANTES de implementar, `create_branch` para no trabajar
+    sobre main. Si la rama ya existe localmente, simplemente se cambia a
+    ella (idempotente). Los cambios sin commitear se conservan (viajan con
+    el working tree); si bloquean el cambio, git lo dice y no se hace nada.
+    """
+    branch = (name or "").strip()
+    if not branch:
+        raise ToolException("No branch name provided. Pass a name like 'feat/mi-cambio'.")
+    if branch.startswith("-") or ".." in branch or any(
+        c in branch for c in (" ", "~", "^", ":", "?", "*", "[", "\\")
+    ):
+        raise ToolException(f"⛔ Nombre de rama inválido: {branch!r}")
+    try:
+        existing = _run(path, ["git", "branch", "--list", branch])
+    except ToolException:
+        existing = ""
+    if existing.strip():
+        _run(path, ["git", "checkout", branch])
+        return f"🔀 La rama '{branch}' ya existía — cambiado a ella."
+    _run(path, ["git", "checkout", "-b", branch])
+    return f"🌿 Rama '{branch}' creada — cambiado a ella. Implementá acá; main queda intacto."
+
+
+@tool
 def create_pr(path: str, title: str, body: str = "", base: str = "main") -> str:
     """Push the current branch and open a Pull Request with `gh`."""
     branch = _current_branch_impl(path)
