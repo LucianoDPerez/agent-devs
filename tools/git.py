@@ -119,16 +119,25 @@ def git_log(path: str, limit: int = 20) -> str:
 def stage_files(path: str, files: str) -> str:
     """Stage one or more files before commit.
     - '.' or '-u'   → git add -u: only TRACKED changes (deletes/modifications); new files are IGNORED
-    - '-A'/'--all'  → git add -A: everything, including NEW (untracked) files and deletes
     - otherwise     → git add <paths> for the given paths (space or comma separated)
-    To stage new files along with tracked changes, pass '-A' or list the paths explicitly."""
+
+    '-A'/'--all' are NOT accepted: staging everything unilaterally arrastró
+    archivos ajenos (E2E real: .gitignore/AGENTS.md/credentials casi
+    commiteados). Listá los paths explícitos — corré changed_files primero.
+    """
     trimmed = files.strip()
+    if trimmed in {"-A", "--all", "-a", "--all .", "all"}:
+        listing = _changed_files_impl(path)
+        return (
+            "⛔ git add -A NO está permitido (podés stagear archivos ajenos a la "
+            "tarea, incluso con secretos). Hacé UNA de estas:\n"
+            "  1) stage_files(path=..., files='.') → solo TRACKED (modificados/borrados)\n"
+            "  2) stage_files(path=..., files='a.ts b.ts ...') → lista explícita\n"
+            f"Estado del tree para elegir:\n{listing}"
+        )
     if trimmed in {".", "-u"}:
         _run(path, ["git", "add", "-u", "--", "."])
-        return "✅ staged all TRACKED changes (git add -u; new files ignored — use '-A' to include them)"
-    if trimmed in {"-A", "--all"}:
-        _run(path, ["git", "add", "-A", "--", "."])
-        return "✅ staged ALL changes including new files (git add -A)"
+        return "✅ staged all TRACKED changes (git add -u; new files ignored — list them explicitly to include)"
     paths = [f.strip() for f in files.replace(",", " ").split() if f.strip()]
     paths = paths or ["."]
     _run(path, ["git", "add", "--"] + paths)

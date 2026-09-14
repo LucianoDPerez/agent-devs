@@ -93,11 +93,14 @@ _IDIOM_NO_EXECUTE_RE = re.compile(
 # es una orden de ejecución → sube a EXECUTE. Sin esto, "analizá y arreglá"
 # caería en ANALYZE (análisis) cuando el usuario quiere que ARREGLE.
 # "e" solo vale ante i/hi (diseñá e implementá); "y elimina dudas" es idiomático.
+# marc\w*/tild\w*: "verifica X y marcalas DONE" → EXECUTE (el marking es la
+# acción; E2E real: cayó en ANALYZE y el analyzer no tiene write tools → el
+# usuario tuvo que re-pedir con "implementar").
 _COORDINATED_EXECUTE_RE = re.compile(
     r"(?:\by\s+(?:implement\w*|escrib\w*|crea\w*|crear|gener\w*|modific\w*|"
     r"edit\w*|elimin\w*|agreg\w*|añad\w*|actualiz\w*|renombr\w*|mov\w*|"
     r"reemplaz\w*|quit\w*|borr\w*|remov\w*|cambi\w*|arregl\w*|correg\w*|"
-    r"aplic\w*|fix\w*|repar\w*|solucion\w*|resolv\w*)"
+    r"aplic\w*|fix\w*|repar\w*|solucion\w*|resolv\w*|marc\w*|tild\w*)"
     r"|\be\s+(?:implement\w*|i\w*|hi\w*))"
 )
 
@@ -250,7 +253,11 @@ def classify_intent(_llm, user_message: str) -> Intent:
     # "analizá cómo eliminar un endpoint" → ANALYZE aunque "eliminar" sea un
     # verbo de acción: está subordinado al análisis, no es una orden.
     # Excepción: COORDINACIÓN imperativa — "analizá y arreglá el bug" → EXECUTE
-    # (el usuario quiere que ARREGLE, no solo que analice).
+    # (el usuario quiere que ARREGLE, no solo que analice). Incluye "verifica
+    # X y marcalas DONE" (E2E real: cayó en ANALYZE, el analyzer no escribe y
+    # el usuario tuvo que re-pedir con "implementar").
+    if _has_any(prefix, _VERIFY_LEADING) and _COORDINATED_EXECUTE_RE.search(prefix):
+        return Intent.EXECUTE
     if _has_any(prefix, _VERIFY_LEADING) and not _COORDINATED_EXECUTE_RE.search(prefix):
         return Intent.ANALYZE
 

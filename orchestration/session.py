@@ -310,7 +310,11 @@ _AMBIGUOUS_EXECUTE_RE = re.compile(
 
 # Extensions considered when extracting concrete file targets from a prior
 # analysis so the chained EXECUTE read them directly.
-_TARGET_FILE_RE = re.compile(r"([\w.\-/]+\.(?:tsx?|jsx?|go|py|ts|js))\b")
+# Extensions considered when extracting concrete file targets from a prior
+# analysis so the chained EXECUTE read them directly.
+_TARGET_FILE_RE = re.compile(
+    r"([\w.\-/]+\.(?:tsx?|jsx?|go|py|ts|js|tf|json|prisma|sql))\b"
+)
 
 
 def _extract_target_files(analysis: str) -> list[str]:
@@ -333,7 +337,12 @@ def _extract_target_files(analysis: str) -> list[str]:
 # Un análisis sin esto es opinión, no diagnóstico — encadenarlo con explore=0
 # obliga al executor a escribir desde una alucinación (E2E Medicos: el analyzer
 # inventó "useDashboard no existe" y el "implementa" posterior lo perpetuó).
-_GROUNDED_EVIDENCE_RE = re.compile(r"[\w.\-/]+\.(?:tsx?|jsx?|go|py|ts|js):\d+")
+# Incluye infra/config: .tf (Terraform), .json (tasks.json), .prisma, .sql,
+# yaml — los veredictos reales citan esas extensiones también (T005/T006:
+# "infra/iam.tf:27" no contaba como evidencia → alarma ⚠️ falsa en el cierre).
+_GROUNDED_EVIDENCE_RE = re.compile(
+    r"[\w.\-/]+\.(?:tsx?|jsx?|go|py|ts|js|tf|json|prisma|sql|ya?ml):\d+"
+)
 _CODE_BLOCK_RE = re.compile(r"```")
 
 
@@ -774,6 +783,8 @@ class Session:
         # números pinnados + archivos citados en esas entradas. El wrapper
         # cuenta escrituras fuera del alcance en dedupe.scope_violations.
         self._scope_nums: list[int] = []
+        # Snapshot del dirty tree al inicio del turno (cierre honesto).
+        self._turn_start_dirty: frozenset[str] = frozenset()
         # Tarea bulk detectada (≥ EXECUTE_BULK_MIN_FILES archivos): escala
         # budgets de EXECUTE y permite lecturas en el retry (0) para releer
         # los archivos que faltan.
@@ -1702,6 +1713,16 @@ class Session:
         """
         files = self._changed_files()
         verify_state = self._verify_all_passed()
+        # Cambios DEL TURNO vs dirty tree pre-existente: el tree puede traer
+        # archivos modificados de turnos/sesiones anteriores (.gitignore,
+        # tasks.json sin commitear...). Atribuirlos a ESTE turno mentía
+        # (E2E T006: "1 archivo modificado" en un turno de solo verificación,
+        # era el tasks.json del turno ANTERIOR).
+        try:
+            pre_dirty = frozenset(getattr(self, "_turn_start_dirty", frozenset()) or ())
+        except Exception:
+            pre_dirty = frozenset()
+        own_files = [f for f in files if f not in pre_dirty]
         scope_line = ""
         try:
             _viol = getattr(self._dedupe, "scope_violations", None) or {}
@@ -1714,11 +1735,11 @@ class Session:
                 )
         except Exception:
             scope_line = ""
-        if files:
-            head = f"✅ Tarea realizada: {len(files)} archivo(s) modificado(s)"
-            detail = "   · " + "\n   · ".join(files[:8])
-            if len(files) > 8:
-                detail += f"\n   · …y {len(files) - 8} más"
+        if own_files:
+            head = f"✅ Tarea realizada: {len(own_files)} archivo(s) modificado(s) en este turno"
+            detail = "   · " + "\n   · ".join(own_files[:8])
+            if len(own_files) > 8:
+                detail += f"\n   · …y {len(own_files) - 8} más"
             if verify_state is True:
                 verify_line = "   Verificación: lint/tests/build ✅"
             elif verify_state is False:
@@ -1736,6 +1757,20 @@ class Session:
                     "CONFIRMAR (revisá el diff antes de commitear)"
                 )
             return f"{head}\n{detail}\n{verify_line}{evidence_line}{scope_line}"
+        if pre_dirty:
+            head = "↻ Este turno NO modificó archivos propios"
+            detail = (
+                f"   · {len(pre_dirty)} modificación(es) previa(s) en el árbol, "
+                "sin commitear — no son de este turno: "
+                + ", ".join(sorted(pre_dirty)[:5])
+            )
+            if verify_state is True:
+                verify_line = "   Verificación: lint/tests/build ✅"
+            elif verify_state is False:
+                verify_line = "   Verificación: ⚠️ FALLÓ (ver output arriba)"
+            else:
+                verify_line = "   Verificación: no se corrió"
+            return f"{head}\n{detail}\n{verify_line}{scope_line}"
         if verify_state is True:
             return "✅ Turno completado (verificación corrida y exitosa, sin cambios en disco)."
         if verify_state is False:
@@ -2276,6 +2311,12 @@ class Session:
                         )
 
         self._messages.append(HumanMessage(agent_input))
+
+        # Foto del dirty tree AL INICIAR el turno: el cierre atribuye a la
+        # tarea SOLO lo que cambió desde acá (T006: tasks.json del turno
+        # anterior aparecía como "1 archivo modificado" en un turno de solo
+        # verificación).
+        self._turn_start_dirty = frozenset(self._changed_files())
 
         reset_turn_usage()
         start = time.monotonic()

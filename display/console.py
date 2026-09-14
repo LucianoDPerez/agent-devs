@@ -303,10 +303,9 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
         raise ReasoningOnlyResponse("".join(reasoning_text), reason="empty-after-tools")
 
     if require_write and not wrote_something:
-        console.print(
-            "\n[dim]↻ El modelo terminó su turno sin escribir cambios. "
-            "Reintentando con foco en escritura…[/dim]"
-        )
+        # El "reintentando" lo decide y anuncia session.py (a veces cierra sin
+        # retry: commit reciente / verificado / turno con evidencia). Anunciar
+        # acá mentía cuando la sesión decidía cerrar (T006).
         raise ReasoningOnlyResponse("".join(response_parts), reason="no-write")
 
     return "".join(response_parts)

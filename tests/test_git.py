@@ -79,11 +79,25 @@ class TestStageFiles:
         assert "README.md" in staged
         assert "nuevo.txt" not in staged
 
-    def test_stage_dash_A_includes_new_files(self):
+    def test_stage_dash_A_rejected_nothing_staged(self):
+        """E2E real: git add -A stageó .gitignore/AGENTS.md ajenos a la tarea.
+        '-A' ahora se rechaza: hay que listar los paths explícitos."""
         repo = _init_repo()
         (Path(repo) / "README.md").write_text("changed", encoding="utf-8")
         (Path(repo) / "nuevo.txt").write_text("new", encoding="utf-8")
-        stage_files.invoke({"path": repo, "files": "-A"})
+        result = stage_files.invoke({"path": repo, "files": "-A"})
+        assert "NO está permitido" in result
+        staged = subprocess.run(
+            ["git", "diff", "--cached", "--name-only"], cwd=repo, capture_output=True, text=True
+        ).stdout
+        assert "README.md" not in staged
+        assert "nuevo.txt" not in staged
+
+    def test_stage_explicit_paths_includes_new_files(self):
+        repo = _init_repo()
+        (Path(repo) / "README.md").write_text("changed", encoding="utf-8")
+        (Path(repo) / "nuevo.txt").write_text("new", encoding="utf-8")
+        stage_files.invoke({"path": repo, "files": "README.md nuevo.txt"})
         staged = subprocess.run(
             ["git", "diff", "--cached", "--name-only"], cwd=repo, capture_output=True, text=True
         ).stdout
