@@ -444,3 +444,22 @@ class TestMinimalPlan:
         assert "PLAN DE ARCHIVOS MÍNIMOS" in out
         assert "ENV.md en la RAÍZ" in out
         assert "SIN CRUD" in out
+
+
+class TestReviewVerificados:
+    """T1b/9B: el informe solo listaba fallas y los criterios cumplidos
+    quedaban sin veredicto. El formato exige sección Verificados."""
+
+    def test_prompt_review_tiene_seccion_verificados(self):
+        from core.roles import Role, load_prompt
+
+        assert "Verificados" in load_prompt(Role.REVIEW)
+
+    def test_preload_review_pide_verificados(self, tmp_path):
+        from orchestration.execute_bootstrap import preload_for_review
+
+        tasks = tmp_path / "tareas.md"
+        tasks.write_text(_SAMPLE_TASKS, encoding="utf-8")
+        out = preload_for_review(f"revisá estas tareas {tasks}",
+                                 repo_path=str(tmp_path))
+        assert "Verificados" in out
