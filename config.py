@@ -62,6 +62,8 @@ TURN_IDLE_TIMEOUT = 360  # 6 min — el modelo 4B tarda en razonar análisis com
 # Archivos de PLANIFICACIÓN PROTEGIDOS: el agente NUNCA debe escribir/editar/
 # borrar sobre ellos por iniciativa propia. El 4B tiende a reescribir tasks.md
 # (precargado en el prompt) como "primer objetivo", corrompiendo el plan.
+# Excepción: si el USUARIO cita el archivo explícitamente en su mensaje, su
+# orden gana a la protección para ese turno (TASK_PATH_ALLOW).
 # Estos patterns matchean por nombre de archivo o por subdirectorio
 # (case-insensitive). Los dirs son SOLO del sistema (.agent-devs/.agent/.atl):
 # los dirs genéricos de docs (plans/, tasks/) se sacaron a propósito — el

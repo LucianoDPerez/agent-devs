@@ -217,6 +217,16 @@ def classify_intent(_llm, user_message: str) -> Intent:
             if " " not in v and first_token == v:
                 return Intent.EXECUTE
 
+    # Orden EXPLÍCITA de edición sobre un path concreto ("marcá Done en
+    # .agent/tasks.json", "tildá el ítem 3 de plans/x.md") → EXECUTE aunque el
+    # verbo no esté en la lista general. E2E real: "marcá como Done..." caía en
+    # ANALYZE y el modelo "verificaba" en vez de ejecutar la orden directa.
+    # Exige path concreto para no robar análisis ("marcá los errores" solo).
+    if first_token in ("marca", "marcá", "marcar", "tilda", "tildá", "tildar") and re.search(
+        r"(?:\w[\w.\-/]*\.\w{1,5}\b|/[\w./-]+/)", prefix
+    ):
+        return Intent.EXECUTE
+
     # Pregunta de planificación: "qué archivos hay que eliminar", "decime qué
     # habría que agregar", "cómo implementar X" → PLAN (el usuario pregunta
     # QUÉ hacer, no lo está haciendo). VA ANTES que VERIFY puro: "verificá qué

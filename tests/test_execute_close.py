@@ -154,3 +154,20 @@ def test_failed_close_codigo_roto_reporta_archivo(tmp_path):
     msg = s._failed_turn_close()
     assert "ROTO" in msg
     assert "roto.py" in msg
+
+
+def test_changed_files_filtra_clutter_de_otros_agentes(tmp_path):
+    """E2E real 35B: el cierre anunció '7 archivo(s)' (untracked de cursor,
+    devbase, evidence, e2e-worker) cuando el turno tocó 1 archivo."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    (repo / "src").mkdir()
+    (repo / "src" / "a.ts").write_text("x", encoding="utf-8")
+    for clutter in (".agents/n.md", ".cursor/rules", ".devbase/x",
+                    ".agent/evidence/img.png", "scripts/e2e-worker.sh"):
+        p = repo / clutter
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("clutter", encoding="utf-8")
+    s = Session(llm=None, repo_path=str(repo))
+    assert s._changed_files() == ["src/a.ts"]

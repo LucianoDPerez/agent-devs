@@ -551,3 +551,78 @@ class TestProtectedDirsRecortados:
             "content": "x",
         })
         assert "PROHIBIDO" in result
+
+
+class TestTaskAllowExplicitUserCite:
+    """E2E real: 'marcá Done en .agent/tasks.json' se bloqueaba aunque el
+    usuario lo pidió explícito. Lo citado por el usuario gana a la protección."""
+
+    def test_citado_explicito_permite_editar(self):
+        from tools.filesystem import TASK_PATH_ALLOW, _is_protected_task_path
+
+        repo = tempfile.mkdtemp()
+        p = Path(repo) / ".agent" / "tasks.json"
+        p.parent.mkdir(parents=True)
+        p.write_text('{"tasks": []}', encoding="utf-8")
+        assert _is_protected_task_path(str(p)) is True  # bloqueado por default
+        TASK_PATH_ALLOW.add(str(p))
+        try:
+            assert _is_protected_task_path(str(p)) is False
+            result = edit_file.invoke({
+                "path": str(p),
+                "old_str": '"tasks": []',
+                "new_str": '"tasks": [{"done": true}]',
+            })
+            assert "Replaced block" in result
+        finally:
+            TASK_PATH_ALLOW.clear()
+
+    def test_sin_cita_sigue_bloqueado(self):
+        from tools.filesystem import _is_protected_task_path
+
+        repo = tempfile.mkdtemp()
+        p = Path(repo) / ".agent" / "tasks.json"
+        p.parent.mkdir(parents=True)
+        p.write_text('{"tasks": []}', encoding="utf-8")
+        result = edit_file.invoke({
+            "path": str(p),
+            "old_str": '"tasks": []',
+            "new_str": '"tasks": [{"done": true}]',
+        })
+        assert "PROHIBIDO" in result
+        assert '"tasks": []' in p.read_text(encoding="utf-8")
+
+
+class TestJsonGate:
+    """E2E real 35B: edit con old_str abarcando dos tareas corrompía
+    tasks.json sin que nadie lo notara. El gate rechaza en memoria."""
+
+    def test_edit_que_rompe_json_rechazado_y_revierte(self):
+        repo = tempfile.mkdtemp()
+        p = Path(repo) / "tasks.json"
+        original = '{"a": 1, "b": 2}'
+        p.write_text(original, encoding="utf-8")
+        result = edit_file.invoke({
+            "path": str(p), "old_str": '"a": 1,', "new_str": '"a": ',
+        })
+        assert "JSON inválido" in result
+        assert p.read_text(encoding="utf-8") == original
+
+    def test_edit_json_valido_pasa(self):
+        repo = tempfile.mkdtemp()
+        p = Path(repo) / "tasks.json"
+        p.write_text('{"a": 1}', encoding="utf-8")
+        result = edit_file.invoke({
+            "path": str(p), "old_str": '"a": 1', "new_str": '"a": 2',
+        })
+        assert "Replaced block" in result
+        assert '"a": 2' in p.read_text(encoding="utf-8")
+
+    def test_write_json_invalido_rechazado_sin_crear(self):
+        repo = tempfile.mkdtemp()
+        p = Path(repo) / "nuevo.json"
+        result = write_file.invoke({
+            "path": str(p), "content": '{"a": }',
+        })
+        assert "JSON inválido" in result
+        assert not p.exists()

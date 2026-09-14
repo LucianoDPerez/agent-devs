@@ -46,3 +46,25 @@ def test_crea_el_archivo_es_execute():
     assert classify_intent(
         None, "Generá un script de migración para la tabla consultas"
     ) == Intent.EXECUTE
+
+
+def test_orden_explicita_de_edicion_con_path_ruta_execute():
+    """E2E real: 'Marcá como Done la tarea 1 en .agent/tasks.json' caía en
+    ANALYZE y el modelo verificaba en vez de ejecutar la orden directa."""
+    from core.intents import Intent
+    from orchestration.router import classify_intent
+
+    assert classify_intent(
+        None, "Marcá como Done la tarea 1 en .agent/tasks.json y nada más."
+    ) == Intent.EXECUTE
+    assert classify_intent(
+        None, "Tildá el ítem 3 de plans/tarea.md"
+    ) == Intent.EXECUTE
+
+
+def test_marcar_sin_path_no_ruta_execute():
+    """Sin path concreto no se roba nada ('marcá los errores' solo)."""
+    from core.intents import Intent
+    from orchestration.router import classify_intent
+
+    assert classify_intent(None, "marcá los errores que veas") != Intent.EXECUTE

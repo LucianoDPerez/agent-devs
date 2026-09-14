@@ -1476,7 +1476,11 @@ class Session:
         try:
             import subprocess
             proc = subprocess.run(
-                ["git", "status", "--porcelain"],
+                # -uall: lista archivos untracked UNO POR UNO. Sin esto git
+                # colapsa dirs ("src/") y los filtros por archivo no aplican
+                # (E2E real 35B: el cierre anunció "7 archivos" cuando el turno
+                # tocó 1, sin poder distinguirlo del clutter).
+                ["git", "status", "--porcelain", "--untracked-files=all"],
                 cwd=self.repo_path, capture_output=True, text=True, timeout=5,
             )
             if proc.returncode != 0:
@@ -1493,6 +1497,13 @@ class Session:
                 ".opencode/",
                 ".claude/",
                 ".atl/",
+                # Clutter untracked de otros agentes/sesiones (E2E real: el
+                # cierre anunció "7 archivos" cuando el turno tocó 1).
+                ".agents/",
+                ".cursor/",
+                ".devbase/",
+                ".agent/evidence/",
+                "scripts/e2e-",
             )
             _ARTIFACT_FILES = frozenset({
                 "scripts/healthcheck.sh",
@@ -1824,8 +1835,24 @@ class Session:
         # de edit_file) son por TURNO: limpiar para que el próximo turno
         # arranque con los guards de sobrescritura activos.
         try:
-            from tools.filesystem import clear_write_overrides
+            from tools.filesystem import clear_task_allow, clear_write_overrides
             clear_write_overrides()
+            clear_task_allow()
+        except Exception:
+            pass
+        # Archivos de planificación citados EXPLÍCITAMENTE por el usuario
+        # ("marcá Done en .agent/tasks.json"): su orden gana a la protección
+        # anti-corrupción (que solo frena iniciativa propia del modelo).
+        try:
+            from tools.filesystem import TASK_PATH_ALLOW, _is_protected_task_path
+
+            for _p in _collect_cited_paths(user_input, self.repo_path):
+                if _is_protected_task_path(str(_p)):
+                    TASK_PATH_ALLOW.add(str(_p))
+                    console.print(
+                        f"[dim]📎 Archivo protegido citado por vos: {Path(_p).name} "
+                        f"(edición permitida este turno).[/dim]"
+                    )
         except Exception:
             pass
 

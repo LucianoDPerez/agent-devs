@@ -40,6 +40,18 @@ def clear_write_overrides() -> None:
     WRITE_OVERRIDE_PATHS.clear()
 
 
+# Paths de planificación que el USUARIO citó explícitamente en su mensaje
+# (.agent/tasks.json, plans/plan.md, ...): la orden explícita del usuario
+# gana a la protección (E2E real: "marcá Done en .agent/tasks.json" →
+# bloqueado aunque el usuario lo pidió). Solo el mensaje del usuario agrega
+# acá — el modelo no tiene cómo (ninguna tool lo expone). Por turno.
+TASK_PATH_ALLOW: set[str] = set()
+
+
+def clear_task_allow() -> None:
+    TASK_PATH_ALLOW.clear()
+
+
 def _resolved_key(path: str) -> str:
     """Key normalizada para comparar overrides: expanduser + resolve.
 
@@ -54,13 +66,20 @@ def _resolved_key(path: str) -> str:
 
 def _is_protected_task_path(path: str) -> bool:
     """True si el path corresponde a un archivo de planificación que el agente
-    NUNCA debe escribir/editar/borrar (tasks.md, .agent-devs/, plans/, etc.).
+    NUNCA debe escribir/editar/borrar por iniciativa propia (tasks.md,
+    .agent-devs/, etc.).
 
+    Excepción: paths que el USUARIO citó explícitamente en su mensaje
+    (TASK_PATH_ALLOW, por turno) — la orden explícita gana a la protección.
     El 4B tiende a reescribir tasks.md (precargado en el prompt) corrompiendo el
     plan. Detectamos por nombre de archivo o por subdirectorio protegido.
     Resolve para que symlinks (evil.md -> tasks.md) no bypasseen.
     """
     if not path:
+        return False
+    if TASK_PATH_ALLOW and _resolved_key(path) in {
+        _resolved_key(p) for p in TASK_PATH_ALLOW
+    }:
         return False
     try:
         p = Path(path).expanduser().resolve()
@@ -367,6 +386,24 @@ def _syntax_check(path: str, content: str) -> str | None:
     )
 
 
+def _json_check(path: str, content: str) -> str | None:
+    """Valida que un .json siga parseando. E2E real 35B: un edit con old_str
+    que abarcaba DOS tareas fusionó/borró bloques de tasks.json sin que nadie
+    lo notara (36KB). Se valida EN MEMORIA antes de escribir: si rompe,
+    se RECHAZA (no solo avisa)."""
+    import json as _json
+
+    try:
+        _json.loads(content)
+        return None
+    except _json.JSONDecodeError as e:
+        return (
+            f"⛔ Edit RECHAZADO: {path} quedaría con JSON inválido ({e}). "
+            f"El archivo NO fue modificado. Revisá que tu old_str/new_str no "
+            f"cruce límites de objetos (no edites dos tareas en un solo bloque)."
+        )
+
+
 def _post_write_check(path: str, content: str) -> str:
     """Valida el contenido recién escrito y devuelve mensajes de advertencia.
 
@@ -433,6 +470,10 @@ def write_file(path: str, content: str) -> str:
                 f"{WRITE_FILE_OVERWRITE_MAX_LINES} líneas (configs triviales)."
             )
 
+    if p.suffix.lower() == ".json":
+        violation = _json_check(path, content)
+        if violation:
+            return violation
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
@@ -695,6 +736,12 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
                 "(2-5 líneas de contexto alrededor del cambio)."
             )
 
+    # GUARD JSON: validar en memoria antes de escribir (ver _json_check).
+    if p.suffix.lower() == ".json":
+        violation = _json_check(path, new_content)
+        if violation:
+            return violation
+
     p.write_text(new_content, encoding="utf-8")
     return f"✅ Replaced block in {path}"
 
@@ -781,6 +828,10 @@ def apply_patch(path: str, edits: str) -> str:
         violation = _md_integrity_violation(before, after)
         if violation:
             return f"⛔ Patch RECHAZADO por integridad en {path}: {violation}."
+    if p.suffix.lower() == ".json":
+        violation = _json_check(path, new_content)
+        if violation:
+            return violation
     p.write_text(new_content, encoding="utf-8")
     return f"✅ Applied {len(parsed)} patch(es) to {path} atomically (1 approval)."
 
