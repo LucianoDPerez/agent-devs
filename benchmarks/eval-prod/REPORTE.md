@@ -184,6 +184,22 @@ ciclo queda registrado acá.
   antes fallaba con `No workspaces found`). Cero cambio funcional.
 - Evidencia: `results/T5/transcript.md` + `run1.log`.
 
+## T3 — 12B gemma-4-12B (worktree limpio @main, 2 turnos) — FAIL
+
+- 1942s totales. Turno 1 bien (leyó los 3 casos de uso). Turno 2 a medio
+  camino: interfaz + `updateMany` atómico (mejor decisión que el loop del 9B)
+  + caso de uso + método en controller, pero SIN ruta, SIN DTO, SIN schema, y
+  con la clase sin cerrar (`PacienteController.ts(80,2): TS1005`, verificado
+  tras `npm ci` en el worktree). El cierre "lint/tests/build ✅" es FALSO: el
+  único build corrió en la raíz (rota preexistente). Basura: `package-lock.json`
+  en raíz + `api.ts` del codemod.
+- Lección comparativa: 9B T3 PASS vs 12B T3 FAIL en la misma tarea. Más
+  grande ≠ mejor; dominan varianza y suerte de exploración. El cierre
+  determinístico cuenta llamadas, no resultados (agujero de honestidad).
+- Evidencia: `results/T3-12b/transcript.md` (reconstruido: bug del runner no
+  creaba el dir, ya corregido) + `run1.log`.
+- Veredicto 12B: **FAIL**.
+
 ## Tabla de veredictos (9B qwen35-9b)
 
 | Test | Veredicto | Tiempo | Nota |
@@ -194,6 +210,17 @@ ciclo queda registrado acá.
 | T3 (feature bulk) | PASS | ~50 min | feature completa + build verde, migración pendiente |
 | T4 (seguridad) | PASS | ~18 min | hallazgo real con evidencia, 0 cambios |
 | T5 (autónoma) | PASS | ~14 min | workspaces + builds raíz en verde |
+
+## Tabla de veredictos (12B gemma-4-12B-it-qat UD-Q4_K_XL)
+
+| Test | Veredicto | Tiempo | Nota |
+|------|-----------|--------|------|
+| T1b (verificación citada) | PASS | ~5 min | 4/4 + bonus N+1, 0 cambios |
+| T3 (feature bulk) | FAIL | ~32 min | incompleto + TS1005 + ✅ falso |
+
+Lectura comparativa: el 12B es más rápido y mejor sintetizando (T1b perfecto),
+pero falla igual o peor en implementación larga (T3). La varianza entre runs
+pesa más que el tamaño del modelo en esta batería.
 
 ## Tabla de veredictos (4B agents-a1-4b, referencia)
 
@@ -241,7 +268,24 @@ ciclo queda registrado acá.
   ("potencialmente", era TRUE) e ítem 4 mal (dice que no existe
   GET /api/health, existe en `server.ts:29`) — recall incompleto, no
   invención.
-- Veredicto: **PARCIAL** (evidencia 100% grounded, 2.5/4 veredictos).
+- Veredicto 9B: **PARCIAL** (evidencia 100% grounded, 2.5/4 veredictos).
+
+## T1b — 12B gemma-4-12B (misma tarea, harness actual)
+
+- Intento 1 (worktree limpio @main): 146s. Salió por la tangente ("nada que
+  verificar" ante diff vacío ignorando el checklist citado) + bug de template
+  en mi runner (placeholders sin interpolar, ya corregido).
+- Fix aplicado (commit previo): instrucción "checklist manda sobre árbol
+  limpio" en preload de review + test.
+- Intento 2 (rama eval, mismo setting que 9B): **312s PASS** — 4/4 veredictos
+  correctos (CreatePaciente ✓ `CreatePaciente.ts:12`, hard-delete ✓
+  `DeletePaciente.ts:14`, sin JWT ✓, `/api/health` ✓ vía `server.ts` +
+  `inspect_routes`), verify tools primero según protocolo, cero cambios.
+  Bonus: detectó el loop N+1 de `deactivate` de T3 y recomendó `updateMany`
+  (exacto lo documentado). Detalles menores: JWT en WARNING en vez de
+  CRITICAL, líneas ±2.
+- Veredicto 12B: **PASS**.
+- Evidencia: `results/12b-T1b/transcript.md` + `results/T1b-12b/run1.log`.
   Trayectoria 9B: mutación de rol → vacío → 2/4 → citas fantasma → grounded
   parcial. Cada fix movió la aguja con evidencia.
 
