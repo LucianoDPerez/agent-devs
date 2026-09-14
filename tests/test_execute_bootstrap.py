@@ -463,3 +463,19 @@ class TestReviewVerificados:
         out = preload_for_review(f"revisá estas tareas {tasks}",
                                  repo_path=str(tmp_path))
         assert "Verificados" in out
+
+
+class TestReviewChecklistBeatsCleanTree:
+    """E2E real T1b/12B: con working tree limpio el modelo declaró 'nada que
+    verificar' ignorando el checklist citado. La instrucción debe ordenar
+    verificar igual contra el código."""
+
+    def test_preload_review_ordena_verificar_con_arbol_limpio(self, tmp_path):
+        from orchestration.execute_bootstrap import preload_for_review
+
+        tasks = tmp_path / "tareas.md"
+        tasks.write_text(_SAMPLE_TASKS, encoding="utf-8")
+        out = preload_for_review(f"verificá estas tareas {tasks}",
+                                 repo_path=str(tmp_path))
+        assert "aunque el working tree esté limpio" in out
+        assert "NUNCA es un veredicto válido" in out

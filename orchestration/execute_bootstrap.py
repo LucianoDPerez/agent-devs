@@ -1011,8 +1011,12 @@ def _build_preload_parts(
         parts.append(
             "INSTRUCCIÓN OBLIGATORIA (REVIEW AC-AWARE): "
             + scope_rule
-            +             "El contenido de tareas YA ESTÁ ARRIBA. "
+            + "El contenido de tareas YA ESTÁ ARRIBA. "
             + "Revisá el código (y el diff/branch si aplica) contra esos criterios. "
+            + "El diff/git es CONTEXTO secundario: aunque el working tree esté "
+            + "limpio, igual debés verificar CADA ítem del checklist contra el "
+            + "código — 'no hay cambios' NUNCA es un veredicto válido con "
+            + "checklist citado. "
             + "CRITICAL = checkbox no cumplido; los cumplidos van en la sección "
             + "Verificados (también con archivo:línea). "
             + "Cada hallazgo se cita con archivo:línea + output real de la tool. "
