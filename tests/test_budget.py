@@ -476,6 +476,62 @@ class TestVerifyCache:
         assert b.consume("run_lint", kw) is None
 
 
+class TestVerifyCacheHitStreak:
+    """E2E real T004: 12 run_verify repetidos tras PASSED (el gate retry con
+    force_tool_calls no deja cerrar con texto). El cache-hit devolvía string
+    ignorable sin topear NADA: el 2º cache-hit seguido debe levantar excepción."""
+
+    def _budget(self):
+        return ExploreBudget(
+            max_calls=10,
+            max_reads_after_explore=8,
+            max_tools_before_write=50,
+            write_pressure=True,
+            max_writes_before_verify=4,
+            max_verify_before_write=5,
+        )
+
+    def test_segundo_cache_hit_lanza(self):
+        from orchestration.tool_dedupe import ToolBudgetExceeded
+
+        b = self._budget()
+        kw = {"path": "/repo"}
+        assert b.consume("run_verify", kw) is None
+        b.note_verify("run_verify", kw, "[PASSED] batería verde")
+        out = b.consume("run_verify", kw)
+        assert "ya verificado" in out  # 1er cache-hit: aviso
+        with pytest.raises(ToolBudgetExceeded, match="ritual"):
+            b.consume("run_verify", kw)  # 2do cache-hit: excepción
+
+    def test_write_resetea_streak(self):
+        b = self._budget()
+        kw = {"path": "/repo"}
+        b.consume("run_verify", kw)
+        b.note_verify("run_verify", kw, "[PASSED] verde")
+        assert b.consume("run_verify", kw) is not None  # cache hit 1
+        b.consume("edit_file", {"path": "/r/a.ts", "old_str": "a", "new_str": "b"})
+        # Write invalida el cache → la próxima verify es real (no cache-hit)
+        assert b.consume("run_verify", kw) is None
+        assert b._verify_cache_hit_streak == 0
+
+    def test_verify_real_resetea_streak(self):
+        b = self._budget()
+        kw = {"path": "/repo"}
+        b.consume("run_lint", kw)
+        b.note_verify("run_lint", kw, "[PASSED] x")
+        assert b.consume("run_lint", kw) is not None  # cache hit 1
+        b._verify_cache_hit_streak = 1
+        # Verify de OTRA key ejecuta de verdad → streak a 0
+        assert b.consume("run_tests", kw) is None
+        assert b._verify_cache_hit_streak == 0
+
+    def test_reset_limpia_streak(self):
+        b = self._budget()
+        b._verify_cache_hit_streak = 5
+        b.reset()
+        assert b._verify_cache_hit_streak == 0
+
+
 class TestNpmScriptVerifyEquivalence:
     """run_npm_script lint*/test*/build* es verificación (E2E real: el modelo
     corrió `lint:check` + `build` x2 por run_npm_script y el harness no lo

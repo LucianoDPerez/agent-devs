@@ -252,6 +252,12 @@ class ExploreBudget:
         # (E2E real 35B: 3 rondas = 9 verifys para 2 edits). El repetido
         # devuelve el resultado cacheado SIN ejecutar ni gastar budget.
         self._verified_clean: dict[tuple[str, str], str] = {}
+        # Cache-hits de verify CONSECUTIVOS (mismo turno, sin writes en el
+        # medio): el cache-hit devolvía string ignorable SIN consumir budget
+        # NI incrementar _verify_streak → loop infinito de run_verify (E2E
+        # real T004: 12 run_verify repetidos tras PASSED hasta ESC). Al 2º
+        # cache-hit seguido se levanta excepción dura.
+        self._verify_cache_hit_streak = 0
         # El wrapper de tools difiere el raise de VerifyRequired al POST-ejecución:
         # así los writes FALLIDOS se pueden refundir (no disparan compuertas
         # falsas) y el raise solo ocurre tras un write EFECTIVO. consume() con
@@ -271,6 +277,7 @@ class ExploreBudget:
         self._verified_clean.clear()
         self._writes_since_verify = 0
         self._verify_streak = 0
+        self._verify_cache_hit_streak = 0
 
     @staticmethod
     def _verify_cache_key(name: str, kwargs: dict[str, Any] | None) -> tuple[str, str]:
@@ -395,11 +402,29 @@ class ExploreBudget:
         if _eff_verify is not None:
             key = self._verify_cache_key(_eff_verify, kwargs)
             if key in self._verified_clean:
+                # Ritual de verificación: llamar la misma verify cacheada sin
+                # haber escrito nada. El string devuelto era ignorable —
+                # E2E real T004: 12 run_verify repetidos hasta ESC (el gate
+                # retry con force_tool_calls no deja cerrar con texto y el
+                # modelo re-pick-ea la tool más segura). Al 2º cache-hit
+                # seguido, excepción dura que libera el turno.
+                self._verify_cache_hit_streak += 1
+                if self._verify_cache_hit_streak > 1:
+                    raise ToolBudgetExceeded(
+                        f"⛔ {_eff_verify} ya salió VERDE este turno y lo "
+                        f"re-pediste {self._verify_cache_hit_streak} veces sin "
+                        "editar nada. La batería está verde y cacheada: "
+                        "repetirla es ritual. PARÁ AHORA: respondé el resumen "
+                        "final (LISTO + evidencia archivo:línea) y terminá el "
+                        "turno. Si de verdad falta un cambio, editá algo y "
+                        "recién ahí corré verify de nuevo."
+                    )
                 return (
                     f"✅ {_eff_verify} ya verificado en este turno sin cambios desde "
                     f"entonces ({self._verified_clean[key]}). No lo re-ejecutes "
-                    f"salvo que hayas editado algo."
+                    f"salvo que hayas editado algo: respondé el resumen final."
                 )
+            self._verify_cache_hit_streak = 0
         self._total += 1
         # Debug print SOLO con AGENTDEVS_DEBUG=1: iba por stderr y en modo
         # --tui pisaba la UI (stderr no pasa por el panel capturado).
@@ -456,6 +481,7 @@ class ExploreBudget:
         if name in WRITE_TOOL_NAMES:
             self._wrote = True
             self._verify_streak = 0
+            self._verify_cache_hit_streak = 0
             # Cualquier escritura invalida las verificaciones cacheadas.
             self._verified_clean.clear()
             # Tope de escrituras totales sin verify en el medio: atrapa el
@@ -487,6 +513,7 @@ class ExploreBudget:
         if _eff_verify is not None:
             self._edits_per_path.clear()
             self._writes_since_verify = 0
+            self._verify_cache_hit_streak = 0
             # También resetea el contador de lecturas POR PATH y post-explore:
             # lecturas legítimas ESPACIADAS (con verify en el medio) para
             # arreglar el propio código se acumulaban hasta disparar el retry
