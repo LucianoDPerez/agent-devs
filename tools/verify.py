@@ -217,7 +217,7 @@ def _resolve_command(root: Path, action: str) -> list[str] | str:
     uv_py = _python_uses_uv(root)
     if action == "lint":
         if _python_has_ruff(root):
-            return ["uv", "run", "ruff", "check", "."] if uv_py else ["ruff", "check", "."]
+            return _ruff_cmd(root, uv_py)
         return "No ruff configuration or dependency found for Python linting"
     if action == "test":
         return ["uv", "run", "pytest"] if uv_py else ["pytest"]
@@ -226,6 +226,20 @@ def _resolve_command(root: Path, action: str) -> list[str] | str:
             return ["uv", "build"] if uv_py else ["python", "-m", "build"]
         return "No [build-system] in pyproject.toml — build not configured"
     return f"Unknown action: {action}"
+
+
+def _ruff_cmd(root: Path, uv_py: bool) -> list[str]:
+    """Comando ruff sin efectos colaterales: `uv run` sincroniza el entorno y
+    puede MODIFICAR el árbol (uv.lock) como efecto de verificar (E2E real).
+    Se prefiere ruff del PATH; si no hay, `uv run --frozen` (no toca el lock).
+    """
+    import shutil
+
+    if shutil.which("ruff"):
+        return ["ruff", "check", "."]
+    if uv_py:
+        return ["uv", "run", "--frozen", "ruff", "check", "."]
+    return ["ruff", "check", "."]
 
 
 def _any_dep_missing(root: Path, pkg: dict) -> bool:

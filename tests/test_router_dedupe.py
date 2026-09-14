@@ -101,15 +101,14 @@ def test_dedupe_blocks_third_identical_call(tmp_path):
 def test_dedupe_still_raises_write_dupes(tmp_path):
     """write_file repetido demasiadas veces SÍ levanta ToolBudgetExceeded."""
     from tools.filesystem import write_file
-    import tempfile
     dedupe = ToolCallDedupe(max_repeats=1)
     tools = wrap_tools_with_dedupe([write_file], dedupe)
     tool = tools[0]
     target = str(tmp_path / "out.ts")
     # 1era y 2da con repeats=1+2 margen → strings; 4ta levanta
     r1 = tool.invoke({"path": target, "content": "a"})
-    r2 = tool.invoke({"path": target, "content": "a"})
-    r3 = tool.invoke({"path": target, "content": "a"})
+    tool.invoke({"path": target, "content": "a"})
+    tool.invoke({"path": target, "content": "a"})
     assert "✅" in r1 or "ya se ejecutó" in r1 or "⛔" in r1
     with pytest.raises(ToolBudgetExceeded, match="same args"):
         tool.invoke({"path": target, "content": "a"})
@@ -122,7 +121,7 @@ def test_explore_budget_allows_two_then_stops(tmp_path):
     tools = wrap_tools_with_dedupe([list_files], dedupe, budget)
     tool = tools[0]
     args = {"path": str(tmp_path), "recursive": False}
-    r1 = tool.invoke(args)
+    tool.invoke(args)
     # Repetir el MISMO path no quema budget: el guard anti-redundancia lo
     # bloquea sin costo (E2E real T1) para reservar exploración a reads.
     r2 = tool.invoke({**args})
@@ -259,6 +258,7 @@ def test_reads_same_path_with_different_ranges_blocked(tmp_path):
     )
     # 3ra lectura del MISMO path (con rango distinto) → cortado como loop
     import pytest
+
     from orchestration.tool_dedupe import ToolBudgetExceeded
     with pytest.raises(ToolBudgetExceeded):
         by_name["read_file"].invoke(
@@ -344,8 +344,6 @@ def test_adaptive_read_limit_for_big_files(tmp_path):
     """Archivos > MAX_FILE_READ_BYTES: leer por rangos es LEGÍTIMO y no debe
     cortarse como loop (E2E real: __init__.py de 60KB leído en 6 rangos →
     ToolBudgetExceeded → retry sin lecturas → alucinación)."""
-    from orchestration.tool_dedupe import VerifyRequired
-
     f = tmp_path / "big.py"
     f.write_text("\n".join(f"line_{i}" for i in range(12000)), encoding="utf-8")
     assert f.stat().st_size > 50_000
@@ -421,7 +419,7 @@ def test_failed_writes_do_not_count_toward_verify_cap(tmp_path):
     NO cuentan en _writes_since_verify: no deben disparar VerifyRequired falsos
     (E2E real: 6-7 edits rechazados → compuerta de verify sin una línea escrita)."""
     from orchestration.tool_dedupe import VerifyRequired
-    from tools.filesystem import edit_file, delete_file
+    from tools.filesystem import delete_file, edit_file
 
     files = []
     for i in range(6):
@@ -516,3 +514,25 @@ class TestVerifyResults:
         )[0]
         assert results == {}
         assert w is not None
+
+
+def test_verify_cacheado_no_reejecuta(tmp_path):
+    """Nivel wrapper: la 2da ronda idéntica no re-ejecuta la tool."""
+    from langchain_core.tools import tool as dec
+
+    from orchestration.tool_dedupe import ExploreBudget, ToolCallDedupe, wrap_tools_with_dedupe
+
+    calls = []
+
+    @dec
+    def run_tests(path: str) -> str:
+        """fake"""
+        calls.append(path)
+        return "[PASSED] exit=0"
+
+    budget = ExploreBudget(max_calls=10, max_reads_after_explore=8, max_tools_before_write=50)
+    (tool,) = wrap_tools_with_dedupe([run_tests], ToolCallDedupe(), budget)
+    assert "PASSED" in tool.invoke({"path": str(tmp_path)})
+    out2 = tool.invoke({"path": str(tmp_path)})
+    assert "ya verificado" in out2
+    assert calls == [str(tmp_path)]  # una sola ejecución real

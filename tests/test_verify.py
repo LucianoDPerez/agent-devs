@@ -133,8 +133,28 @@ class TestResolveCommand:
             )
             _write(root / "uv.lock", "version = 1\n")
             assert _resolve_command(root, "test") == ["uv", "run", "pytest"]
-            assert _resolve_command(root, "lint") == ["uv", "run", "ruff", "check", "."]
             assert _resolve_command(root, "build") == ["uv", "build"]
+
+    def test_lint_prefiere_ruff_del_path(self, monkeypatch):
+        """ruff del PATH gana a `uv run` (E2E real: `uv run` mutaba uv.lock
+        como efecto colateral de verificar)."""
+        import shutil
+
+        import tools.verify as _v
+
+        monkeypatch.setattr(shutil, "which", lambda _: "/bin/ruff")
+        assert _v._ruff_cmd(Path("/repo"), True) == ["ruff", "check", "."]
+
+    def test_lint_uv_frozen_sin_ruff_en_path(self, monkeypatch):
+        import shutil
+
+        import tools.verify as _v
+
+        monkeypatch.setattr(shutil, "which", lambda _: None)
+        assert _v._ruff_cmd(Path("/repo"), True) == [
+            "uv", "run", "--frozen", "ruff", "check", ".",
+        ]
+        assert _v._ruff_cmd(Path("/repo"), False) == ["ruff", "check", "."]
 
     def test_python_uv_install(self):
         """run_install en proyecto uv debe correr `uv sync`, no venv+pip."""

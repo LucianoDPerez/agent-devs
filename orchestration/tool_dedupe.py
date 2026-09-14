@@ -180,6 +180,11 @@ class ExploreBudget:
         self._listed_flat: set[str] = set()
         self._writes_since_verify = 0
         self._verify_streak = 0
+        # Verificaciones limpias desde la última escritura: {(tool, path): resumen}.
+        # Repetir lint/tests/build sin haber tocado nada es ritual, no trabajo
+        # (E2E real 35B: 3 rondas = 9 verifys para 2 edits). El repetido
+        # devuelve el resultado cacheado SIN ejecutar ni gastar budget.
+        self._verified_clean: dict[tuple[str, str], str] = {}
         # El wrapper de tools difiere el raise de VerifyRequired al POST-ejecución:
         # así los writes FALLIDOS se pueden refundir (no disparan compuertas
         # falsas) y el raise solo ocurre tras un write EFECTIVO. consume() con
@@ -196,8 +201,35 @@ class ExploreBudget:
         self._reads_per_path.clear()
         self._read_limits.clear()
         self._listed_flat.clear()
+        self._verified_clean.clear()
         self._writes_since_verify = 0
         self._verify_streak = 0
+
+    @staticmethod
+    def _verify_cache_key(name: str, kwargs: dict[str, Any] | None) -> tuple[str, str]:
+        import os
+
+        raw = ((kwargs or {}).get("path", "") or "").strip() or "."
+        try:
+            norm = os.path.normpath(os.path.abspath(raw))
+        except OSError:
+            norm = raw
+        return (name, norm)
+
+    def note_verify(self, name: str, kwargs: dict[str, Any] | None, result: object) -> None:
+        """Registra el resultado POST-ejecución de una verify tool.
+
+        Solo `[PASSED]` explícito cachea (con la 1ª línea como resumen).
+        Cualquier otra cosa invalida esa entrada: la próxima vez se ejecuta.
+        """
+        if name not in VERIFY_TOOL_NAMES:
+            return
+        key = self._verify_cache_key(name, kwargs)
+        if isinstance(result, str) and result.startswith("[PASSED]"):
+            first = result.splitlines()[0][:160] if result else ""
+            self._verified_clean[key] = first
+        else:
+            self._verified_clean.pop(key, None)
 
     def set_read_limit(self, path: str, limit: int) -> None:
         """Sube el tope de lecturas para UN path.
@@ -289,6 +321,14 @@ class ExploreBudget:
             stop = self._check_redundant_list(kwargs)
             if stop:
                 return stop
+        if name in VERIFY_TOOL_NAMES:
+            key = self._verify_cache_key(name, kwargs)
+            if key in self._verified_clean:
+                return (
+                    f"✅ {name} ya verificado en este turno sin cambios desde "
+                    f"entonces ({self._verified_clean[key]}). No lo re-ejecutes "
+                    f"salvo que hayas editado algo."
+                )
         self._total += 1
         # Debug print SOLO con AGENTDEVS_DEBUG=1: iba por stderr y en modo
         # --tui pisaba la UI (stderr no pasa por el panel capturado).
@@ -345,6 +385,8 @@ class ExploreBudget:
         if name in WRITE_TOOL_NAMES:
             self._wrote = True
             self._verify_streak = 0
+            # Cualquier escritura invalida las verificaciones cacheadas.
+            self._verified_clean.clear()
             # Tope de escrituras totales sin verify en el medio: atrapa el
             # spree multi-archivo (max_edits_per_file solo capa el MISMO path).
             # Lanza VerifyRequired → session inyecta la compuerta de verify.
@@ -856,6 +898,8 @@ def _wrap_one(
             tool_call_logger.add(name)
         result = tool.invoke(kwargs)
         _record_verify_result(name, result, tool_call_results)
+        if explore_budget is not None:
+            explore_budget.note_verify(name, kwargs, result)
         if explore_budget is not None and name in WRITE_TOOL_NAMES:
             if _write_succeeded(result):
                 explore_budget.maybe_raise_verify_required()
@@ -929,6 +973,8 @@ def _wrap_one(
             tool_call_logger.add(name)
         result = await tool.ainvoke(kwargs)
         _record_verify_result(name, result, tool_call_results)
+        if explore_budget is not None:
+            explore_budget.note_verify(name, kwargs, result)
         if explore_budget is not None and name in WRITE_TOOL_NAMES:
             if _write_succeeded(result):
                 explore_budget.maybe_raise_verify_required()

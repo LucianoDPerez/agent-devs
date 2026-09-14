@@ -395,17 +395,17 @@ class TestVerifyStreak:
         )
 
     def test_verify_below_cap_allowed(self):
-        for i in range(3):
+        for _ in range(3):
             assert self.budget.consume("run_lint", {"path": "/repo"}) is None
 
     def test_verify_loop_raises(self):
-        for i in range(3):
+        for _ in range(3):
             self.budget.consume("run_lint", {"path": "/repo"})
         with pytest.raises(ToolBudgetExceeded, match="verifies seguidos"):
             self.budget.consume("run_lint", {"path": "/repo"})
 
     def test_write_resets_verify_streak(self):
-        for i in range(3):
+        for _ in range(3):
             self.budget.consume("run_lint", {"path": "/repo"})
         self.budget.consume("edit_file", {"path": "/repo/a.ts", "old_str": "x", "new_str": "y"})
         assert self.budget.consume("run_lint", {"path": "/repo"}) is None
@@ -417,5 +417,59 @@ class TestVerifyStreak:
             max_reads_after_explore=15,
             max_tools_before_write=30,
         )
-        for i in range(10):
+        for _ in range(10):
             assert budget.consume("run_lint", {"path": "/repo"}) is None
+
+
+class TestVerifyCache:
+    """Repetir verify sin writes intermedios devuelve caché (E2E real 35B:
+    3 rondas lint/tests/build = 9 ejecuciones para 2 edits de un JSON)."""
+
+    def _budget(self):
+        return ExploreBudget(
+            max_calls=10,
+            max_reads_after_explore=8,
+            max_tools_before_write=50,
+            write_pressure=True,
+        )
+
+    def test_segunda_ronda_igual_path_devuelve_cache(self):
+        b = self._budget()
+        kw = {"path": "/repo"}
+        assert b.consume("run_lint", kw) is None
+        b.note_verify("run_lint", kw, "[PASSED] exit=0\n$ tsc")
+        out = b.consume("run_lint", kw)
+        assert out is not None and "ya verificado" in out
+        # Sin costo: ni total ni streak avanzan
+        assert b._total == 1
+        assert b._verify_streak == 0
+
+    def test_write_invalida_cache(self):
+        b = self._budget()
+        kw = {"path": "/repo"}
+        b.consume("run_lint", kw)
+        b.note_verify("run_lint", kw, "[PASSED] exit=0")
+        assert b.consume("run_lint", kw) is not None  # cache hit
+        b.consume("edit_file", {"path": "/repo/a.ts", "old_str": "x", "new_str": "y"})
+        assert b.consume("run_lint", kw) is None  # re-ejecuta
+
+    def test_fallo_no_cachea(self):
+        b = self._budget()
+        kw = {"path": "/repo"}
+        b.consume("run_tests", kw)
+        b.note_verify("run_tests", kw, "[FAILED] exit=1\n$ pytest\nF")
+        assert b.consume("run_tests", kw) is None  # reintenta, no cachea fallos
+
+    def test_path_distinto_es_otra_entrada(self):
+        b = self._budget()
+        b.consume("run_build", {"path": "/repo/a"})
+        b.note_verify("run_build", {"path": "/repo/a"}, "[PASSED] exit=0")
+        assert b.consume("run_build", {"path": "/repo/b"}) is None
+
+    def test_reset_limpia_cache(self):
+        b = self._budget()
+        kw = {"path": "/repo"}
+        b.consume("run_lint", kw)
+        b.note_verify("run_lint", kw, "[PASSED] exit=0")
+        b.reset()
+        assert b.consume("run_lint", kw) is None
