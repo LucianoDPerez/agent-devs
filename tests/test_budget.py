@@ -474,3 +474,70 @@ class TestVerifyCache:
         b.note_verify("run_lint", kw, "[PASSED] exit=0")
         b.reset()
         assert b.consume("run_lint", kw) is None
+
+
+class TestNpmScriptVerifyEquivalence:
+    """run_npm_script lint*/test*/build* es verificación (E2E real: el modelo
+    corrió `lint:check` + `build` x2 por run_npm_script y el harness no lo
+    contó: ni reseteó edits, ni alimentó resultados, ni tocó el caché)."""
+
+    def test_mapeo_scripts(self):
+        from orchestration.tool_dedupe import _canonical_verify_for_script as m
+
+        assert m("lint") == "run_lint"
+        assert m("lint:check") == "run_lint"
+        assert m("test") == "run_tests"
+        assert m("test:unit") == "run_tests"
+        assert m("build") == "run_build"
+        assert m("db:generate") is None
+        assert m("dev") is None
+        assert m("install") is None
+        assert m("") is None
+
+    def test_verify_like_resetea_edits(self):
+        from orchestration.tool_dedupe import ExploreBudget
+
+        b = ExploreBudget(
+            max_calls=10,
+            max_reads_after_explore=8,
+            max_tools_before_write=50,
+            write_pressure=True,
+            max_edits_per_file=2,
+        )
+        b.consume("edit_file", {"path": "/r/a.ts", "old_str": "a", "new_str": "b"})
+        b.consume("edit_file", {"path": "/r/a.ts", "old_str": "c", "new_str": "d"})
+        assert b.consume("run_npm_script", {"path": "/r", "script": "lint:check"}) is None
+        assert b.consume("edit_file", {"path": "/r/a.ts", "old_str": "e", "new_str": "f"}) is None
+
+    def test_verify_like_no_bloquea_por_dedupe(self):
+        from orchestration.tool_dedupe import ToolCallDedupe, wrap_tools_with_dedupe
+        from tools.verify import run_npm_script
+
+        dedupe = ToolCallDedupe(max_repeats=1)
+        wrapped = wrap_tools_with_dedupe([run_npm_script], dedupe)
+        npm = wrapped[0]
+        # Misma llamada 3 veces: al ser verify-equivalente nunca se bloquea
+        # por dedupe (idempotente como run_lint/run_tests/run_build).
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "package.json").write_text('{"scripts": {"lint:check": "exit 1"}}')
+            for _ in range(3):
+                out = npm.invoke({"path": tmp, "script": "lint:check"})
+                assert isinstance(out, str)
+
+    def test_resultado_se_registra_canonico(self):
+        from orchestration.tool_dedupe import _record_verify_result
+
+        res: dict = {}
+        _record_verify_result(
+            "run_npm_script", "[PASSED] exit=0", res,
+            {"path": "/r", "script": "build"},
+        )
+        assert res == {"run_build": True}
+        res2: dict = {}
+        _record_verify_result(
+            "run_npm_script", "db ok", res2, {"path": "/r", "script": "db:generate"}
+        )
+        assert res2 == {}

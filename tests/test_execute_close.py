@@ -171,3 +171,61 @@ def test_changed_files_filtra_clutter_de_otros_agentes(tmp_path):
         p.write_text("clutter", encoding="utf-8")
     s = Session(llm=None, repo_path=str(repo))
     assert s._changed_files() == ["src/a.ts"]
+
+
+def _old_commit(repo: Path) -> None:
+    """Commit con fecha vieja (fuera de la ventana de 5 min de 'reciente')."""
+    import os
+
+    env = dict(os.environ, GIT_COMMITTER_DATE="2000-01-01T00:00:00")
+    (repo / "old.txt").write_text("v1", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=str(repo), check=True,
+                   capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-qm", "old", "--date=2000-01-01T00:00:00"],
+                   cwd=str(repo), check=True, capture_output=True, text=True,
+                   env=env)
+
+
+def test_nothing_pending_commit_reciente_arbol_limpio(tmp_path):
+    """E2E real: turno 'hacer commit' tras e7c8f3a — no hay nada que escribir,
+    el retry no-write debe cerrarse, no inventar edits."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)  # commit init = reciente (ahora mismo)
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools = {"changed_files"}
+    assert s._nothing_pending_to_write() is True
+
+
+def test_nothing_pending_verificado_sin_commit(tmp_path):
+    """Tarea ya hecha + batería verde + árbol limpio: cerrar, no reescribir."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    _old_commit(repo)  # commit viejo → NO reciente
+    assert Session(llm=None, repo_path=str(repo))._repo_has_recent_commit() is False
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools = {"read_file", "run_lint", "run_tests", "run_build"}
+    assert s._nothing_pending_to_write() is True
+
+
+def test_nothing_pending_falso_con_cambios(tmp_path):
+    """Con cambios sin commitear SÍ hay trabajo pendiente (aunque haya commit)."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    (repo / "README.md").write_text("# repo\n\nPENDIENTE\n")
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools = {"changed_files"}
+    assert s._nothing_pending_to_write() is False
+
+
+def test_nothing_pending_falso_escape_vago(tmp_path):
+    """Sin commit reciente, sin verify y sin cambios: escape vago, debe reintentar."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    _old_commit(repo)
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools = {"read_file"}
+    assert s._nothing_pending_to_write() is False

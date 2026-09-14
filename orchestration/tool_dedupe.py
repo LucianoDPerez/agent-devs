@@ -68,6 +68,59 @@ READISH_TOOL_NAMES = frozenset(
 # Tools de verificación (lint/tests/build) — acción productiva
 VERIFY_TOOL_NAMES = frozenset({"run_lint", "run_tests", "run_build", "run_verify", "run_install"})
 
+
+def _canonical_verify_for_script(script: object) -> str | None:
+    """Mapea un script de run_npm_script a su verify canónica, o None.
+
+    El modelo evade el sistema de verify corriendo lint/tests/build por
+    run_npm_script (E2E real: `lint:check` + `build` x2 en vez de run_lint/
+    run_build — no reseteaban contadores, no alimentaban _verify_results y
+    no tocaban el caché). Los scripts de la familia lint*/test*/build* son
+    verificación y deben contar como tal en budget, caché y resultados.
+    """
+    if not isinstance(script, str) or not script.strip():
+        return None
+    base = re.split(r"[:\-_]", script.strip(), maxsplit=1)[0].lower()
+    return {"lint": "run_lint", "test": "run_tests", "build": "run_build"}.get(base)
+
+
+def _effective_verify_name(name: str, kwargs: dict[str, Any] | None) -> str | None:
+    """Nombre canónico de verify para (tool, args), o None si no es verify.
+
+    Cubre las verify tools directas y run_npm_script con script de la familia
+    lint/test/build. El resto (db:generate, dev, install...) no es verify.
+    """
+    if name in VERIFY_TOOL_NAMES:
+        return name
+    if name == "run_npm_script":
+        return _canonical_verify_for_script((kwargs or {}).get("script"))
+    return None
+
+
+def _in_scope(target: str, scope: frozenset) -> bool:
+    """True si el path a escribir está dentro del alcance pinnado.
+
+    Match por sufijo (la tarea cita "infra/sqs.tf", el target es absoluto)
+    o por basename (la tarea cita "sqs.tf"). Los hermanos spec/test
+    (foo.spec.ts de foo.ts) heredan el alcance. Fail-open ante la duda:
+    un match parcial cuenta como dentro (mejor dejar pasar un auxiliar que
+    frenar un fix legítimo; el runaway lo corta el tope por cantidad).
+    """
+    t = str(target).replace("\\", "/")
+    base = t.rsplit("/", 1)[-1]
+    sib = re.sub(r"\.(spec|test)(?=\.[^.]+$)", "", base)
+    candidates = {base} | ({sib} if sib != base else set())
+    for s in scope:
+        sn = str(s).replace("\\", "/").lstrip("./")
+        if not sn:
+            continue
+        if t == sn or t.endswith("/" + sn):
+            return True
+        sb = sn.rsplit("/", 1)[-1]
+        if sb and sb in candidates:
+            return True
+    return False
+
 # Tools que cuentan como "producto final" para evitar max_tools_before_write
 # (REVIEW nunca escribe; estos son sus outputs válidos)
 PRODUCTIVE_TOOL_NAMES = READISH_TOOL_NAMES | VERIFY_TOOL_NAMES
@@ -85,6 +138,12 @@ class ToolCallDedupe:
     def __init__(self, max_repeats: int = 2):
         self.max_repeats = max_repeats
         self._counts: dict[str, int] = {}
+        # Alcance pinnado por tarea (T002): lo setea la sesión por turno.
+        # scope_files: paths citados en las entradas pinnadas (vacío = off).
+        # scope_violations: path → intentos fuera de alcance (persiste en los
+        # retries del turno; reset() NO lo toca, la sesión lo gestiona).
+        self.scope_files: frozenset = frozenset()
+        self.scope_violations: dict[str, int] = {}
 
     def reset(self) -> None:
         self._counts.clear()
@@ -221,10 +280,13 @@ class ExploreBudget:
 
         Solo `[PASSED]` explícito cachea (con la 1ª línea como resumen).
         Cualquier otra cosa invalida esa entrada: la próxima vez se ejecuta.
+        run_npm_script con script lint*/test*/build* cachea bajo su nombre
+        canónico (comparte caché con run_lint/run_tests/run_build).
         """
-        if name not in VERIFY_TOOL_NAMES:
+        eff = _effective_verify_name(name, kwargs)
+        if eff is None:
             return
-        key = self._verify_cache_key(name, kwargs)
+        key = self._verify_cache_key(eff, kwargs)
         if isinstance(result, str) and result.startswith("[PASSED]"):
             first = result.splitlines()[0][:160] if result else ""
             self._verified_clean[key] = first
@@ -321,11 +383,12 @@ class ExploreBudget:
             stop = self._check_redundant_list(kwargs)
             if stop:
                 return stop
-        if name in VERIFY_TOOL_NAMES:
-            key = self._verify_cache_key(name, kwargs)
+        _eff_verify = _effective_verify_name(name, kwargs)
+        if _eff_verify is not None:
+            key = self._verify_cache_key(_eff_verify, kwargs)
             if key in self._verified_clean:
                 return (
-                    f"✅ {name} ya verificado en este turno sin cambios desde "
+                    f"✅ {_eff_verify} ya verificado en este turno sin cambios desde "
                     f"entonces ({self._verified_clean[key]}). No lo re-ejecutes "
                     f"salvo que hayas editado algo."
                 )
@@ -408,9 +471,12 @@ class ExploreBudget:
 
         # Verify tools resetean los contadores de edits y escrituras: después
         # de verificar, el estado es conocido y editar de nuevo es legítimo.
-        # PERO: verify en loop SIN escribir es un loop (15 run_lint seguidos
-        # en E2E real) — tope de streak (solo EXECUTE, ver __init__).
-        if name in VERIFY_TOOL_NAMES:
+        # Incluye run_npm_script lint*/test*/build* (verificación por otra vía:
+        # si no reseteara, el modelo verificaría sin que el harness lo note y
+        # el tope de edits lo castigaría igual). PERO: verify en loop SIN
+        # escribir es un loop (15 run_lint seguidos en E2E real) — tope de
+        # streak (solo EXECUTE, ver __init__).
+        if _eff_verify is not None:
             self._edits_per_path.clear()
             self._writes_since_verify = 0
             # También resetea el contador de lecturas POR PATH y post-explore:
@@ -448,11 +514,13 @@ class ExploreBudget:
         # Debe ir ANTES del explore block — los explore tools hacían early return
         # y se salteaban este check, permitiendo loops infinitos de list_files.
         # read_file ya NO es productivo en EXECUTE (solo VERIFY_TOOL_NAMES).
+        # run_npm_script lint*/test*/build* SÍ es productivo (es verificación).
         if (
             self.write_pressure
             and not self._wrote
             and self._total > self.max_tools_before_write
             and name not in self._productive_names
+            and _eff_verify is None
         ):
             raise ToolBudgetExceeded(
                 f"{self._total} tool calls sin escribir código ni verificar. "
@@ -508,16 +576,23 @@ class ExploreBudget:
 
 def _record_verify_result(
     name: str, result: object, tool_call_results: dict | None,
+    kwargs: dict[str, Any] | None = None,
 ) -> None:
     """Registra el RESULTADO de verify tools (no solo la llamada).
 
     Solo `[PASSED]` explícito cuenta como pasado; `[FAILED]`, timeouts y
     mensajes de validación cuentan como no-pasado. Así el cierre
-    determinístico distingue "se corrió y pasó" de "se corrió y falló"."""
-    if tool_call_results is None or name not in VERIFY_TOOL_NAMES:
+    determinístico distingue "se corrió y pasó" de "se corrió y falló".
+    run_npm_script lint*/test*/build* se registra bajo su nombre canónico
+    (run_lint/run_tests/run_build) para que el cierre y el commit gate lo vean.
+    """
+    if tool_call_results is None:
+        return
+    eff = _effective_verify_name(name, kwargs)
+    if eff is None:
         return
     if isinstance(result, str):
-        tool_call_results[name] = result.startswith("[PASSED]")
+        tool_call_results[eff] = result.startswith("[PASSED]")
 
 
 def wrap_tools_with_dedupe(
@@ -562,6 +637,12 @@ def wrap_tools_with_dedupe(
     # estrategia — el modelo no converge con cirugía fina en cambios
     # estructurales). El estado vive en este closure: se recrea por agente.
     edit_rejections: dict[str, int] = {}
+    # Intentos de escritura a archivos de PLANIFICACIÓN protegidos, contados
+    # POR PATH (no por args): el modelo varía los bloques (objeto entero →
+    # línea suelta) y el dedupe por args idénticos nunca lo atrapa (E2E real:
+    # 4 edits a tasks.json con old_str distintos). Al 2º intento al MISMO
+    # path se levanta excepción directa.
+    protected_rejects: dict[str, int] = {}
     if explore_budget is not None:
         # El wrapper decide el tope write→verify POST-ejecución (raise solo
         # para writes efectivos + refund de fallidos). consume() directo
@@ -573,7 +654,7 @@ def wrap_tools_with_dedupe(
             _wrap_one(
                 t, dedupe, explore_budget, read_cache, repo_path,
                 tool_call_logger, edit_rejections, allow_overwrite_escalation,
-                confirm_callback, tool_call_results,
+                confirm_callback, tool_call_results, protected_rejects,
             )
         )
     return wrapped
@@ -672,6 +753,7 @@ def _wrap_one(
     allow_overwrite_escalation: bool = True,
     confirm_callback=None,
     tool_call_results: dict | None = None,
+    protected_rejects: dict | None = None,
 ) -> BaseTool:
     name = tool.name
 
@@ -735,11 +817,13 @@ def _wrap_one(
         """
         kwargs = _resolve_kwargs(kwargs)
         # Fail-fast para archivos de PLANIFICACIÓN protegidos (tasks/plan/PRD):
-        # el guard de filesystem devuelve string y el modelo reintenta 3-4
-        # veces el mismo write quemando el turno (E2E: .agent/tasks.json).
-        # Acá se corta ANTES de ejecutar: intento 1 = STOP terminal (no
-        # reintentar), intento 2+ = excepción directa. No pasa por el mensaje
-        # genérico "ya se ejecutó" (mentira: nunca se escribió, está bloqueado).
+        # el guard de filesystem devuelve string y el modelo reintenta variando
+        # los bloques (objeto entero → línea suelta → micro-bloque), así que el
+        # dedupe por args idénticos NUNCA lo atrapa (E2E real: 4 edits a
+        # tasks.json con old_str distintos). Se cuenta POR PATH: intento 1 =
+        # STOP terminal (no reintentar), intento 2+ al MISMO path = excepción
+        # directa. No pasa por el mensaje genérico "ya se ejecutó" (mentira:
+        # nunca se escribió, está bloqueado).
         if name in ("write_file", "edit_file", "apply_patch", "delete_file"):
             _ppath = (kwargs or {}).get("path", "")
             if _ppath:
@@ -747,7 +831,12 @@ def _wrap_one(
                     from tools.filesystem import _is_protected_task_path as _is_prot
 
                     if _is_prot(_ppath):
-                        n_prot = dedupe.register(name, kwargs)
+                        _pkey = str(_ppath)
+                        if protected_rejects is None:
+                            n_prot = dedupe.register(name, {"path": _pkey})
+                        else:
+                            n_prot = protected_rejects.get(_pkey, 0) + 1
+                            protected_rejects[_pkey] = n_prot
                         if n_prot >= 2:
                             raise ToolBudgetExceeded(
                                 f"⛔ '{_ppath}' es planificación PROTEGIDA "
@@ -768,6 +857,30 @@ def _wrap_one(
                     raise
                 except Exception:
                     pass
+        # Breaker de alcance pinnado (T002): contar escrituras a archivos que
+        # la tarea pinnada NO cita. Los primeros auxiliares (tests, spec,
+        # schema) pasan en silencio; al superar el tope se levanta excepción
+        # (E2E real: T002 de infra/sqs.tf → 5 writes de T003). El cierre
+        # determinístico reporta la lista.
+        if name in ("write_file", "edit_file", "apply_patch", "delete_file"):
+            _tp = (kwargs or {}).get("path", "")
+            _scope = getattr(dedupe, "scope_files", None)
+            if _tp and _scope and not _in_scope(_tp, _scope):
+                from config import SCOPE_MAX_OUT_OF_SCOPE_WRITES
+
+                _viol = dedupe.scope_violations
+                _viol[str(_tp)] = _viol.get(str(_tp), 0) + 1
+                _total_out = sum(_viol.values())
+                if _total_out > SCOPE_MAX_OUT_OF_SCOPE_WRITES:
+                    _shown = ", ".join(sorted(_viol)[:6])
+                    raise ToolBudgetExceeded(
+                        f"⛔ SCOPE CREEP: {_total_out} escrituras fuera del "
+                        f"alcance pinnado ({_shown}). La tarea cita: "
+                        f"{', '.join(sorted(_scope)[:8])}. "
+                        "Si la tarea ya está hecha, PARÁ y reportá con "
+                        "evidencia en texto. Si necesitás otro archivo, "
+                        "pedilo explícito en tu respuesta y esperá."
+                    )
         if explore_budget is not None and name == "read_file":
             _apply_adaptive_read_limit(explore_budget, kwargs.get("path", ""))
         if explore_budget is not None:
@@ -777,7 +890,8 @@ def _wrap_one(
         n = dedupe.register(name, kwargs)
         # VERIFY tools (lint/tests/build) son idempotentes: re-correrlas tras
         # cada edición es correcto y NO es un loop. Nunca bloquearlas por dedupe.
-        if name in VERIFY_TOOL_NAMES:
+        # Incluye run_npm_script lint*/test*/build* (verificación por otra vía).
+        if _effective_verify_name(name, kwargs) is not None:
             return ("proceed", None)
         if name == "read_file" and n > dedupe.max_repeats:
             # Releer el MISMO archivo no es un loop crítico como la exploración:
@@ -932,8 +1046,14 @@ def _wrap_one(
             return _rejected_message(kwargs)
         if tool_call_logger is not None:
             tool_call_logger.add(name)
+            # run_npm_script lint*/test*/build* también loguea su nombre
+            # canónico: la sesión detecta verify por _called_tools y si solo
+            # ve "run_npm_script" la verificación no cuenta (bypass E2E real).
+            _eff_log = _effective_verify_name(name, kwargs)
+            if _eff_log is not None and _eff_log != name:
+                tool_call_logger.add(_eff_log)
         result = tool.invoke(kwargs)
-        _record_verify_result(name, result, tool_call_results)
+        _record_verify_result(name, result, tool_call_results, kwargs)
         if explore_budget is not None:
             explore_budget.note_verify(name, kwargs, result)
         if explore_budget is not None and name in WRITE_TOOL_NAMES:
@@ -1010,8 +1130,13 @@ def _wrap_one(
             return _rejected_message(kwargs)
         if tool_call_logger is not None:
             tool_call_logger.add(name)
+            # run_npm_script lint*/test*/build* también loguea su nombre
+            # canónico (ver _invoke).
+            _eff_log_a = _effective_verify_name(name, kwargs)
+            if _eff_log_a is not None and _eff_log_a != name:
+                tool_call_logger.add(_eff_log_a)
         result = await tool.ainvoke(kwargs)
-        _record_verify_result(name, result, tool_call_results)
+        _record_verify_result(name, result, tool_call_results, kwargs)
         if explore_budget is not None:
             explore_budget.note_verify(name, kwargs, result)
         if explore_budget is not None and name in WRITE_TOOL_NAMES:

@@ -389,3 +389,36 @@ def test_e2e_protected_write_failfast_no_retry(tmp_path):
     with pytest.raises(ToolBudgetExceeded, match="PROTEGIDA"):
         wf.invoke({"path": str(target), "content": "hola"})
     assert target.read_text() == original
+
+
+def test_e2e_protected_write_varying_blocks_same_path(tmp_path):
+    """El modelo varía los bloques (objeto entero → línea suelta): el conteo
+    es POR PATH, no por args idénticos (E2E real: 4 edits a tasks.json con
+    old_str distintos, el dedupe nunca los atrapó)."""
+    import pytest
+
+    from orchestration.tool_dedupe import (
+        ExploreBudget,
+        ToolBudgetExceeded,
+        ToolCallDedupe,
+        wrap_tools_with_dedupe,
+    )
+    from tools.filesystem import edit_file
+
+    target = tmp_path / ".agent" / "tasks.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text('{"tasks": []}')
+    original = target.read_text()
+
+    dedupe = ToolCallDedupe(max_repeats=5)
+    wrapped = wrap_tools_with_dedupe(
+        [edit_file], dedupe, ExploreBudget(), repo_path=str(tmp_path)
+    )
+    ef = wrapped[0]
+    r1 = ef.invoke(
+        {"path": str(target), "old_str": '{"id": "T002", "big": true}', "new_str": "X"}
+    )
+    assert "PROTEGIDO" in r1
+    with pytest.raises(ToolBudgetExceeded, match="PROTEGIDA"):
+        ef.invoke({"path": str(target), "old_str": "pending", "new_str": "DONE"})
+    assert target.read_text() == original

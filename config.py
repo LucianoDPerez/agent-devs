@@ -179,6 +179,12 @@ EXECUTE_BULK_MAX_ATTEMPTS = 6
 # Máx inyecciones MID-TURN de la compuerta de verificación (VerifyRequired)
 # antes de declarar el turno fallido: evita ping-pong infinito write→gate.
 VERIFY_GATE_MAX_INJECTIONS = 3
+# Máx escrituras FUERA del alcance pinnado (T002) por turno antes de frenar:
+# con tareas pinnadas, escribir 4+ archivos que la tarea no cita es scope
+# creep (E2E real: pidió T002 de infra/sqs.tf e implementó T003 entera —
+# iam + DTO + spec + home-client + prisma). Los auxiliares legítimos
+# (1-3 archivos: tests, spec, schema) pasan; el runaway se corta con excepción.
+SCOPE_MAX_OUT_OF_SCOPE_WRITES = 3
 # Timeout de conexión al MCP externo (codebase-memory-mcp) en session.start().
 # Si el MCP está colgado, el harness arranca SIN tools del knowledge graph en
 # vez de bloquearse para siempre (E2E real: main.py sin emitir output 40 min).

@@ -718,6 +718,10 @@ class Session:
         # Preload de ANALYZE en ESTE turno (archivos .md/.txt citados): lo usa
         # el guard de evidencia para exigir lecturas antes de dictaminar.
         self._analyze_preloaded: bool = False
+        # Alcance pinnado por tarea (breaker de scope creep, por turno):
+        # números pinnados + archivos citados en esas entradas. El wrapper
+        # cuenta escrituras fuera del alcance en dedupe.scope_violations.
+        self._scope_nums: list[int] = []
         # Tarea bulk detectada (≥ EXECUTE_BULK_MIN_FILES archivos): escala
         # budgets de EXECUTE y permite lecturas en el retry (0) para releer
         # los archivos que faltan.
@@ -1481,6 +1485,17 @@ class Session:
         except Exception:
             return False
 
+    def _nothing_pending_to_write(self) -> bool:
+        """True si exigir escritura al modelo sería dañino: árbol limpio y el
+        trabajo ya está commiteado (commit reciente) o verificado (verify
+        tools corridas). En ese caso el cierre honesto es reportar, no
+        reintentar con foco en escritura (el retry inventa no-ops sobre
+        archivos ya commiteados). Con cambios pendientes o sin evidencia de
+        trabajo, devuelve False (el escape vago SÍ debe reintentar)."""
+        if self._changed_files():
+            return False
+        return bool(self._repo_has_recent_commit() or self._verify_tools_called())
+
     def _post_write_gate(self) -> tuple[bool, str]:
         """Verifica que el código recién escrito compile. Fail-open: cualquier
         excepción o escenario no soportado devuelve (True, '') para no bloquear."""
@@ -1596,6 +1611,18 @@ class Session:
         """
         files = self._changed_files()
         verify_state = self._verify_all_passed()
+        scope_line = ""
+        try:
+            _viol = getattr(self._dedupe, "scope_violations", None) or {}
+            if getattr(self, "_scope_nums", None) and _viol:
+                _listed = ", ".join(f"Tarea {n}" for n in self._scope_nums)
+                _paths = ", ".join(sorted(_viol)[:6])
+                scope_line = (
+                    f"\n   Alcance {_listed}: ⚠️ {len(_viol)} archivo(s) fuera "
+                    f"del alcance pinnado: {_paths}"
+                )
+        except Exception:
+            scope_line = ""
         if files:
             head = f"✅ Tarea realizada: {len(files)} archivo(s) modificado(s)"
             detail = "   · " + "\n   · ".join(files[:8])
@@ -1617,7 +1644,7 @@ class Session:
                     "verificación exitosa — VERIFICAR CON EVIDENCIA ANTES DE "
                     "CONFIRMAR (revisá el diff antes de commitear)"
                 )
-            return f"{head}\n{detail}\n{verify_line}{evidence_line}"
+            return f"{head}\n{detail}\n{verify_line}{evidence_line}{scope_line}"
         if verify_state is True:
             return "✅ Turno completado (verificación corrida y exitosa, sin cambios en disco)."
         if verify_state is False:
@@ -1904,6 +1931,12 @@ class Session:
         self._analyze_budget.reset()
         self._called_tools.clear()
         self._verify_results.clear()
+        # Alcance pinnado por tarea (breaker de scope creep): se recalcula
+        # abajo para EXECUTE con Tarea(s) pinnada(s). Los retries del turno
+        # reutilizan el mismo dedupe → el contador persiste en el turno.
+        self._scope_nums = []
+        self._dedupe.scope_files = frozenset()
+        self._dedupe.scope_violations = {}
         self._runtime_healthy = None
         self._runtime_report = None
         # Los overrides de write_file (habilitados tras fallar la cirugía fina
@@ -1935,6 +1968,20 @@ class Session:
         agent_input = user_input
         if new_role == Role.EXECUTE:
             agent_input = preload_cited_files(user_input, self.repo_path)
+            # Alcance pinnado: archivos citados en las entradas pinnadas
+            # (T002). Las escrituras fuera del alcance cuentan en el wrapper
+            # y el runaway se frena con excepción (ver SCOPE_MAX_* en config).
+            try:
+                from orchestration.execute_bootstrap import pinned_task_scope_files
+
+                _nums = extract_requested_task_numbers(user_input)
+                if _nums:
+                    self._scope_nums = _nums
+                    self._dedupe.scope_files = frozenset(
+                        pinned_task_scope_files(user_input, self.repo_path)
+                    )
+            except Exception:
+                pass
             # EXECUTE SIEMPRE recibe el mapa del repo (layout + símbolos), haya
             # paths citados o no. Sin esto, el modelo chico está ciego a la
             # estructura (E2E f2: leyó la raíz del repo como archivo 3 veces)
@@ -2592,6 +2639,20 @@ class Session:
                         "Reintentando con lectura acotada + escritura…"
                     )
                 elif getattr(e, "reason", "") == "no-write":
+                    # Cierre honesto SIN retry: si no hay nada pendiente por
+                    # escribir, forzar escritura solo produce no-ops
+                    # destructivos (E2E real: turno "hacer commit" tras e7c8f3a
+                    # → el retry inventó edits sobre archivos commiteados).
+                    # El escape vago (sin commit reciente ni verify) SÍ reintenta.
+                    if new_role == Role.EXECUTE and self._nothing_pending_to_write():
+                        if e.reasoning_text.strip():
+                            self._last_response = e.reasoning_text
+                        console.print(
+                            "\n[dim]✅ Nada pendiente por escribir (trabajo ya "
+                            "commiteado o verificado) — cerrando sin "
+                            "reintentar.[/dim]"
+                        )
+                        break
                     retry_msg = "Reintentando con lectura acotada + escritura…"
                 else:
                     retry_msg = (

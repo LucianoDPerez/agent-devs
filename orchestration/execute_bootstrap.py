@@ -26,6 +26,8 @@ _REL_FILE_RE = re.compile(
 
 # "Tarea 1", "tarea 2"
 _TASK_SINGULAR_RE = re.compile(r"\btarea\s+(\d+)\b", re.IGNORECASE)
+# IDs estilo T002/T2 (convención .agent/tasks/ulab-XXXX/): "implementar T002"
+_TASK_ID_RE = re.compile(r"\bT(\d{1,4})\b")
 # "tareas 1, 2 y 3" / "tareas 1 y 2"
 _TASKS_LIST_RE = re.compile(
     r"\btareas\s+((?:\d+(?:\s*(?:,|y|e)\s*)?)+)",
@@ -102,6 +104,11 @@ def extract_requested_task_numbers(user_input: str) -> list[int]:
     for match in _TASK_SINGULAR_RE.finditer(user_input):
         _add(int(match.group(1)))
 
+    # IDs T002/T2 (sin la palabra "tarea"): van DESPUÉS para no duplicar, _add
+    # deduplica por orden de aparición entre ambos patrones.
+    for match in _TASK_ID_RE.finditer(user_input):
+        _add(int(match.group(1)))
+
     for match in _TASKS_LIST_RE.finditer(user_input):
         for n in re.findall(r"\d+", match.group(1)):
             _add(int(n))
@@ -136,6 +143,95 @@ def filter_task_sections(content: str, task_numbers: list[int]) -> str:
     if preamble:
         return header + preamble + "\n\n---\n\n" + body
     return header + body
+
+
+def _task_id_matches(entry_id: object, nums: set[int]) -> bool:
+    """True si el id de una entrada de tasks.json es una de las tareas pinnadas."""
+    if isinstance(entry_id, int) and not isinstance(entry_id, bool):
+        return entry_id in nums
+    if isinstance(entry_id, str):
+        match = re.search(r"(\d+)", entry_id)
+        if match and int(match.group(1)) in nums:
+            return True
+    return False
+
+
+def filter_json_task_sections(raw: str, task_numbers: list[int]) -> str:
+    """Filtra un tasks.json a las entradas pinnadas (T002), como
+    filter_task_sections hace para markdown.
+
+    Sin esto el preload inyecta TODAS las tareas (incluidas T003+ con sus
+    paths) y el modelo "avanza" a tareas no pedidas (E2E real: pidió T002,
+    leyó T003 con infra/iam.tf e implementó T003 por iniciativa).
+    Fail-open: ante cualquier duda (JSON inválido, formato desconocido, sin
+    match) devuelve el contenido completo.
+    """
+    import json
+
+    wanted = set(task_numbers)
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return raw
+    if isinstance(data, dict):
+        for key, val in data.items():
+            if (
+                isinstance(val, list)
+                and val
+                and all(isinstance(e, dict) for e in val)
+            ):
+                matched = [e for e in val if _task_id_matches(e.get("id"), wanted)]
+                if matched:
+                    return json.dumps({key: matched}, indent=2, ensure_ascii=False)
+        if _task_id_matches(data.get("id"), wanted):
+            return json.dumps(data, indent=2, ensure_ascii=False)
+        return raw
+    if isinstance(data, list):
+        matched = [
+            e for e in data
+            if isinstance(e, dict) and _task_id_matches(e.get("id"), wanted)
+        ]
+        if matched:
+            return json.dumps(matched, indent=2, ensure_ascii=False)
+    return raw
+
+
+# Archivos de código/infra mencionados en el texto de una tarea (para el
+# alcance pinnado: lo que la tarea cita es lo que se puede tocar).
+_SCOPE_FILE_RE = re.compile(
+    r"([\w.\-/]+?\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|vue|svelte|java|kt|php|rb|rs|cs|tf|prisma|sql))\b",
+)
+
+
+def extract_scope_files(text: str) -> set[str]:
+    """Paths con extensión de código/infra mencionados en el texto."""
+    found: set[str] = set()
+    for match in _SCOPE_FILE_RE.finditer(text or ""):
+        tok = match.group(1).strip().lstrip("./")
+        if tok and len(tok) < 200:
+            found.add(tok)
+    return found
+
+
+def pinned_task_scope_files(user_input: str, repo_path: str | None) -> set[str]:
+    """Archivos del alcance pinnado: paths citados en las entradas pinnadas
+    (T002) de los tasks citados. Vacío = sin pin o sin paths (enforcement off).
+    """
+    nums = extract_requested_task_numbers(user_input)
+    if not nums:
+        return set()
+    scope: set[str] = set()
+    for p in _collect_cited_paths(user_input, repo_path):
+        try:
+            raw = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if p.suffix.lower() == ".md":
+            raw = filter_task_sections(raw, nums)
+        elif p.suffix.lower() == ".json":
+            raw = filter_json_task_sections(raw, nums)
+        scope |= extract_scope_files(raw)
+    return scope
 
 
 def extract_checklist_items(content: str) -> list[str]:
@@ -970,6 +1066,8 @@ def _build_preload_parts(
 
         if p.suffix.lower() == ".md" and task_nums:
             raw = filter_task_sections(raw, task_nums)
+        elif p.suffix.lower() == ".json" and task_nums:
+            raw = filter_json_task_sections(raw, task_nums)
 
         if p.suffix.lower() == ".md":
             all_checklist.extend(extract_checklist_items(raw))
@@ -978,7 +1076,7 @@ def _build_preload_parts(
         budget -= len(chunk)
         scope = (
             f" (solo Tarea(s) {', '.join(map(str, task_nums))})"
-            if task_nums and p.suffix.lower() == ".md"
+            if task_nums and p.suffix.lower() in (".md", ".json")
             else ""
         )
         parts.append(
@@ -1058,6 +1156,8 @@ def _build_preload_parts(
             f"ALCANCE ESTRICTO: implementá ÚNICAMENTE {listed}. "
             "Cuando esas estén hechas y verificadas (checklist), PARÁ. "
             "NO implementes otras tareas aunque existan en el archivo. "
+            "El sistema frena el turno si escribís 4+ archivos que la tarea "
+            "no cita (solo valen auxiliares directos: tests/spec). "
         )
 
     parts.append(

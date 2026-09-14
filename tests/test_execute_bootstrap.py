@@ -10,9 +10,12 @@ from orchestration.execute_bootstrap import (
     extract_checklist_items,
     extract_requested_task_numbers,
     extract_review_findings,
+    extract_scope_files,
+    filter_json_task_sections,
     filter_task_sections,
     format_done_checklist,
     inject_repo_hints,
+    pinned_task_scope_files,
     preload_cited_files,
     preload_for_review,
     suggest_minimal_files,
@@ -56,6 +59,12 @@ class TestTaskFiltering:
 
     def test_extract_tareas_plural(self):
         assert extract_requested_task_numbers("hacé las tareas 3 y 5") == [3, 5]
+
+    def test_extract_task_id_t002(self):
+        """IDs estilo T002 (convención .agent/tasks): pinnaban en vacío."""
+        assert extract_requested_task_numbers(
+            "implementar T002 desde /repo/.agent/tasks/ulab-1/tasks.json") == [2]
+        assert extract_requested_task_numbers("implementar T002 y T003 dale") == [2, 3]
 
     def test_filter_keeps_only_requested(self):
         filtered = filter_task_sections(_SAMPLE_TASKS, [1, 2])
@@ -479,3 +488,127 @@ class TestReviewChecklistBeatsCleanTree:
                                  repo_path=str(tmp_path))
         assert "aunque el working tree esté limpio" in out
         assert "NUNCA es un veredicto válido" in out
+
+
+class TestJsonTaskPinning:
+    """E2E real: pidió T002 de un tasks.json y el preload inyectó TODAS las
+    tareas (T003 con infra/iam.tf incluida) → el modelo implementó T003 por
+    iniciativa. El pin debe filtrar también en JSON."""
+
+    def _tasks_json(self, tmp_path):
+        import json
+
+        p = tmp_path / "tasks.json"
+        p.write_text(json.dumps({"tasks": [
+            {"id": "T002", "diff": "outputs en infra/sqs.tf"},
+            {"id": "T003", "diff": "permisos en infra/iam.tf"},
+        ]}), encoding="utf-8")
+        return p
+
+    def test_filter_json_deja_solo_pinnada(self):
+        import json
+
+        raw = json.dumps({"tasks": [
+            {"id": "T002", "diff": "outputs en infra/sqs.tf"},
+            {"id": "T003", "diff": "permisos en infra/iam.tf"},
+        ]})
+        out = json.loads(filter_json_task_sections(raw, [2]))
+        assert [e["id"] for e in out["tasks"]] == ["T002"]
+        assert "iam" not in filter_json_task_sections(raw, [2])
+
+    def test_filter_json_fail_open(self):
+        assert filter_json_task_sections("no-json{{{", [2]) == "no-json{{{"
+        import json
+
+        raw = json.dumps({"tasks": [{"id": "T009", "diff": "x"}]})
+        assert filter_json_task_sections(raw, [2]) == raw
+
+    def test_preload_json_no_inyecta_otras_tareas(self, tmp_path):
+        p = self._tasks_json(tmp_path)
+        out = preload_cited_files(f"implementar T002 desde {p}",
+                                  repo_path=str(tmp_path))
+        assert "sqs.tf" in out
+        # El bloque citado (no el aviso de recursos faltantes) trae solo T002.
+        cited = out.split("CONTENIDO YA CARGADO")[1].split("FIN tasks.json")[0]
+        assert "iam.tf" not in cited
+        assert "solo Tarea(s) 2" in out
+
+    def test_scope_files_de_pinnada(self, tmp_path):
+        p = self._tasks_json(tmp_path)
+        scope = pinned_task_scope_files(f"implementar T002 desde {p}",
+                                        repo_path=str(tmp_path))
+        assert "infra/sqs.tf" in scope
+        assert "infra/iam.tf" not in scope
+
+    def test_extract_scope_files(self):
+        assert extract_scope_files("outputs en infra/sqs.tf y schema.prisma") == {
+            "infra/sqs.tf", "schema.prisma",
+        }
+        assert extract_scope_files("sin paths acá") == set()
+
+
+class TestScopeBreaker:
+    """Breaker de scope creep: 1-3 writes fuera del alcance pasan (auxiliares),
+    el 4º levanta excepción con evidencia."""
+
+    def _wrapped(self, tmp_path):
+        from orchestration.tool_dedupe import (
+            ExploreBudget,
+            ToolCallDedupe,
+            wrap_tools_with_dedupe,
+        )
+        from tools.filesystem import edit_file
+
+        for rel in ("infra/sqs.tf", "infra/iam.tf", "a.ts", "b.ts", "c.ts"):
+            p = tmp_path / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("x\n", encoding="utf-8")
+        dd = ToolCallDedupe(max_repeats=9)
+        dd.scope_files = frozenset({"infra/sqs.tf"})
+        w = wrap_tools_with_dedupe([edit_file], dd, ExploreBudget(),
+                                   repo_path=str(tmp_path))[0]
+        return w
+
+    def test_in_scope_pasa(self, tmp_path):
+        w = self._wrapped(tmp_path)
+        out = w.invoke({"path": str(tmp_path / "infra" / "sqs.tf"),
+                        "old_str": "zzz", "new_str": "y"})
+        assert "SCOPE CREEP" not in out
+
+    def test_tres_fuera_pasan_cuarto_frena(self, tmp_path):
+        import pytest
+
+        from orchestration.tool_dedupe import ToolBudgetExceeded
+
+        w = self._wrapped(tmp_path)
+        for rel in ("infra/iam.tf", "a.ts", "b.ts"):
+            out = w.invoke({"path": str(tmp_path / rel),
+                            "old_str": "zzz", "new_str": "y"})
+            assert "SCOPE CREEP" not in out
+        with pytest.raises(ToolBudgetExceeded, match="SCOPE CREEP"):
+            w.invoke({"path": str(tmp_path / "c.ts"),
+                      "old_str": "zzz", "new_str": "y"})
+
+    def test_sin_pin_no_hay_enforcement(self, tmp_path):
+        from orchestration.tool_dedupe import (
+            ExploreBudget,
+            ToolCallDedupe,
+            wrap_tools_with_dedupe,
+        )
+        from tools.filesystem import edit_file
+
+        p = tmp_path / "a.ts"
+        p.write_text("x\n", encoding="utf-8")
+        dd = ToolCallDedupe(max_repeats=9)
+        w = wrap_tools_with_dedupe([edit_file], dd, ExploreBudget(),
+                                   repo_path=str(tmp_path))[0]
+        for i in range(3):
+            out = w.invoke({"path": str(p), "old_str": f"zzz-{i}",
+                            "new_str": "y"})
+            assert "SCOPE CREEP" not in out
+
+    def test_spec_hereda_alcance(self, tmp_path):
+        from orchestration.tool_dedupe import _in_scope
+
+        assert _in_scope("/r/x/foo.spec.ts", frozenset({"x/foo.ts"})) is True
+        assert _in_scope("/r/infra/iam.tf", frozenset({"infra/sqs.tf"})) is False
