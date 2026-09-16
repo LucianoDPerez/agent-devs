@@ -786,6 +786,8 @@ def _status_flip_candidate(name: str, kwargs: dict[str, Any]) -> bool:
     Heurística de PASILLO (la autoridad es filesystem._status_only_flip sobre
     el JSON completo): si parece flip, no se intercepta en el wrapper y la
     tool decide. Flujo del usuario: el agente marca tareas Done en tasks.json.
+    apply_patch incluido (T013: el modelo prefiere el patch atómico para el
+    flip y sin pasillo el bloqueo le rompía el cierre).
     """
     if name == "edit_file":
         o = (kwargs or {}).get("old_str") or ""
@@ -797,6 +799,27 @@ def _status_flip_candidate(name: str, kwargs: dict[str, Any]) -> bool:
     if name == "write_file":
         c = (kwargs or {}).get("content") or ""
         return bool("status" in c and '"done"' in c.lower().replace(" ", ""))
+    if name == "apply_patch":
+        import json as _json
+
+        raw = (kwargs or {}).get("edits") or ""
+        try:
+            parsed = _json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            return False
+        if not isinstance(parsed, list) or not parsed:
+            return False
+        for e in parsed:
+            if not isinstance(e, dict):
+                return False
+            o = str(e.get("old_string") or e.get("old_str") or "")
+            n = str(e.get("new_string") or e.get("new_str") or "")
+            if not (
+                "status" in o.lower() and "pending" in o.lower()
+                and "status" in n.lower() and "done" in n.lower()
+            ):
+                return False
+        return True
     return False
 
 
@@ -1173,6 +1196,13 @@ def _wrap_one(
                 explore_budget.maybe_raise_verify_required()
             else:
                 explore_budget.refund_write()
+        # Write bloqueado/fallido = NO escribió: descartarlo del logger
+        # (independiente del budget). Sin esto, un write rechazado por el
+        # guard quedaba en _called_tools y el cierre honesto de "ya está
+        # implementado" no podía dispararse (E2E T014: turnos fallidos por
+        # un write fantasma que tildaba "wrote").
+        if name in WRITE_TOOL_NAMES and not _write_succeeded(result) and tool_call_logger is not None:
+            tool_call_logger.discard(name)
         if name == "edit_file":
             result = _escalate_edit_rejections(kwargs.get("path", ""), result, allow_overwrite_escalation)
         _cache_read(kwargs, result)
@@ -1292,6 +1322,9 @@ def _wrap_one(
                 explore_budget.maybe_raise_verify_required()
             else:
                 explore_budget.refund_write()
+        # Write bloqueado/fallido = NO escribió (ver _invoke).
+        if name in WRITE_TOOL_NAMES and not _write_succeeded(result) and tool_call_logger is not None:
+            tool_call_logger.discard(name)
         if name == "edit_file":
             result = _escalate_edit_rejections(kwargs.get("path", ""), result, allow_overwrite_escalation)
         _cache_read(kwargs, result)

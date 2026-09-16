@@ -850,11 +850,30 @@ def apply_patch(path: str, edits: str) -> str:
     """
     import json as _json
 
-    if _is_protected_task_path(path):
-        return (
-            f"⛔ '{path}' es un archivo de PLANIFICACIÓN PROHIBIDO. "
-            "NO lo toques: es tu fuente de verdad."
-        )
+    _protected = _is_protected_task_path(path)
+    if _protected:
+        # Excepción quirúrgica: apply_patch puede marcar status pending→DONE
+        # si TODOS los edits son flips (validación final estricta abajo, sobre
+        # el JSON completo resultante). Cualquier otra cosa: PROHIBIDO.
+        try:
+            _cand = all(
+                "status" in str(e.get("old_string") or e.get("old_str") or "").lower()
+                and "pending" in str(e.get("old_string") or e.get("old_str") or "").lower()
+                and "status" in str(e.get("new_string") or e.get("new_str") or "").lower()
+                and "done" in str(e.get("new_string") or e.get("new_str") or "").lower()
+                for e in (
+                    _json.loads(edits) if isinstance(edits, str) else edits
+                )
+            )
+        except Exception:
+            _cand = False
+        if not _cand:
+            return (
+                f"⛔ '{path}' es un archivo de PLANIFICACIÓN PROHIBIDO. "
+                "ÚNICA excepción: marcar status pending→DONE (todos los edits "
+                "del patch deben ser flips de status). NO toques nada más: es "
+                "tu fuente de verdad."
+            )
     p = Path(path)
     if not p.exists():
         return f"File does not exist: {path}. Create it with write_file first."
@@ -919,6 +938,21 @@ def apply_patch(path: str, edits: str) -> str:
         violation = _json_check(path, new_content)
         if violation:
             return violation
+    # Autorización final del status-flip en protegidos (apply_patch): el JSON
+    # resultante debe ser EXACTAMENTE el anterior con status→DONE.
+    if _protected:
+        try:
+            ok_flip = _status_only_flip(
+                _json.loads(content), _json.loads(new_content)
+            )
+        except Exception:
+            ok_flip = False
+        if not ok_flip:
+            return (
+                f"⛔ '{path}' es de PLANIFICACIÓN: solo se permite marcar "
+                "status pending→DONE. Tu patch cambiaría MÁS COSAS — no está "
+                "permitido. NO lo reintentes."
+            )
     p.write_text(new_content, encoding="utf-8")
     return f"✅ Applied {len(parsed)} patch(es) to {path} atomically (1 approval)."
 

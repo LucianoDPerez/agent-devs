@@ -656,3 +656,83 @@ def test_verify_validacion_no_registra_como_falso():
         "run_lint", "[FAILED] exit=1\nF test", res, {"path": "/repo"}
     )
     assert res == {"run_lint": False}
+
+
+class TestApplyPatchStatusFlip:
+    """T013: el modelo marca DONE con apply_patch atómico — sin pasillo el
+    bloqueo le rompía el cierre y alucinaba éxito."""
+
+    def test_flip_por_patch_permite(self, tmp_path):
+        import json
+
+        from tools.filesystem import apply_patch
+
+        p = tmp_path / ".agent" / "tasks.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(
+            {"tasks": [{"id": "T013", "title": "x", "status": "pending", "file": "a.ts"}]},
+            indent=2,
+        ))
+        edits = json.dumps([{
+            "old_string": '"status": "pending",\n      "file": "a.ts"',
+            "new_string": '"status": "DONE",\n      "file": "a.ts"',
+        }])
+        r = apply_patch.invoke({"path": str(p), "edits": edits})
+        assert r.startswith("✅")
+        assert json.loads(p.read_text())["tasks"][0]["status"] == "DONE"
+
+    def test_patch_con_otros_cambios_bloquea(self, tmp_path):
+        import json
+
+        from tools.filesystem import apply_patch
+
+        p = tmp_path / ".agent" / "tasks.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(
+            {"tasks": [{"id": "T013", "status": "pending", "file": "a.ts"}]},
+            indent=2,
+        ))
+        edits = json.dumps([{"old_string": '"file": "a.ts"', "new_string": '"file": "b.ts"'}])
+        r = apply_patch.invoke({"path": str(p), "edits": edits})
+        assert "PROHIBIDO" in r
+        assert json.loads(p.read_text())["tasks"][0]["file"] == "a.ts"
+
+    def test_candidate_patch_heuristica(self):
+        import json
+
+        from orchestration.tool_dedupe import _status_flip_candidate as f
+
+        flip = json.dumps([{
+            "old_string": '"status": "pending"', "new_string": '"status": "DONE"',
+        }])
+        mixto = json.dumps([
+            {"old_string": '"status": "pending"', "new_string": '"status": "DONE"'},
+            {"old_string": '"file": "a.ts"', "new_string": '"file": "b.ts"'},
+        ])
+        assert f("apply_patch", {"edits": flip}) is True
+        assert f("apply_patch", {"edits": mixto}) is False
+
+
+def test_write_bloqueado_no_cuenta_como_escrito(tmp_path):
+    """T014: un apply_patch/edit bloqueado quedaba en _called_tools como
+    "wrote" y el cierre honesto de 'ya está implementado' no disparaba →
+    turno fallido. El write fallido se descarta del logger."""
+    from orchestration.session import _ToolCallLog
+    from orchestration.tool_dedupe import (
+        ToolCallDedupe,
+        wrap_tools_with_dedupe,
+    )
+    from tools.filesystem import edit_file
+
+    p = tmp_path / "a.ts"
+    p.write_text("x = 1\n", encoding="utf-8")
+    dd = ToolCallDedupe(max_repeats=9)
+    logged = _ToolCallLog()
+    w = wrap_tools_with_dedupe([edit_file], dd, None, repo_path=str(tmp_path),
+                               tool_call_logger=logged)[0]
+    r1 = w.invoke({"path": str(p), "old_str": "ZZZ-NO-EXISTE", "new_str": "y"})
+    assert "old_str not found" in r1
+    assert logged.names == set()  # no escribió → no cuenta
+    r2 = w.invoke({"path": str(p), "old_str": "x = 1", "new_str": "x = 2"})
+    assert r2.startswith("✅")
+    assert logged.names == {"edit_file"}  # éxito sí cuenta

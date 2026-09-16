@@ -194,9 +194,11 @@ MCP_CONNECT_TIMEOUT = 90
 # converge con cirugía fina → cambiamos de estrategia con ancla del read cache.
 MAX_EDIT_REJECTIONS_BEFORE_OVERWRITE = 2
 # Razonamiento por bloque: si el modelo razona > N segundos SIN emitir output
-# (content o tool call), cortar el stream. El 4B razona 30-60s antes de cada
-# tool call; 90s por bloque corta runaway sin afectar el flujo normal.
-EXECUTE_MAX_REASONING_SECONDS = 90
+# (content o tool call), cortar el stream. 90s era la calibración del 4B; con
+# los 9B/35B el corte repetido causaba churn (5 cortes en un turno = 5 retries
+# re-leyendo todo, E2E T014/T015). 150s deja terminar el pensamiento largo sin
+# permitir runaway (el rescate de _partial_reasoning recicla igual si corta).
+EXECUTE_MAX_REASONING_SECONDS = 150
 
 # Generación continua de CONTENIDO: si el modelo lleva > N segundos generando
 # texto SIN tool calls, no emitió EOS y está en loop (genera su resumen y
