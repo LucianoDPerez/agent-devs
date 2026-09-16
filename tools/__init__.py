@@ -21,6 +21,7 @@ from .git import (
     git_restore,
     git_status,
     list_prs,
+    pr_comment,
     push,
     read_pr,
     stage_files,
@@ -36,11 +37,11 @@ ALL_TOOLS = [
     inspect_models,
     run_install, run_lint, run_tests, run_build, run_verify, run_npm_script,
     current_branch, changed_files, git_status, git_log,
-    stage_files, create_branch, create_commit, push, create_pr, read_pr, list_prs,
+    stage_files, create_branch, create_commit, push, create_pr, pr_comment, read_pr, list_prs,
 ]
 
 _READONLY_GIT = [current_branch, changed_files, git_status, git_log, read_pr, list_prs]
-_GIT_WRITE = [stage_files, create_branch, create_commit, push, create_pr]
+_GIT_WRITE = [stage_files, create_branch, create_commit, push, create_pr, pr_comment]
 _VERIFY = [run_install, run_lint, run_tests, run_build, run_verify]
 
 # Subsets por rol de agente. Read-only evita que compile modificadores.
@@ -57,9 +58,10 @@ EXECUTOR_TOOLS = [
     # (E2E real: sin git_status el modelo intentó leer .git/HEAD con read_file).
     current_branch, changed_files, git_status, git_log,
     stage_files, create_branch, create_commit, push, git_restore,
+    pr_comment, create_pr,
     probe_http, capture_dev_server,
 ]
-REVIEWER_TOOLS = [list_files, read_file, search_code, inspect_routes, inspect_models, inspect_env, probe_http, *_READONLY_GIT, *_VERIFY]
+REVIEWER_TOOLS = [list_files, read_file, search_code, inspect_routes, inspect_models, inspect_env, probe_http, *_READONLY_GIT, *_VERIFY, pr_comment]
 
 # Retry de EXECUTE tras loop de lectura: SOLO escritura + git-write + verify.
 # TRULY write-only: SIN read_file (el modelo se escondía ahí) — el contenido
@@ -90,10 +92,19 @@ WRITE_RETRY_TOOLS = [
 # delete_file: borrar + recrear bypassa el guard anti-sobrescritura (E2E real:
 # el 35B borró __init__.py de 1851 líneas y escribió un stub de 40). SIN verify
 # tools (el modelo las usaba como "acción gratis" para esquivar la write
-# pressure). El contenido de lo ya leído va inyectado en el ancla; la compuerta
-# de verificación (sistema) inyecta verify después.
+# pressure). El contenido de los archivos ya leídos va inyectado en el ancla; la
+# compuerta de verificación (sistema) inyecta verify después. El escalamiento a
+# write_file completo queda DESHABILITADO en este retry (allow_overwrite_
+# escalation=False): sobrescribir de memoria destruye aunque haya lecturas
+# acotadas.
+# GIT en el retry (E2E real "implementar commit...": corte de razonamiento →
+# retry sin tools de git → el modelo leyó .git/config crudo para averiguar la
+# rama). Git de lectura + stage/commit/push: el retry puede COMPLETAR un
+# commit a mitad (tarea de git interrumpida), no solo editar código.
 BUDGET_RETRY_TOOLS = [
     read_file, edit_file, apply_patch, write_file,
+    current_branch, changed_files, git_status, git_log,
+    stage_files, create_commit, push,
 ]
 
 # Retry de la compuerta post-escritura (error de compilación): corregir un

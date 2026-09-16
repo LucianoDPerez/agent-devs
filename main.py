@@ -351,6 +351,15 @@ def run_fullscreen(session) -> None:
                 else "[yellow]⛔ Hay rojos arriba — corregilos antes de commitear.[/yellow]"
             )
             return
+        elif payload[0] == "/commit":
+            session.slash_commit(payload[1])
+            return
+        elif payload[0] == "/push":
+            session.slash_push(payload[1])
+            return
+        elif payload[0] == "/pr":
+            session.slash_pr(payload[1])
+            return
         elif payload[0] == "/help":
             console.print("[bold]Comandos:[/bold]\n" + format_help())
             return
@@ -788,6 +797,15 @@ def main():
                     "[green]✅ Todo verde.[/green]\n" if passed
                     else "[yellow]⛔ Hay rojos arriba — corregilos antes de commitear.[/yellow]\n"
                 )
+                continue
+            if kind == "run" and payload[0] == "/commit":
+                session.slash_commit(payload[1])
+                continue
+            if kind == "run" and payload[0] == "/push":
+                session.slash_push(payload[1])
+                continue
+            if kind == "run" and payload[0] == "/pr":
+                session.slash_pr(payload[1])
                 continue
             if kind == "run" and payload[0] == "/help":
                 console.print("[bold]Comandos:[/bold]\n" + format_help() + "\n")

@@ -230,6 +230,16 @@ def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> st
     Usage: read_file(path="/path/to/repo/README.md")
     """
     p = Path(path)
+    # Git internals: el modelo no aprende nada de .git/config y en medio de
+    # un commit perdía los tools de git (retry) y los leía crudo (E2E real:
+    # "implementar commit" → read_file .git/config). Redirigir a las tools.
+    parts = {part.lower() for part in p.parts}
+    if ".git" in parts:
+        return (
+            f"⛔ No leas el interior de .git ({path}). Para git usá las TOOLS: "
+            "git_status (rama + estado), current_branch, git_log, changed_files. "
+            "No reimplementes git leyendo archivos internos."
+        )
     if not p.exists():
         return (
             f"File does not exist: {path}. "

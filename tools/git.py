@@ -235,6 +235,26 @@ def create_pr(path: str, title: str, body: str = "", base: str = "main") -> str:
 
 
 @tool
+def pr_comment(path: str, body: str, number: int | None = None) -> str:
+    """Post a comment on a Pull Request (uses `gh`). If `number` is None,
+    targets the PR of the current branch.
+
+    Flujo de review: al terminar el informe, el usuario puede pedir
+    'dejá tu informe como comentario en el PR' → pr_comment con el
+    cuerpo completo del informe en markdown.
+    """
+    body_clean = (body or "").strip()
+    if not body_clean:
+        raise ToolException("No comment body provided.")
+    args = ["gh", "pr", "comment"]
+    if number is not None:
+        args.append(str(number))
+    args += ["--body", body_clean]
+    out = _run(path, args)
+    return f"✅ Comentario publicado en el PR: {out}"
+
+
+@tool
 def read_pr(path: str, number: int | None = None) -> str:
     """Read a PR for review: full metadata plus the diff. If `number` is None, targets the PR for the current branch."""
     # gh pr view takes the PR number as a positional arg (not --number)

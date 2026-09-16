@@ -20,7 +20,7 @@ from orchestration.session import Session
 
 def test_todos_los_comandos_tienen_descripcion():
     help_text = format_help()
-    for name in ("/new", "/compact", "/history", "/resume", "/autoapprove", "/verify", "/help"):
+    for name in ("/new", "/compact", "/history", "/resume", "/autoapprove", "/verify", "/commit", "/push", "/pr", "/help"):
         assert name in help_text
     # Descripciones breves pedidas (una por comando)
     assert "nueva sesión" in help_text
@@ -28,7 +28,7 @@ def test_todos_los_comandos_tienen_descripcion():
 
 
 def test_match_filtra_por_prefijo():
-    assert [n for n, _ in match_commands("/")] == ["/new", "/compact", "/history", "/resume", "/autoapprove", "/verify", "/help"]
+    assert [n for n, _ in match_commands("/")] == ["/new", "/compact", "/history", "/resume", "/autoapprove", "/verify", "/commit", "/push", "/pr", "/help"]
     assert [n for n, _ in match_commands("/h")] == ["/history", "/help"]
     assert [n for n, _ in match_commands("/res")] == ["/resume"]
     assert match_commands("/z") == []
@@ -72,7 +72,7 @@ def test_ptk_completer_ofrece_todo():
     from prompt_toolkit.document import Document
 
     got = {c.text for c in completer.get_completions(Document("/"), None)}
-    assert got == {"/new", "/compact", "/history", "/resume", "/autoapprove", "/verify", "/help"}
+    assert got == {"/new", "/compact", "/history", "/resume", "/autoapprove", "/verify", "/commit", "/push", "/pr", "/help"}
     got_h = {c.text for c in completer.get_completions(Document("/h"), None)}
     assert got_h == {"/history", "/help"}
 
@@ -208,3 +208,43 @@ class TestAutoApprove:
         assert s.get_status()["auto_approve"] is False
         s._auto_approve = True
         assert s.get_status()["auto_approve"] is True
+
+
+def test_git_daily_commands_registrados():
+    """Flujo diario del usuario: commit/push/PR determinísticos, sin LLM."""
+    assert interpret_slash("/commit") == ("run", ("/commit", ""))
+    assert interpret_slash("/commit feat: algo") == ("run", ("/commit", "feat: algo"))
+    assert interpret_slash("/push") == ("run", ("/push", ""))
+    assert interpret_slash("/pr") == ("run", ("/pr", ""))
+    assert interpret_slash("/pr develop") == ("run", ("/pr", "develop"))
+
+
+def test_budget_retry_incluye_git_tools():
+    """E2E 'implementar commit...': el retry tras corte de razonamiento quedó
+    SIN tools de git y el modelo leyó .git/config crudo. El retry debe poder
+    completar el commit (git RO + stage/commit/push)."""
+    from tools import BUDGET_RETRY_TOOLS
+
+    names = [t.name for t in BUDGET_RETRY_TOOLS]
+    for must in ("git_status", "current_branch", "stage_files", "create_commit", "push"):
+        assert must in names, f"{must} falta en BUDGET_RETRY_TOOLS"
+    assert "delete_file" not in names
+
+
+def test_pr_comment_registrado_en_pools():
+    from orchestration.tool_dedupe import READISH_TOOL_NAMES, WRITE_TOOL_NAMES
+    from tools import EXECUTOR_TOOLS, REVIEWER_TOOLS
+
+    assert "pr_comment" in [t.name for t in REVIEWER_TOOLS]
+    assert "pr_comment" in [t.name for t in EXECUTOR_TOOLS]
+    # acción git-side: NO es write de código ni readish del turno
+    assert "pr_comment" not in WRITE_TOOL_NAMES
+    assert "pr_comment" not in READISH_TOOL_NAMES
+
+
+def test_read_file_rechaza_git_internals(tmp_path):
+    from tools.filesystem import read_file
+
+    r = read_file.invoke({"path": str(tmp_path / ".git" / "config")})
+    assert "No leas el interior de .git" in r
+    assert "git_status" in r

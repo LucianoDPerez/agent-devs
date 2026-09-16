@@ -64,6 +64,9 @@ REGLAS:
 - No marques CRITICAL por "faltan validaciones de URL/seguridad" si el AC no lo pide.
 - Si una tool responde "does not exist" o "⛔ STOP": aceptalo y cerrá el informe.
 - Si el review no cubrió algún archivo modificado visible en el diff → NO APROBAR.
+- PUBLICACIÓN EN PR: si el usuario te pide "dejá tu informe/comentario en el PR", usá
+  pr_comment(path, body, number) con el informe COMPLETO en markdown (con los
+  CRITICAL/WARNING y la sección Verificados). Nunca lo publiques sin orden explícita.
 
 {framework_rules}
 

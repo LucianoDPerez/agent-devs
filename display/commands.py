@@ -22,6 +22,9 @@ COMMANDS: tuple[tuple[str, str, bool], ...] = (
     ("/resume", "Retoma una sesión anterior: /resume <id>", True),
     ("/autoapprove", "Aprueba escrituras sin preguntar: /autoapprove [on|off]", True),
     ("/verify", "Corre lint/tests/build del repo ahora", False),
+    ("/commit", "Stagea tracked + gate + commit: /commit [mensaje]", True),
+    ("/push", "Pushea la rama actual: /push [remote]", True),
+    ("/pr", "Abre PR de la rama actual con gh: /pr [base]", True),
     ("/help", "Muestra esta ayuda de comandos", False),
 )
 

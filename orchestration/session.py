@@ -1804,6 +1804,105 @@ class Session:
             "commit. Revisá los cambios antes de commitearlos.[/dim]"
         )
 
+    def _git_cmd(self, args: list[str], timeout: int = 30) -> tuple[int, str]:
+        """Ejecuta git en el repo del turno (para slash commands sin LLM)."""
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=self.repo_path, capture_output=True, text=True, timeout=timeout,
+        )
+        return proc.returncode, (proc.stdout or "").strip() + (proc.stderr or "").strip()
+
+    def slash_commit(self, arg: str) -> None:
+        """Comando /commit [mensaje] — determinístico, SIN pasar por el LLM.
+
+        stage tracked (-u) + compuerta lint/tests/build + commit. Los untracked
+        quedan afuera A PROPÓSITO (el usuario decide: lista explícita o -u).
+        Repite el flujo de _maybe_ask_commit usable desde la TUI (donde el
+        prompt interactivo está deshabilitado y el LLM tardaba minutos en
+        commitear: E2E 'implementar commit...' → 150s de thinking + ESC).
+        """
+        console.print("[dim]🔍 Verificando antes de commitear (lint/tests/build)…[/dim]")
+        try:
+            passed, report = run_commit_verification(self.repo_path, reuse=self._verify_results)
+        except Exception as e:
+            console.print(f"[dim]No se pudo verificar ({e}): commiteo igual bajo tu responsabilidad.[/dim]")
+            passed, report = True, ""
+        console.print(report)
+        if not passed:
+            console.print(
+                "[yellow]⛔ Verificación en rojo — NO commiteo. Corregí arriba o usá /verify.[/yellow]"
+            )
+            return
+        _code, status = self._git_cmd(["status", "--porcelain"])
+        if not status.strip():
+            console.print("[yellow]↻ No hay cambios que commitear.[/yellow]")
+            return
+        try:
+            self._git_cmd(["add", "-u"], timeout=15)
+            untracked = [
+                ln[3:] for ln in status.splitlines() if ln.startswith("??")
+            ]
+            message = arg.strip() or f"chore: cambios pendientes ({len(status.splitlines())} archivos)"
+            code, out = self._git_cmd(["commit", "-m", message])
+            if code == 0:
+                console.print(f"[green]✅ Commit creado: {message}[/green]")
+                if untracked:
+                    console.print(
+                        "[dim]ℹ️  Untracked NO incluidos (agregalos a mano o pedí "
+                        f"stagearlos explícitos): {', '.join(untracked[:8])}[/dim]"
+                    )
+            else:
+                console.print(f"[red]⛔ git commit falló:\n{out}[/red]")
+        except Exception as e:
+            console.print(f"[red]⛔ git falló: {e}[/red]")
+
+    def slash_push(self, arg: str) -> None:
+        """Comando /push [remote] — push de la rama actual, determinístico."""
+        remote = arg.strip() or "origin"
+        code, branch_out = self._git_cmd(["branch", "--show-current"])
+        branch = branch_out.strip() or "HEAD"
+        if not branch:
+            console.print("[red]⛔ HEAD detached — no se puede pushear.[/red]")
+            return
+        console.print(f"[dim]🚀 Pusheando {branch} → {remote}…[/dim]")
+        code, out = self._git_cmd(["push", "--", remote, branch])
+        if code != 0:
+            # Sin upstream: la primera vez push -u lo setea.
+            code2, out2 = self._git_cmd(["push", "-u", "--", remote, branch])
+            if code2 == 0:
+                console.print(f"[green]🚀 Pushed {branch} → {remote} (upstream seteado)[/green]")
+                return
+            console.print(f"[red]⛔ push falló:\n{(out2 or out)}[/red]\n[dim]Si el remote pide auth, verificá credenciales con agent-devs --doctor.[/dim]")
+            return
+        console.print(f"[green]🚀 Pushed {branch} → {remote}[/green]")
+
+    def slash_pr(self, arg: str) -> None:
+        """Comando /pr [base] — abre PR de la rama actual con gh, determinístico."""
+        base = arg.strip() or "main"
+        _code, branch = self._git_cmd(["branch", "--show-current"])
+        branch = branch.splitlines()[0].strip() if branch else ""
+        if not branch:
+            console.print("[red]⛔ HEAD detached — no hay rama para PR.[/red]")
+            return
+        if branch == base:
+            console.print(f"[yellow]⛔ La rama actual ES {base}: cambiá de rama antes (create_branch).[/yellow]")
+            return
+        pretty = branch.split("/", 1)[-1].replace("-", " ").strip() or branch
+        title = f"{branch.split('/', 1)[0] or 'feat'}: {pretty}" if "/" in branch else f"feat: {pretty}"
+        from langchain_core.tools import ToolException
+
+        from tools.git import create_pr
+
+        console.print(f"[dim]🚀 Creando PR: {branch} → {base} (title: {title})…[/dim]")
+        try:
+            url = create_pr.invoke({"path": self.repo_path, "title": title, "base": base})
+            console.print(f"[green]✅ {url}[/green]")
+        except ToolException as e:
+            console.print(
+                f"[red]⛔ No se pudo crear el PR: {e}[/red]\n"
+                "[dim]¿Tenés gh instalado y autenticado (gh auth login)? agent-devs --doctor lo verifica.[/dim]"
+            )
+
     def _closing_message(self, base: str) -> str:
         """Mensaje de cierre contexto-dependiente: si el entorno fue chequeado
         y está SANO, y el turno no logró escribir, la conclusión honesta es
