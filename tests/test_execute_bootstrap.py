@@ -612,3 +612,53 @@ class TestScopeBreaker:
 
         assert _in_scope("/r/x/foo.spec.ts", frozenset({"x/foo.ts"})) is True
         assert _in_scope("/r/infra/iam.tf", frozenset({"infra/sqs.tf"})) is False
+
+
+class TestJsonChecklist:
+    """El banner decía '+ checklist AC' también para JSON, pero no había
+    checklist (solo .md lo generaba). Ahora el pin JSON trae su resumen."""
+
+    def _tasks_json(self, tmp_path):
+        import json
+
+        p = tmp_path / "tasks.json"
+        p.write_text(json.dumps({"tasks": [
+            {"id": "T012", "title": "Resolver SQS desactivada URL en boot",
+             "status": "pending", "file": "src/main.ts",
+             "verify": "grep -q DESACTIVADA src/main.ts",
+             "depends_on": ["T011"]},
+            {"id": "T013", "title": "Otra cosa", "status": "pending",
+             "file": "src/x.ts"},
+        ]}), encoding="utf-8")
+        return p
+
+    def test_checklist_resume_pinnada(self):
+        import json
+
+        from orchestration.execute_bootstrap import format_json_checklist
+
+        raw = json.dumps({"tasks": [
+            {"id": "T012", "title": "Resolver URL", "status": "pending",
+             "file": "src/main.ts", "verify": "grep -q X src/main.ts"},
+        ]})
+        out = format_json_checklist(raw)
+        assert "CHECKLIST DE TAREAS" in out
+        assert "T012" in out and "Resolver URL" in out
+        assert "src/main.ts" in out and "grep -q X" in out
+        assert len(out) < 1500
+
+    def test_checklist_fail_open(self):
+        from orchestration.execute_bootstrap import format_json_checklist
+
+        assert format_json_checklist("no-json{{{") == ""
+        assert format_json_checklist('{"otro": 1}') == ""
+
+    def test_preload_json_trae_checklist(self, tmp_path):
+        p = self._tasks_json(tmp_path)
+        out = preload_cited_files(f"implementar la tarea 012 de {p}",
+                                  repo_path=str(tmp_path))
+        assert "CHECKLIST DE TAREAS" in out
+        assert "T012" in out and "src/main.ts" in out
+        # T013 filtrada del pin: ni en el JSON ni en el checklist
+        cited = out.split("CONTENIDO YA CARGADO")[1]
+        assert "T013" not in cited

@@ -85,6 +85,7 @@ from orchestration.bulk_planner import (
     split_into_batches,
 )
 from orchestration.execute_bootstrap import (
+    _EVIDENCE_EXT_PATTERN,
     _collect_cited_paths,
     build_paste_correction_suffix,
     detect_bulk_file_count,
@@ -311,9 +312,10 @@ _AMBIGUOUS_EXECUTE_RE = re.compile(
 # Extensions considered when extracting concrete file targets from a prior
 # analysis so the chained EXECUTE read them directly.
 # Extensions considered when extracting concrete file targets from a prior
-# analysis so the chained EXECUTE read them directly.
+# analysis so the chained EXECUTE read them directly. Patrón compartido
+# (vale para todos los lenguajes populares + infra/config/docs).
 _TARGET_FILE_RE = re.compile(
-    r"([\w.\-/]+\.(?:tsx?|jsx?|go|py|ts|js|tf|json|prisma|sql))\b"
+    rf"([\w.\-/]+\.(?:{_EVIDENCE_EXT_PATTERN}))\b"
 )
 
 
@@ -340,9 +342,10 @@ def _extract_target_files(analysis: str) -> list[str]:
 # Incluye infra/config/docs: .tf (Terraform), .json (tasks.json), .prisma,
 # .sql, yaml, .md — los veredictos reales citan esas extensiones también
 # (T005/T006: "infra/iam.tf:27" no contaba como evidencia → alarma ⚠️ falsa
-# en el cierre; T001-docs: "doc.md:12" tampoco).
+# en el cierre; T001-docs: "doc.md:12" tampoco). Patrón compartido: vale
+# para php/java/rust/swift/dart/etc. igual que para ts/py/go.
 _GROUNDED_EVIDENCE_RE = re.compile(
-    r"[\w.\-/]+\.(?:tsx?|jsx?|go|py|ts|js|tf|json|prisma|sql|ya?ml|md):\d+"
+    rf"[\w.\-/]+\.(?:{_EVIDENCE_EXT_PATTERN}):\d+"
 )
 _CODE_BLOCK_RE = re.compile(r"```")
 
@@ -1595,7 +1598,7 @@ class Session:
         # ("infra/iam.tf línea 28"). Anti-fantasma: se valida en DISCO — un
         # path inventado no cuenta (mismo criterio que find_unverifiable_cites).
         root = Path(self.repo_path)
-        for m in re.finditer(r"[\w.\-/]+\.(?:tsx?|jsx?|go|py|ts|tf|json|prisma|md)\b", text or ""):
+        for m in re.finditer(rf"[\w.\-/]+\.(?:{_EVIDENCE_EXT_PATTERN})\b", text or ""):
             cand = m.group(0)
             p = Path(cand) if Path(cand).is_absolute() else root / cand
             if p.is_file():

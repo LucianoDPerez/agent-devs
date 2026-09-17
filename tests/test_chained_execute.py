@@ -172,3 +172,19 @@ def test_selfcontained_false_for_error_without_code():
 
 def test_selfcontained_false_for_short_message():
     assert _is_selfcontained_analysis("analizá esto") is False
+
+
+def test_response_evidence_true_for_all_popular_languages():
+    """El cierre reconoce citas en php/java/rust/etc. (antes solo ts/py/go)."""
+    assert _response_has_evidence("ver en src/UserController.php:42 el bug") is True
+    assert _response_has_evidence("mirar src/main.rs:10 y App.java:5") is True
+    assert _response_has_evidence("está en lib/parser.rb:7") is True
+    assert _response_has_evidence("revisar assets/app.css:3") is True
+    assert _response_has_evidence("el deploy.sh:20 falla") is True
+    assert _response_has_evidence("creo que arr[0:2] anda") is False
+    assert _response_has_evidence("a las 12:30 pasó") is False
+
+
+def test_grounded_true_for_infra_languages():
+    assert _has_grounded_evidence("El bug está en src/Controller.php:65") is True
+    assert _has_grounded_evidence("Ver app/Services/Billing.java:120") is True

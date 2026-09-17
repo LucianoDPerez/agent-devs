@@ -15,6 +15,18 @@ _CODE_EXTENSIONS: set[str] = {
     ".java", ".kt", ".php", ".rb", ".rs", ".cs",
 }
 
+# Extensiones para evidencia/alcance: lenguajes populares + infra/config/docs.
+# UNA sola fuente (antes cada regex tenía su propia lista y faltaban php,
+# java, rust, etc. según el archivo que miraras). Se usa en _SCOPE_FILE_RE
+# (alcance pinnado) y la importa session.py (citas de evidencia, targets).
+_EVIDENCE_EXT_PATTERN = (
+    r"ts|tsx|js|jsx|mjs|cjs|mts|cts|py|pyi|go|vue|svelte|"
+    r"java|kt|kts|php|rb|rs|cs|swift|dart|c|h|cc|cpp|hpp|hxx|"
+    r"css|scss|less|sass|html|htm|sh|bash|zsh|ps1|r|scala|sc|"
+    r"ex|exs|erl|pl|pm|lua|m|mm|graphql|gql|proto|"
+    r"tf|prisma|sql|json|yaml|yml|toml|md"
+)
+
 # Paths absolutos a archivos de texto/tareas citados en el prompt del usuario
 _ABS_FILE_RE = re.compile(
     r"(/(?:[\w.-]+/)+[\w.-]+\.(?:md|txt|json|yml|yaml))",
@@ -197,9 +209,10 @@ def filter_json_task_sections(raw: str, task_numbers: list[int]) -> str:
 
 
 # Archivos de código/infra mencionados en el texto de una tarea (para el
-# alcance pinnado: lo que la tarea cita es lo que se puede tocar).
+# alcance pinnado: lo que la tarea cita es lo que se puede tocar). Usa el
+# patrón compartido de extensiones (vale para php/java/rust/etc.).
 _SCOPE_FILE_RE = re.compile(
-    r"([\w.\-/]+?\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|vue|svelte|java|kt|php|rb|rs|cs|tf|prisma|sql))\b",
+    rf"([\w.\-/]+?\.(?:{_EVIDENCE_EXT_PATTERN}))\b",
 )
 
 
@@ -232,6 +245,76 @@ def pinned_task_scope_files(user_input: str, repo_path: str | None) -> set[str]:
             raw = filter_json_task_sections(raw, nums)
         scope |= extract_scope_files(raw)
     return scope
+
+
+def _json_entry_checklist_line(entry: dict) -> str:
+    """Una línea de checklist para una entrada de tasks.json: id + título +
+    archivo + verify + dependencias + estado. Compacta a propósito (~100-200
+    chars): es la brújula de 'de qué va la tarea', el detalle vive en el
+    JSON pinnado ya cargado arriba."""
+    bits = [str(entry.get("id", "?"))]
+    title = str(entry.get("title") or entry.get("titulo") or "").strip()
+    if title:
+        bits.append(title[:120])
+    for key in ("file", "archivo"):
+        if entry.get(key):
+            bits.append(f"archivo: {entry[key]}")
+            break
+    for key in ("verify", "acceptance", "rubrica", "criterios"):
+        if entry.get(key):
+            bits.append(f"verify: {str(entry[key])[:160]}")
+            break
+    deps = entry.get("depends_on")
+    if deps:
+        bits.append(f"depende de: {deps}")
+    if entry.get("status"):
+        bits.append(f"[{entry['status']}]")
+    return " — ".join(bits)
+
+
+def format_json_checklist(raw_filtered: str, max_chars: int = 1500) -> str:
+    """Checklist compacto de un tasks.json (ya filtrado al pin si lo hay).
+
+    Los .md sacan checklist de checkboxes; los .json no tenían nada (el
+    banner decía '+ checklist AC' igual). Esto lo vuelve honesto por ~1k
+    chars: id + título + archivo + verify por tarea pinnada.
+    Fail-open: formato desconocido → "".
+    """
+    import json
+
+    try:
+        data = json.loads(raw_filtered)
+    except (json.JSONDecodeError, ValueError):
+        return ""
+    entries: list[dict] = []
+    if isinstance(data, dict):
+        for val in data.values():
+            if isinstance(val, list) and val and all(isinstance(e, dict) for e in val):
+                entries = val
+                break
+        else:
+            if data.get("id"):
+                entries = [data]
+    elif isinstance(data, list):
+        entries = [e for e in data if isinstance(e, dict)]
+    if not entries:
+        return ""
+    lines: list[str] = []
+    total = 0
+    for entry in entries[:12]:
+        line = "- [ ] " + _json_entry_checklist_line(entry)
+        if total + len(line) > max_chars:
+            break
+        lines.append(line)
+        total += len(line)
+    if not lines:
+        return ""
+    return (
+        "\n\nCHECKLIST DE TAREAS (qué hacer, en orden — al terminar cada una, "
+        "marcala DONE con status-flip y seguí con la siguiente):\n"
+        + "\n".join(lines)
+        + "\n"
+    )
 
 
 def extract_checklist_items(content: str) -> list[str]:
@@ -1071,6 +1154,12 @@ def _build_preload_parts(
 
         if p.suffix.lower() == ".md":
             all_checklist.extend(extract_checklist_items(raw))
+        elif p.suffix.lower() == ".json":
+            # raw acá ya viene filtrado al pin (ver arriba): el checklist
+            # resume las entradas pinnadas sin repetir el JSON completo.
+            json_block = format_json_checklist(raw)
+            if json_block:
+                parts.append(json_block)
 
         chunk = raw if len(raw) <= budget else raw[:budget] + "\n… (truncated)"
         budget -= len(chunk)
