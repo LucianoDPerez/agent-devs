@@ -351,6 +351,15 @@ def _run_verify(path: str, action: str) -> str:
         return error
 
     root = Path(path)
+    # Sin stack verificable (docs/infra puros): NO es un fallo, es N/A.
+    # Antes devolvía el mensaje crudo ("Could not detect...") y la batería lo
+    # contaba como [FAILED] → cierre en rojo en tareas de documentación
+    # (E2E T001: ADR en .md → "FALLÓ, no commitear" siendo todo correcto).
+    if _detect_stack(root) is None:
+        return (
+            f"[SKIPPED] {action}: sin stack verificable en {root} "
+            "(docs/infra) — no aplica lint/tests/build"
+        )
     command = _resolve_command(root, action)
     if isinstance(command, str):
         return command
@@ -421,25 +430,44 @@ def run_verify(path: str) -> str:
     error = _validate_cwd(path)
     if error:
         return error
-    parts: list[tuple[str, bool, str]] = []
+    # True = pasó, False = falló, None = N/A (sin stack: docs/infra).
+    parts: list[tuple[str, bool | None, str]] = []
     details: list[str] = []
     for action in ("lint", "test", "build"):
         out = _run_verify(path, action)
-        ok = out.startswith("[PASSED]")
+        if out.startswith("[PASSED]"):
+            ok: bool | None = True
+        elif out.startswith("[SKIPPED]"):
+            ok = None
+        else:
+            ok = False
         first = out.splitlines()[0][:120] if out else "(sin salida)"
         parts.append((action, ok, first))
-        if not ok:
+        if ok is False:
             tail = out[-3000:] if len(out) > 3000 else out
             details.append(f"--- {action} FAILED (tail) ---\n{tail}")
-    passed = all(ok for _, ok, _ in parts)
+    marks = {
+        True: "✅",
+        False: "❌",
+        None: "⏭️",
+    }
     report = "\n".join(
-        f"  {'✅' if ok else '❌'} {name}: {first}" for name, ok, first in parts
+        f"  {marks[ok]} {name}: {first}" for name, ok, first in parts
     )
-    header = "[PASSED] batería completa verde" if passed else "[FAILED] batería con rojos"
+    states = {ok for _, ok, _ in parts}
+    if states == {True}:
+        header = "[PASSED] batería completa verde"
+    elif states == {None}:
+        header = (
+            "[SKIPPED] batería no aplicable: sin stack verificable "
+            f"en {path} (docs/infra) — vale verificación documental con citas"
+        )
+    else:
+        header = "[FAILED] batería con rojos"
     body = f"{header}\n{report}"
     if details:
         body += "\n\n" + "\n\n".join(details)
-    else:
+    elif states == {True}:
         body += "\n(3/3 verdes — no repitas la batería sin haber editado nada)"
     return body
 

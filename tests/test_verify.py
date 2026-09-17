@@ -226,7 +226,8 @@ class TestRunVerifyTools:
     def test_unknown_stack_message(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = run_tests.invoke({"path": tmp})
-            assert "Could not detect project type" in result
+            assert result.startswith("[SKIPPED]")
+            assert "sin stack verificable" in result
 
     @patch("tools.verify._run_command")
     def test_run_tests_invokes_pytest(self, mock_run):
@@ -471,3 +472,24 @@ def test_run_verify_registered_as_verify_tool():
     assert "run_verify" in VERIFY_TOOL_NAMES
     assert "run_verify" in [t.name for t in EXECUTOR_TOOLS]
     assert "run_verify" in [t.name for t in REVIEWER_TOOLS]
+
+
+def test_run_verify_skipped_sin_stack(tmp_path):
+    """Docs/infra sin stack: batería [SKIPPED], no [FAILED] (T001: ADR .md
+    cerraba en rojo siendo todo correcto)."""
+    from tools import verify as v
+
+    out = v.run_verify.invoke({"path": str(tmp_path)})
+    assert out.startswith("[SKIPPED]")
+    assert "⏭️ lint" in out and "⏭️ test" in out and "⏭️ build" in out
+
+
+def test_run_verify_mixto_no_esconde_rojos(tmp_path):
+    """Un rojo entre skips sigue siendo [FAILED] con detalle."""
+    from unittest.mock import patch
+
+    from tools import verify as v
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+    with patch.object(v, "_run_command", return_value="[FAILED] exit=1\nF"):
+        out = v._run_verify(str(tmp_path), "test")
+    assert out.startswith("[FAILED]")

@@ -318,3 +318,67 @@ def test_tool_call_log_interfaz_set():
     assert "git_status" not in log and log.counts == {"read_file": 2}
     log.clear()
     assert log.counts == {} and len(log) == 0
+
+
+def test_verify_skipped_solo_da_none(tmp_path):
+    """T001-docs: solo SKIPPED → verify_state None (N/A), no True ni False."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools = {"run_verify"}
+    s._verify_results = {"run_verify": None}
+    assert s._verify_all_passed() is None
+    assert s._verify_all_skipped() is True
+
+
+def test_verify_mixto_true_y_skipped_da_true(tmp_path):
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools = {"run_lint", "run_verify"}
+    s._verify_results = {"run_lint": True, "run_verify": None}
+    assert s._verify_all_passed() is True
+    assert s._verify_all_skipped() is False
+
+
+def test_verify_mixto_false_y_skipped_da_false(tmp_path):
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools = {"run_lint", "run_verify"}
+    s._verify_results = {"run_lint": False, "run_verify": None}
+    assert s._verify_all_passed() is False
+
+
+def test_close_skipped_muestra_na(tmp_path):
+    """Cierre docs-only: 'Verificación: N/A', sin alarma FALLÓ ni evidencia."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    (repo / "doc.md").write_text("# x\n", encoding="utf-8")
+    s = Session(llm=None, repo_path=str(repo))
+    s._turn_start_dirty = frozenset()
+    s._called_tools = {"run_verify", "read_file"}
+    s._verify_results = {"run_verify": None}
+    s._last_response = "ADR-040 creado, ver doc.md:12 ✅"
+    close = s._deterministic_close()
+    assert "Verificación: N/A" in close
+    assert "FALLÓ" not in close
+    assert "Evidencia: ⚠️" not in close
+
+
+def test_close_snapshot_none_sin_claim(tmp_path):
+    """Snapshot fallido (None): se lista todo SIN 'en este turno'."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    (repo / "a.ts").write_text("x\n", encoding="utf-8")
+    s = Session(llm=None, repo_path=str(repo))
+    s._turn_start_dirty = None
+    s._called_tools = {"edit_file"}
+    close = s._deterministic_close()
+    assert "en este turno" not in close
+    assert "a.ts" in close

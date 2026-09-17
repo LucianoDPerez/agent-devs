@@ -628,15 +628,18 @@ def _record_verify_result(
         return
     if not isinstance(result, str):
         return
-    # Solo veredictos reales: [PASSED]→True, [FAILED]→False. Los mensajes de
-    # validación (path inválido, "No 'build' script") NO se registran: no son
-    # un fallo de verificación sino un mal uso de la tool (E2E T005: run_lint
-    # sobre un ARCHIVO → 'is not a directory' envenenó el cierre con "FALLÓ"
+    # Solo veredictos reales: [PASSED]→True, [FAILED]→False, [SKIPPED]→None
+    # (sin stack: docs/infra — N/A, no fallo). Los mensajes de validación
+    # (path inválido, "No 'build' script") NO se registran: no son un fallo
+    # de verificación sino un mal uso de la tool (E2E T005: run_lint sobre
+    # un ARCHIVO → 'is not a directory' envenenó el cierre con "FALLÓ"
     # mientras los tests estaban verdes).
     if result.startswith("[PASSED]"):
         tool_call_results[eff] = True
     elif result.startswith("[FAILED]"):
         tool_call_results[eff] = False
+    elif result.startswith("[SKIPPED]"):
+        tool_call_results[eff] = None
 
 
 def wrap_tools_with_dedupe(
@@ -1178,10 +1181,11 @@ def _wrap_one(
         # Mal uso de verify (mensaje de validación, sin veredicto): no cuenta
         # como verificación del turno (T005: run_lint sobre un archivo
         # envenenó el cierre). Se descarta del logger y de los resultados.
+        # [SKIPPED] (docs/infra sin stack) SÍ queda logueado: es un veredicto N/A.
         _bad_verify_call = (
             _effective_verify_name(name, kwargs) is not None
             and isinstance(result, str)
-            and not result.startswith(("[PASSED]", "[FAILED]"))
+            and not result.startswith(("[PASSED]", "[FAILED]", "[SKIPPED]"))
         )
         if _bad_verify_call and tool_call_logger is not None:
             tool_call_logger.discard(name)
@@ -1307,7 +1311,7 @@ def _wrap_one(
         _bad_verify_call_a = (
             _effective_verify_name(name, kwargs) is not None
             and isinstance(result, str)
-            and not result.startswith(("[PASSED]", "[FAILED]"))
+            and not result.startswith(("[PASSED]", "[FAILED]", "[SKIPPED]"))
         )
         if _bad_verify_call_a and tool_call_logger is not None:
             tool_call_logger.discard(name)

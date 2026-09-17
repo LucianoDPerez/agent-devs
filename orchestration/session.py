@@ -337,11 +337,12 @@ def _extract_target_files(analysis: str) -> list[str]:
 # Un análisis sin esto es opinión, no diagnóstico — encadenarlo con explore=0
 # obliga al executor a escribir desde una alucinación (E2E Medicos: el analyzer
 # inventó "useDashboard no existe" y el "implementa" posterior lo perpetuó).
-# Incluye infra/config: .tf (Terraform), .json (tasks.json), .prisma, .sql,
-# yaml — los veredictos reales citan esas extensiones también (T005/T006:
-# "infra/iam.tf:27" no contaba como evidencia → alarma ⚠️ falsa en el cierre).
+# Incluye infra/config/docs: .tf (Terraform), .json (tasks.json), .prisma,
+# .sql, yaml, .md — los veredictos reales citan esas extensiones también
+# (T005/T006: "infra/iam.tf:27" no contaba como evidencia → alarma ⚠️ falsa
+# en el cierre; T001-docs: "doc.md:12" tampoco).
 _GROUNDED_EVIDENCE_RE = re.compile(
-    r"[\w.\-/]+\.(?:tsx?|jsx?|go|py|ts|js|tf|json|prisma|sql|ya?ml):\d+"
+    r"[\w.\-/]+\.(?:tsx?|jsx?|go|py|ts|js|tf|json|prisma|sql|ya?ml|md):\d+"
 )
 _CODE_BLOCK_RE = re.compile(r"```")
 
@@ -647,11 +648,12 @@ Resumen:"""
 
 
 def run_commit_verification(
-    repo_path: str, reuse: dict[str, bool] | None = None
+    repo_path: str, reuse: dict[str, bool | None] | None = None
 ) -> tuple[bool, str]:
     """Batería lint/tests/build para el gate de commit y /verify.
 
-    Retorna (pasó_todo, reporte_corto). Solo `[PASSED]` explícito cuenta;
+    Retorna (pasó_todo, reporte_corto). `[PASSED]` cuenta como verde y
+    `[SKIPPED]` (repo sin stack: docs puros) como N/A que NO bloquea;
     cualquier fallo, timeout o tool ausente → False. Fail-open ante errores
     del propio harness (nunca raisea).
 
@@ -680,7 +682,8 @@ def run_commit_verification(
             out = str(fn.invoke({"path": repo_path}))
         except Exception as e:
             out = f"[FAILED] {type(e).__name__}: {e}"
-        ok = out.startswith("[PASSED]")
+        # SKIPPED (sin stack: docs/infra) vale como ok-neutral: no bloquea.
+        ok = out.startswith("[PASSED]") or out.startswith("[SKIPPED]")
         first = out.splitlines()[0][:120] if out else "(sin salida)"
         results.append((name, ok, first))
     passed = all(ok for _, ok, _ in results)
@@ -784,7 +787,8 @@ class Session:
         # cuenta escrituras fuera del alcance en dedupe.scope_violations.
         self._scope_nums: list[int] = []
         # Snapshot del dirty tree al inicio del turno (cierre honesto).
-        self._turn_start_dirty: frozenset[str] = frozenset()
+        # None = snapshot fallido (sin claim de atribución).
+        self._turn_start_dirty: frozenset[str] | None = frozenset()
         # Tarea bulk detectada (≥ EXECUTE_BULK_MIN_FILES archivos): escala
         # budgets de EXECUTE y permite lecturas en el retry (0) para releer
         # los archivos que faltan.
@@ -1617,18 +1621,31 @@ class Session:
         turno extra de verificación aunque el modelo YA había verificado."""
         return bool(self._called_tools & VERIFY_TOOL_NAMES)
 
+    def _verify_all_skipped(self) -> bool:
+        """True si el turno solo corrió verifies N/A (docs/infra sin stack)."""
+        called = self._called_tools & VERIFY_TOOL_NAMES
+        if not called:
+            return False
+        known = {k: v for k, v in self._verify_results.items() if k in called}
+        return bool(known) and all(v is None for v in known.values())
+
     def _verify_all_passed(self) -> bool | None:
         """Estado de la verificación del turno: True si corrió ≥1 verify tool
         y TODAS pasaron (`[PASSED]`); False si alguna falló; None si no corrió
-        ninguna. Sin resultados registrados (tests que setean el set a mano)
-        se conserva la semántica vieja: llamado = verificado."""
+        ninguna o solo hubo N/A (`[SKIPPED]`: docs/infra sin stack).
+        Sin resultados registrados (tests que setean el set a mano) se
+        conserva la semántica vieja: llamado = verificado."""
         called = self._called_tools & VERIFY_TOOL_NAMES
         if not called:
             return None
         known = {k: v for k, v in self._verify_results.items() if k in called}
         if not known:
             return True  # compat: sin registro de resultados
-        return all(known.values())
+        if any(v is False for v in known.values()):
+            return False
+        if any(v is True for v in known.values()):
+            return True
+        return None  # solo SKIPPED: se verificó pero no aplicaba
 
     def _changed_files(self) -> list[str]:
         """Archivos realmente modificados en el working tree (git, determinístico).
@@ -1642,6 +1659,18 @@ class Session:
         src/shared/utils/slug.ts). Sin este filtro el reporte contaba 6
         archivos cuando la sesión solo tocó 2.
         """
+        porcelain = self._porcelain_lines()
+        if porcelain is None:
+            return []
+        return self._filter_porcelain(porcelain)
+
+    def _porcelain_lines(self) -> list[str] | None:
+        """Líneas crudas de git status --porcelain, o None si git falló.
+
+        Tri-state a propósito: [] = árbol limpio, None = DESCONOCIDO (timeout,
+        repo roto). El snapshot del turno necesita distinguirlos: con []
+        fallido, el cierre atribuiría al turno archivos que ya estaban sucios.
+        """
         try:
             import subprocess
             proc = subprocess.run(
@@ -1653,7 +1682,19 @@ class Session:
                 cwd=self.repo_path, capture_output=True, text=True, timeout=5,
             )
             if proc.returncode != 0:
-                return []
+                return None
+            return proc.stdout.splitlines()
+        except Exception:
+            return None
+
+    @staticmethod
+    @staticmethod
+    def _filter_porcelain(lines: list[str]) -> list[str]:
+        """Filtra líneas porcelain a paths modificados (sin artefactos).
+
+        Fail-open: cualquier error devuelve [] (no rompe el turno).
+        """
+        try:
             # Prefijos de artefactos que nunca deben contarse como "modificados
             # por la tarea" — son basura untracked de benchmarks o dirs
             # protegidos. Se filtra solo para ?? (untracked); los tracked se
@@ -1679,7 +1720,7 @@ class Session:
                 "src/shared/utils/slug.ts",
             })
             files = []
-            for ln in proc.stdout.splitlines():
+            for ln in lines:
                 if len(ln) < 4:
                     continue
                 status = ln[:2]
@@ -1718,11 +1759,17 @@ class Session:
         # tasks.json sin commitear...). Atribuirlos a ESTE turno mentía
         # (E2E T006: "1 archivo modificado" en un turno de solo verificación,
         # era el tasks.json del turno ANTERIOR).
+        # _turn_start_dirty None = snapshot fallido (git con timeout): NO se
+        # puede atribuir → se lista todo SIN el claim "en este turno".
         try:
-            pre_dirty = frozenset(getattr(self, "_turn_start_dirty", frozenset()) or ())
+            _snap = getattr(self, "_turn_start_dirty", frozenset())
+            unknown_start = _snap is None
+            pre_dirty = frozenset(_snap or ())
         except Exception:
+            unknown_start = True
             pre_dirty = frozenset()
-        own_files = [f for f in files if f not in pre_dirty]
+        own_files = files if unknown_start else [f for f in files if f not in pre_dirty]
+        turn_suffix = "" if unknown_start else " en este turno"
         scope_line = ""
         try:
             _viol = getattr(self._dedupe, "scope_violations", None) or {}
@@ -1736,7 +1783,7 @@ class Session:
         except Exception:
             scope_line = ""
         if own_files:
-            head = f"✅ Tarea realizada: {len(own_files)} archivo(s) modificado(s) en este turno"
+            head = f"✅ Tarea realizada: {len(own_files)} archivo(s) modificado(s){turn_suffix}"
             detail = "   · " + "\n   · ".join(own_files[:8])
             if len(own_files) > 8:
                 detail += f"\n   · …y {len(own_files) - 8} más"
@@ -1747,17 +1794,23 @@ class Session:
                     "   Verificación: ⚠️ FALLÓ o quedó incompleta "
                     "(ver output arriba) — no commitear sin revisar"
                 )
+            elif self._verify_all_skipped():
+                verify_line = (
+                    "   Verificación: N/A — sin stack compilable (docs/infra); "
+                    "vale la verificación documental con citas"
+                )
             else:
                 verify_line = "   Verificación: no se corrió (podés pedirla con 'revisá los cambios')"
             evidence_line = ""
-            if verify_state is not True or not _response_has_evidence(self._last_response):
+            has_ev = _response_has_evidence(self._last_response)
+            if not ((verify_state is True or self._verify_all_skipped()) and has_ev):
                 evidence_line = (
                     "\n   Evidencia: ⚠️ la respuesta no cita archivo:línea ni "
                     "verificación exitosa — VERIFICAR CON EVIDENCIA ANTES DE "
                     "CONFIRMAR (revisá el diff antes de commitear)"
                 )
             return f"{head}\n{detail}\n{verify_line}{evidence_line}{scope_line}"
-        if pre_dirty:
+        if pre_dirty and not unknown_start:
             head = "↻ Este turno NO modificó archivos propios"
             detail = (
                 f"   · {len(pre_dirty)} modificación(es) previa(s) en el árbol, "
@@ -1768,6 +1821,8 @@ class Session:
                 verify_line = "   Verificación: lint/tests/build ✅"
             elif verify_state is False:
                 verify_line = "   Verificación: ⚠️ FALLÓ (ver output arriba)"
+            elif self._verify_all_skipped():
+                verify_line = "   Verificación: N/A — sin stack compilable (docs/infra)"
             else:
                 verify_line = "   Verificación: no se corrió"
             return f"{head}\n{detail}\n{verify_line}{scope_line}"
@@ -2414,8 +2469,13 @@ class Session:
         # Foto del dirty tree AL INICIAR el turno: el cierre atribuye a la
         # tarea SOLO lo que cambió desde acá (T006: tasks.json del turno
         # anterior aparecía como "1 archivo modificado" en un turno de solo
-        # verificación).
-        self._turn_start_dirty = frozenset(self._changed_files())
+        # verificación). Tri-state: None si git falló → el cierre NO hace
+        # claim de atribución (lista todo sin "en este turno").
+        _snap_lines = self._porcelain_lines()
+        self._turn_start_dirty = (
+            None if _snap_lines is None
+            else frozenset(self._filter_porcelain(_snap_lines))
+        )
 
         reset_turn_usage()
         start = time.monotonic()

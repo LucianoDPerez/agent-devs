@@ -6,6 +6,10 @@ from core.intents import Intent
 
 _EXECUTE_VERBS = [
     "implementá", "implementa", "implement", "implementar",
+    # Typos frecuentes del verbo (E2E real: "implemenar T002 ahora" cayó en
+    # ANALYZE y el turno no escribió). Tokens exactos: "implementada/o"
+    # (participio) sigue sin matchear.
+    "implemenar", "implmentar", "inplementar", "implemetar",
     "escribí", "escribi", "escribe código", "escribí código",
     "codeá", "codea",
     "creá un archivo", "crea un archivo",
