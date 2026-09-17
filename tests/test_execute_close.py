@@ -428,3 +428,99 @@ def test_closing_verdict_excerpt_trunca_y_vacio():
     largo = "x" * 2000
     out = _closing_verdict_excerpt(largo)
     assert len(out) < len(largo) and out.endswith("…")
+
+
+def test_snapshot_preserva_verify_entre_reintentos(tmp_path):
+    """Regresión T006: run_verify ✅ + clear del retry → el cierre recuerda
+    que la verificación corrió (antes afirmaba 'SIN verificación')."""
+    repo = _init_repo(tmp_path)
+    s = _make_session(repo)
+    s._called_tools = {"apply_patch", "run_verify"}
+    s._verify_results = {"run_verify": True}
+    s._snapshot_turn_verify()
+    s._called_tools.clear()  # lo que hace _enter_budget_retry
+    s._verify_results.clear()
+    assert s._turn_verify_tools == {"run_verify"}
+    assert s._verify_all_passed() is True
+
+
+def test_snapshot_writes_despues_de_pass_no_bendicen(tmp_path):
+    """Verify stale no vale: PASSED acumulado + escrituras posteriores sin
+    verificar → el cierre NO anuncia ✅."""
+    repo = _init_repo(tmp_path)
+    s = _make_session(repo)
+    s._called_tools = {"run_verify"}
+    s._verify_results = {"run_verify": True}
+    s._snapshot_turn_verify()
+    s._called_tools = {"edit_file"}
+    s._verify_results = {}
+    s._snapshot_turn_verify()
+    s._called_tools.clear()
+    s._verify_results.clear()
+    assert s._verify_all_passed() is None
+
+
+def test_snapshot_failed_acumulado_contamina_cierre(tmp_path):
+    """Un FAILED acumulado (aunque el intento actual esté limpio) → False."""
+    repo = _init_repo(tmp_path)
+    s = _make_session(repo)
+    s._called_tools = {"run_tests"}
+    s._verify_results = {"run_tests": False}
+    s._snapshot_turn_verify()
+    s._called_tools.clear()
+    s._verify_results.clear()
+    assert s._verify_all_passed() is False
+
+
+def test_failed_close_con_verify_acumulado_no_dice_sin_verificacion(tmp_path):
+    """Regresión T006: flip done + verify ✅ en intento previo + cola fallida
+    → el cierre dice que la verificación CORRIÓ, sin aviso de flip."""
+    repo = _init_repo(tmp_path)
+    tasks_dir = repo / ".agent" / "tasks" / "ulab-1"
+    tasks_dir.mkdir(parents=True)
+    (tasks_dir / "tasks.json").write_text(
+        '[{"id": "T006", "status": "done"}]', encoding="utf-8",
+    )
+    s = _make_session(repo)
+    s._called_tools = {"apply_patch", "run_verify"}
+    s._verify_results = {"run_verify": True}
+    s._snapshot_turn_verify()
+    s._called_tools.clear()  # retries posteriores
+    s._verify_results.clear()
+    msg = s._failed_turn_close()
+    assert "CORRIÓ" in msg
+    assert "SIN verificación" not in msg
+
+
+def test_note_verify_result_guarda_rojos_y_limpia_en_verde(tmp_path):
+    """Los rojos de /verify persisten en la sesión; el verde los limpia."""
+    from orchestration.session import Session
+
+    s = Session(llm=None, repo_path=str(tmp_path))
+    assert s._last_verify is None
+    s.note_verify_result(False, "  ❌ tests: [FAILED] exit=1")
+    assert s._last_verify == {"passed": False, "report": "  ❌ tests: [FAILED] exit=1"}
+    s.note_verify_result(True, "todo verde")
+    assert s._last_verify is None
+
+
+def test_pop_failed_verify_consume_una_vez(tmp_path):
+    """El turno vago retoma los rojos una sola vez (no nag eterno)."""
+    from orchestration.session import Session
+
+    s = Session(llm=None, repo_path=str(tmp_path))
+    assert s._pop_failed_verify() == ""
+    s.note_verify_result(False, "  ❌ tests: [FAILED] exit=1")
+    assert s._pop_failed_verify() == "  ❌ tests: [FAILED] exit=1"
+    assert s._pop_failed_verify() == ""
+    assert s._last_verify is None
+
+
+def test_failed_verify_suffix_ordena_no_repetir_bateria():
+    """El sufijo inyectado trae el reporte y prohíbe repetir la batería."""
+    from orchestration.session import _build_failed_verify_suffix
+
+    out = _build_failed_verify_suffix("  ❌ tests: [FAILED] exit=1")
+    assert "❌ tests" in out
+    assert "batería completa" in out
+    assert "done sin verde" in out

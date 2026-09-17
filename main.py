@@ -346,6 +346,7 @@ def run_fullscreen(session) -> None:
                 session.repo_path, reuse=getattr(session, "_verify_results", None)
             )
             console.print(report)
+            session.note_verify_result(passed, report)
             console.print(
                 "[green]✅ Todo verde.[/green]" if passed
                 else "[yellow]⛔ Hay rojos arriba — corregilos antes de commitear.[/yellow]"
@@ -793,6 +794,7 @@ def main():
                     session.repo_path, reuse=getattr(session, "_verify_results", None)
                 )
                 console.print(report + "\n")
+                session.note_verify_result(passed, report)
                 console.print(
                     "[green]✅ Todo verde.[/green]\n" if passed
                     else "[yellow]⛔ Hay rojos arriba — corregilos antes de commitear.[/yellow]\n"

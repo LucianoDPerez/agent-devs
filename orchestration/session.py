@@ -635,6 +635,26 @@ def _build_chained_execute_suffix(task: str, target_files: list[str] | None = No
         )
 
 
+def _build_failed_verify_suffix(report: str) -> str:
+    """Sufijo EXECUTE con los rojos de la última verificación guardada.
+
+    El turno vago ("implementar", "arreglalo") retoma ESTOS fallos en vez de
+    re-ejecutar la batería a ciegas o encadenar un éxito viejo del historial
+    (E2E: /verify con tests ❌ → "implementar" retomaba el "T006 ✅" porque
+    los rojos se habían evaporado). Prohíbe repetir la batería completa sin
+    un fix previo: el detalle fino sale del área en rojo, no de otra batería.
+    """
+    return (
+        "\n\n⚠️ ÚLTIMA VERIFICACIÓN CON ROJOS (resultado guardado, NO "
+        "re-ejecutés la batería completa todavía):\n"
+        f"{report}\n"
+        "Empezá por ESTOS fallos: 1) corré la tool del área en rojo para ver "
+        "los archivos exactos (p. ej. run_tests si fallan tests), 2) leé el "
+        "archivo que falla y corregí la causa raíz, 3) recién después volvé a "
+        "correr la batería. NO marques tasks como done sin verde."
+    )
+
+
 def _git_branch(repo_path: str) -> str:
     try:
         result = subprocess.run(
@@ -781,6 +801,24 @@ class Session:
         # run_build en raíz rota contó como verificado). Solo `[PASSED]`
         # explícito cuenta como pasado.
         self._verify_results: dict[str, bool] = {}
+        # Memoria ACUMULADA de verify del turno (los reintentos limpian
+        # _called_tools/_verify_results: sin esto el cierre "olvida" que la
+        # verificación CORRIÓ — E2E T006: run_verify ✅ + flip y el cierre
+        # fallido posterior afirmaba "SIN verificación"). La COMPUERTA sigue
+        # usando el estado del intento actual (verify stale no vale).
+        self._turn_verify_tools: set[str] = set()
+        self._turn_verify_results: dict[str, bool | None] = {}
+        self._turn_wrote = False
+        self._turn_saw_pass = False
+        self._turn_verify_failed = False
+        self._turn_writes_after_pass = False
+        # Última verificación corrida FUERA del turno (/verify o gate de
+        # commit): {"passed": bool, "report": str} o None. Los rojos no se
+        # evaporan entre turnos (E2E: /verify con tests ❌ y el "implementar"
+        # siguiente arrancaba ciego y re-ejecutaba la batería). Vive a nivel
+        # SESIÓN: no se limpia por turno ni por /new (describe el repo, no el
+        # turno). Verde → None (rojos resueltos). Se consume una sola vez.
+        self._last_verify: dict | None = None
         # Resultado del diagnóstico de runtime del turno actual (True=entorno
         # sano, False=hallazgos, None=no se ejecutó). Lo usa _closing_message
         # para concluir "probablemente ya está resuelto" cuando corresponde.
@@ -1278,7 +1316,9 @@ class Session:
         devuelve messages_for_agent para el siguiente intento.
 
         _called_tools.clear(): la compuerta final debe exigir verify en ESTE
-        intento — no dejar pasar verify stale del intento anterior.
+        intento — no dejar pasar verify stale del intento anterior. El CIERRE
+        usa la memoria acumulada (_snapshot_turn_verify), así que no olvida
+        que la verificación corrió.
 
         FAIL-CLOSED por rol: este retry otorga edit_file/write_file. Si llega
         acá un rol que nunca escribe (REVIEW/CHAT/...) es un bug de ruteo del
@@ -1292,6 +1332,7 @@ class Session:
         self._trim_for_retry()
         self._messages.append(HumanMessage(self._retry_with_read_anchor()))
         messages_for_agent = list(self._messages)
+        self._snapshot_turn_verify()
         self._called_tools.clear()
         self._verify_results.clear()
         self._dedupe.reset()
@@ -1653,6 +1694,64 @@ class Session:
         except Exception:
             return True, ""
 
+    def _snapshot_turn_verify(self) -> None:
+        """Acumula el estado de verify del intento que termina en la memoria
+        del turno (los reintentos limpian _called_tools/_verify_results).
+
+        Sin esto el cierre "olvida" que la verificación CORRIÓ (E2E T006:
+        run_verify ✅ + flip, y el cierre fallido posterior afirmaba "SIN
+        verificación"). La COMPUERTA sigue exigiendo verify en el intento
+        actual (verify stale no vale para seguir escribiendo).
+        """
+        try:
+            called = self._called_tools & VERIFY_TOOL_NAMES
+            wrote = bool(self._called_tools & WRITE_TOOL_NAMES)
+        except Exception:
+            return
+        if wrote:
+            self._turn_wrote = True
+            if self._turn_saw_pass:
+                self._turn_writes_after_pass = True
+        verify_here = {
+            k: v for k, v in self._verify_results.items() if k in called
+        }
+        if not verify_here:
+            return
+        self._turn_verify_tools |= set(verify_here)
+        self._turn_verify_results.update(verify_here)
+        if any(v is True for v in verify_here.values()):
+            self._turn_saw_pass = True
+        if any(v is False for v in verify_here.values()):
+            self._turn_verify_failed = True
+
+    def note_verify_result(self, passed: bool, report: str) -> None:
+        """Guarda el resultado de una verificación corrida FUERA del turno
+        (/verify o gate de commit) para que el próximo turno vago lo retome.
+        Verde → limpia (los rojos quedaron resueltos). Fail-open: nunca raisea.
+        """
+        try:
+            if passed:
+                self._last_verify = None
+            else:
+                self._last_verify = {
+                    "passed": False,
+                    "report": (report or "")[:1500],
+                }
+        except Exception:
+            pass
+
+    def _pop_failed_verify(self) -> str:
+        """Reporte de la última verificación con rojos, una sola vez (consume).
+        Sin rojos guardados → ""."""
+        try:
+            last = self._last_verify
+            self._last_verify = None
+        except Exception:
+            return ""
+        if not last or last.get("passed", True):
+            return ""
+        return str(last.get("report") or "")
+
     def _verify_tools_called(self, messages: list | None = None) -> bool:
         """True si run_lint, run_tests o run_build fue llamado en el turno actual.
 
@@ -1666,28 +1765,43 @@ class Session:
     def _verify_all_skipped(self) -> bool:
         """True si el turno solo corrió verifies N/A (docs/infra sin stack)."""
         called = self._called_tools & VERIFY_TOOL_NAMES
-        if not called:
+        if called:
+            known = {k: v for k, v in self._verify_results.items() if k in called}
+            if known:
+                return all(v is None for v in known.values())
             return False
-        known = {k: v for k, v in self._verify_results.items() if k in called}
-        return bool(known) and all(v is None for v in known.values())
+        if not self._turn_verify_tools:
+            return False
+        return all(v is None for v in self._turn_verify_results.values())
 
     def _verify_all_passed(self) -> bool | None:
         """Estado de la verificación del turno: True si corrió ≥1 verify tool
         y TODAS pasaron (`[PASSED]`); False si alguna falló; None si no corrió
         ninguna o solo hubo N/A (`[SKIPPED]`: docs/infra sin stack).
         Sin resultados registrados (tests que setean el set a mano) se
-        conserva la semántica vieja: llamado = verificado."""
+        conserva la semántica vieja: llamado = verificado.
+        Sin verify en el intento actual, consulta la memoria acumulada del
+        turno (los reintentos limpian el estado del intento). Un PASSED
+        acumulado solo vale si no hubo escrituras después (verify stale no
+        bendice código nuevo); un FAILED acumulado sí contamina el cierre.
+        """
         called = self._called_tools & VERIFY_TOOL_NAMES
-        if not called:
-            return None
-        known = {k: v for k, v in self._verify_results.items() if k in called}
-        if not known:
-            return True  # compat: sin registro de resultados
-        if any(v is False for v in known.values()):
-            return False
-        if any(v is True for v in known.values()):
+        if called:
+            known = {k: v for k, v in self._verify_results.items() if k in called}
+            if not known:
+                return True  # compat: sin registro de resultados
+            if any(v is False for v in known.values()):
+                return False
+            if any(v is True for v in known.values()):
+                return True
+            return None  # solo SKIPPED: se verificó pero no aplicaba
+        if self._turn_saw_pass and not self._turn_writes_after_pass:
             return True
-        return None  # solo SKIPPED: se verificó pero no aplicaba
+        if self._turn_verify_failed or any(
+            v is False for v in self._turn_verify_results.values()
+        ):
+            return False
+        return None
 
     def _changed_files(self) -> list[str]:
         """Archivos realmente modificados en el working tree (git, determinístico).
@@ -1894,6 +2008,16 @@ class Session:
                 f"{gate_err}\n"
                 "[dim]Revisá y corregí el archivo señalado ANTES de commitear.[/dim]\n"
             )
+        # La verificación CORRIÓ en el turno pero el cierre falló (E2E T006:
+        # run_verify ✅ + flip, y la cola del turno divagó hasta agotar
+        # intentos). Decirlo explícito en vez del genérico "sin verificación"
+        # que contradecía el trabajo hecho. No se ofrece commit igual.
+        if self._verify_all_passed() is True:
+            return (
+                "\n[dim]⚠️ El turno no cerró limpio, pero la verificación "
+                "CORRIÓ en este turno (lint/tests/build ✅). Revisá el diff "
+                "antes de commitear — no se ofrece commit automático.[/dim]"
+            )
         if not self._changed_files() and self._repo_has_recent_commit():
             return (
                 "\n[dim]✅ Turno completado (cambios ya commiteados — el cierre "
@@ -1904,12 +2028,12 @@ class Session:
             "commit. Revisá los cambios antes de commitearlos.[/dim]"
         )
         # Flip de planning sin verificación: si el turno marcó tareas como
-        # done (tasks.json) pero NUNCA corrió verify, el archivo afirma algo
-        # sin respaldo — decirlo explícito para que no se dé por hecho
-        # (E2E T004: tasks.json en done con turno fallido sin lint/tests/
-        # build). Con verify corrido (aunque sea SKIPPED de docs) no hay
-        # nada que avisar. Solo informa, nunca bloquea.
-        if not (self._called_tools & VERIFY_TOOL_NAMES):
+        # done (tasks.json) pero NUNCA corrió verify —ni en este intento ni
+        # en anteriores del turno—, el archivo afirma algo sin respaldo.
+        # Decirlo explícito para que no se dé por hecho (E2E T004).
+        # Con verify corrido (aunque sea SKIPPED de docs) no hay nada que
+        # avisar. Solo informa, nunca bloquea.
+        if not (self._called_tools & VERIFY_TOOL_NAMES) and not self._turn_verify_tools:
             flips = [f for f in self._changed_files() if _is_planning_file(f)]
             if flips:
                 msg += (
@@ -1947,6 +2071,7 @@ class Session:
             console.print(
                 "[yellow]⛔ Verificación en rojo — NO commiteo. Corregí arriba o usá /verify.[/yellow]"
             )
+            self.note_verify_result(passed, report)
             return
         _code, status = self._git_cmd(["status", "--porcelain"])
         if not status.strip():
@@ -2108,6 +2233,7 @@ class Session:
                 "[yellow]⛔ Verificación en rojo — NO commiteo. Corregí lo de "
                 "arriba y volvé a pedir el commit (o usá /verify cuando quieras).[/yellow]"
             )
+            self.note_verify_result(passed, report)
             return
 
         try:
@@ -2271,6 +2397,12 @@ class Session:
         self._analyze_budget.reset()
         self._called_tools.clear()
         self._verify_results.clear()
+        self._turn_verify_tools = set()
+        self._turn_verify_results = {}
+        self._turn_wrote = False
+        self._turn_saw_pass = False
+        self._turn_verify_failed = False
+        self._turn_writes_after_pass = False
         # Alcance pinnado por tarea (breaker de scope creep): se recalcula
         # abajo para EXECUTE con Tarea(s) pinnada(s). Los retries del turno
         # reutilizan el mismo dedupe → el contador persiste en el turno.
@@ -2429,7 +2561,15 @@ class Session:
                 console.print("[dim]🔗 Corrección post-review — explore=0, force write.[/dim]\n")
             # Retomar análisis previo: "implementa" / "arreglá" sin tarea explícita
             elif _is_ambiguous_execute(user_input, self.repo_path):
-                task = _derive_task_from_history(self._messages)
+                # Rojos frescos mandan sobre el historial (E2E: /verify con
+                # tests ❌ y luego "implementar" encadenaba el ÉXITO viejo
+                # porque los rojos se evaporaban entre turnos). Se consumen
+                # una sola vez; verde en un turno los limpia (ver cierre).
+                reds = self._pop_failed_verify()
+                task = None if reds else _derive_task_from_history(self._messages)
+                if reds:
+                    agent_input = user_input + _build_failed_verify_suffix(reds)
+                    console.print("[dim]🔗 Retomando rojos de la última verificación (sin re-ejecutar la batería).[/dim]\n")
                 if task:
                     targets = _extract_target_files(task)
                     if _has_grounded_evidence(task) and targets:
@@ -2900,6 +3040,7 @@ class Session:
                     )
                     break
                 verify_injections += 1
+                self._snapshot_turn_verify()
                 self._called_tools.clear()
                 self._verify_results.clear()
                 self._inject_verify_gate()
@@ -2942,8 +3083,24 @@ class Session:
                 # pedir aprobación). El 4B a veces no sabe cerrar el turno y
                 # sigue llamando tools (git_status/lint) hasta agotar el
                 # budget; re-escribir es destructivo y duplica el trabajo.
+                # PERO sin verify en el intento, cerrar directo deja un éxito
+                # sin respaldo (E2E T005: "Tarea realizada" con
+                # "Verificación: no se corrió"). Una sola inyección de la
+                # compuerta antes de cerrar — acotada por gate_retries.
                 # El cierre determinístico lo imprime el bloque post-turno.
                 if self._called_tools & WRITE_TOOL_NAMES:
+                    if (
+                        gate_retries < POST_WRITE_GATE_MAX_RETRIES
+                        and not self._verify_tools_called()
+                    ):
+                        gate_retries += 1
+                        self._inject_verify_gate()
+                        messages_for_agent = list(self._messages)
+                        console.print(
+                            "\n[dim]↻ Verificando los cambios "
+                            "(lint/tests/build)…[/dim]\n"
+                        )
+                        continue
                     self._last_response = self._deterministic_close()
                     break
                 messages_for_agent = self._enter_budget_retry(
@@ -3038,6 +3195,27 @@ class Session:
                         break
                     retry_msg = "Reintentando con lectura acotada + escritura…"
                 else:
+                    # Éxito ya verificado: el modelo divaga pensando tras
+                    # terminar (E2E T006: 3×150s de thinking post-éxito con
+                    # retries que terminaron en un cierre fallido que
+                    # contradecía el trabajo hecho). Reintentar pensar no
+                    # aporta nada: cerrar con el resumen determinístico.
+                    # Vale con evidencia del intento actual o acumulada del
+                    # turno (los reintentos limpian el estado del intento).
+                    if (
+                        new_role == Role.EXECUTE
+                        and (
+                            bool(self._called_tools & WRITE_TOOL_NAMES)
+                            or self._turn_wrote
+                        )
+                        and self._verify_all_passed() is True
+                    ):
+                        console.print(
+                            "\n[dim]✅ Trabajo verificado — el modelo seguía "
+                            "razonando sin actuar: cerrando sin reintentar.[/dim]"
+                        )
+                        self._last_response = self._deterministic_close()
+                        break
                     retry_msg = (
                         f"El modelo gastó {len(e.reasoning_text)} chars razonando. "
                         "Reintentando con lectura acotada + escritura…"
@@ -3102,6 +3280,7 @@ class Session:
                         "delete_file NO está disponible)."
                     ))
                     messages_for_agent = list(self._messages)
+                    self._snapshot_turn_verify()
                     self._called_tools.clear()
                     self._verify_results.clear()
                     self._dedupe.reset()
@@ -3239,6 +3418,8 @@ class Session:
         # del LLM — el sistema verifica, el modelo narra.
         if new_role == Role.EXECUTE and not interrupted and not turn_failed:
             console.print(f"\n[dim]{self._deterministic_close()}[/dim]")
+            if self._verify_all_passed() is True:
+                self._last_verify = None  # verde en el turno: rojos resueltos
         _bulk_more_pending = (
             _bulk_chain is not None
             and next_pending_batch(_bulk_chain[0]) is not None
