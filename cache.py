@@ -54,6 +54,17 @@ CREATE TABLE IF NOT EXISTS bulk_subtasks (
     UNIQUE(task_hash, seq)
 );
 CREATE INDEX IF NOT EXISTS idx_bulk_subtasks_hash ON bulk_subtasks(task_hash);
+
+-- Estado vivo del repo entre sesiones: últimos rojos de verificación + ancla
+-- de la lista de tareas. Sin esto un restart/pull (/verify → "implementar")
+-- arrancaba ciego porque todo vivía en memoria del proceso.
+CREATE TABLE IF NOT EXISTS repo_state (
+    path TEXT PRIMARY KEY,
+    last_verify_json TEXT,
+    last_tasks_file TEXT,
+    snapshot_hash TEXT,
+    updated_at TEXT
+);
 """
 
 
@@ -451,3 +462,69 @@ def bulk_progress(task_hash: str) -> dict:
         "pending": sum(1 for s in statuses if s == "pending"),
         "in_progress": sum(1 for s in statuses if s == "in_progress"),
     }
+
+
+def save_repo_state(repo_path: str, *, last_verify: dict | None,
+                    last_tasks_file: str | None, snapshot: str = "") -> None:
+    """Upsert del estado vivo del repo (rojos + ancla de tasks). Fail-open."""
+    try:
+        conn = _connect()
+        now = _now()
+        conn.execute(
+            """
+            INSERT INTO repo_state (path, last_verify_json, last_tasks_file, snapshot_hash, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(path) DO UPDATE SET
+                last_verify_json = excluded.last_verify_json,
+                last_tasks_file = excluded.last_tasks_file,
+                snapshot_hash = excluded.snapshot_hash,
+                updated_at = excluded.updated_at
+            """,
+            (
+                normalize_path(repo_path),
+                json.dumps(last_verify) if last_verify else None,
+                last_tasks_file,
+                snapshot or "",
+                now,
+            ),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def load_repo_state(repo_path: str) -> dict:
+    """{"last_verify": dict|None, "last_tasks_file": str|None}.
+
+    Los rojos solo valen si el árbol no cambió desde que se guardaron
+    (snapshot_hash); el ancla de tasks vale si el archivo sigue existiendo.
+    Fail-open: {} ante cualquier duda.
+    """
+    try:
+        conn = _connect()
+        row = conn.execute(
+            "SELECT last_verify_json, last_tasks_file, snapshot_hash "
+            "FROM repo_state WHERE path = ?",
+            (normalize_path(repo_path),),
+        ).fetchone()
+        conn.close()
+    except Exception:
+        return {}
+    if not row:
+        return {}
+    out: dict = {}
+    tasks = row["last_tasks_file"]
+    if tasks and Path(tasks).is_file():
+        out["last_tasks_file"] = tasks
+    raw = row["last_verify_json"]
+    if raw:
+        try:
+            saved_snapshot = row["snapshot_hash"] or ""
+            if not saved_snapshot or saved_snapshot == snapshot_hash(repo_path):
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict) and parsed.get("passed") is False:
+                    out["last_verify"] = parsed
+        except Exception:
+            pass
+    return out

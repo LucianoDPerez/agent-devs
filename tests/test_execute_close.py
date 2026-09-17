@@ -492,11 +492,14 @@ def test_failed_close_con_verify_acumulado_no_dice_sin_verificacion(tmp_path):
     assert "SIN verificación" not in msg
 
 
-def test_note_verify_result_guarda_rojos_y_limpia_en_verde(tmp_path):
+def test_note_verify_result_guarda_rojos_y_limpia_en_verde(tmp_path, monkeypatch):
     """Los rojos de /verify persisten en la sesión; el verde los limpia."""
+    import cache as cache_mod
     from orchestration.session import Session
 
-    s = Session(llm=None, repo_path=str(tmp_path))
+    monkeypatch.setattr(cache_mod, "CACHE_DB", str(tmp_path / "t.db"))
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
     assert s._last_verify is None
     s.note_verify_result(False, "  ❌ tests: [FAILED] exit=1")
     assert s._last_verify == {
@@ -508,10 +511,12 @@ def test_note_verify_result_guarda_rojos_y_limpia_en_verde(tmp_path):
     assert s._last_verify is None
 
 
-def test_pop_failed_verify_consume_una_vez(tmp_path):
+def test_pop_failed_verify_consume_una_vez(tmp_path, monkeypatch):
     """El turno vago retoma los rojos una sola vez (no nag eterno)."""
+    import cache as cache_mod
     from orchestration.session import Session
 
+    monkeypatch.setattr(cache_mod, "CACHE_DB", str(tmp_path / "t.db"))
     s = Session(llm=None, repo_path=str(tmp_path))
     assert s._pop_failed_verify() == ""
     s.note_verify_result(False, "  ❌ tests: [FAILED] exit=1")
@@ -528,12 +533,15 @@ def test_failed_verify_suffix_ordena_no_repetir_bateria():
     assert "❌ tests" in out
     assert "batería completa" in out
     assert "done sin verde" in out
+    assert "CONEXIÓN" in out
 
 
-def test_note_verify_result_guarda_details(tmp_path):
+def test_note_verify_result_guarda_details(tmp_path, monkeypatch):
     """Los rojos se guardan con detalle (cola) para el turno siguiente."""
+    import cache as cache_mod
     from orchestration.session import Session
 
+    monkeypatch.setattr(cache_mod, "CACHE_DB", str(tmp_path / "t.db"))
     s = Session(llm=None, repo_path=str(tmp_path))
     s.note_verify_result(False, "rep", {"tests": "tail con sample_fail_test"})
     assert s._last_verify is not None
@@ -554,6 +562,28 @@ def test_suffix_con_details_va_directo_a_archivos():
     )
     assert "DIRECTO" in out
     assert "sample_fail_test" in out
+    assert "CONEXIÓN" in out
+
+
+def test_session_hidrata_rojos_y_ancla_desde_disco(tmp_path, monkeypatch):
+    """Restart/pull no evaporan: Session nueva levanta rojos + ancla."""
+    import cache as cache_mod
+    from orchestration.session import Session
+
+    monkeypatch.setattr(cache_mod, "CACHE_DB", str(tmp_path / "t.db"))
+    repo = _init_repo(tmp_path)
+    tasks = repo / "tasks.json"
+    tasks.write_text("[]", encoding="utf-8")
+    snap = cache_mod.snapshot_hash(str(repo))
+    cache_mod.save_repo_state(
+        str(repo),
+        last_verify={"passed": False, "report": "R", "details": "D"},
+        last_tasks_file=str(tasks),
+        snapshot=snap,
+    )
+    s = Session(llm=None, repo_path=str(repo))
+    assert s._last_verify == {"passed": False, "report": "R", "details": "D"}
+    assert s._last_tasks_file == str(tasks)
 
 
 def test_has_verdict_markers():

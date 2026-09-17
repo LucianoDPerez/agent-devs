@@ -142,3 +142,45 @@ class TestDeterministicSummary:
         out = deterministic_summary(str(tmp_path), "go", "go")
         assert "go" in out
         assert len(out) >= 20
+
+
+class TestRepoState:
+    """Rojos + ancla sobreviven restart/pull (E2E turno rojo: sesión fresca
+    sin '🔗 Retomando rojos' porque todo vivía en memoria)."""
+
+    def test_roundtrip_rojos_y_ancla(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cache_mod, "CACHE_DB", str(tmp_path / "t.db"))
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        tasks = proj / "tasks.json"
+        tasks.write_text("[]", encoding="utf-8")
+        snap = cache_mod.snapshot_hash(str(proj))
+        cache_mod.save_repo_state(
+            str(proj),
+            last_verify={"passed": False, "report": "R", "details": "D"},
+            last_tasks_file=str(tasks),
+            snapshot=snap,
+        )
+        loaded = cache_mod.load_repo_state(str(proj))
+        assert loaded["last_verify"] == {"passed": False, "report": "R", "details": "D"}
+        assert loaded["last_tasks_file"] == str(tasks)
+
+    def test_snapshot_viejo_descarta_rojos_pero_no_ancla(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cache_mod, "CACHE_DB", str(tmp_path / "t.db"))
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        tasks = proj / "tasks.json"
+        tasks.write_text("[]", encoding="utf-8")
+        cache_mod.save_repo_state(
+            str(proj),
+            last_verify={"passed": False, "report": "R", "details": "D"},
+            last_tasks_file=str(tasks),
+            snapshot="muertomuerto000000",
+        )
+        loaded = cache_mod.load_repo_state(str(proj))
+        assert "last_verify" not in loaded
+        assert loaded["last_tasks_file"] == str(tasks)
+
+    def test_sin_fila_da_vacio(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cache_mod, "CACHE_DB", str(tmp_path / "t.db"))
+        assert cache_mod.load_repo_state(str(tmp_path / "nada")) == {}

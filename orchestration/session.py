@@ -682,19 +682,26 @@ def _build_failed_verify_suffix(report: str, details: str = "") -> str:
         f"{report}\n"
     )
     if (details or "").strip():
-        return head + (
+        steps = (
             "Detalle guardado (cola de la salida — archivos que fallan):\n"
             f"{details[:2000]}\n"
             "Atacá DIRECTO esos archivos (ya tenés el detalle, no ejecutes "
             "nada antes de tener un fix): 1) leé el archivo que falla y "
             "corregí la causa raíz, 2) recién después volvé a correr la "
-            "batería. NO marques tasks como done sin verde."
+            "batería."
         )
-    return head + (
-        "Empezá por ESTOS fallos: 1) corré la tool del área en rojo para ver "
-        "los archivos exactos (p. ej. run_tests si fallan tests), 2) leé el "
-        "archivo que falla y corregí la causa raíz, 3) recién después volvé a "
-        "correr la batería. NO marques tasks como done sin verde."
+    else:
+        steps = (
+            "Empezá por ESTOS fallos: 1) corré la tool del área en rojo para ver "
+            "los archivos exactos (p. ej. run_tests si fallan tests), 2) leé el "
+            "archivo que falla y corregí la causa raíz, 3) recién después volvé a "
+            "correr la batería."
+        )
+    return head + steps + (
+        " NO marques tasks como done sin verde. Si la cola muestra error de "
+        "CONEXIÓN (DB/servicio caído, ECONNREFUSED, timeout en beforeEach) y no "
+        "un fallo de lógica: es entorno — NO edites código ni tests, "
+        "reportalo como heredado/entorno."
     )
 
 
@@ -889,6 +896,19 @@ class Session:
         # leyó .agent/tasks.json y .agent-devs/tasks.md inexistentes y deliró
         # un T8 de otro repo). Vive a nivel SESIÓN, no se limpia por turno.
         self._last_tasks_file: str | None = None
+        # Hidratación desde disco: un restart/pull entre /verify y el turno
+        # no debe evaporar los rojos ni el ancla (E2E turno rojo: sesión
+        # fresca sin "🔗 Retomando rojos"). Fail-open.
+        try:
+            from cache import load_repo_state
+
+            _st = load_repo_state(self.repo_path)
+            if isinstance(_st.get("last_verify"), dict):
+                self._last_verify = _st["last_verify"]
+            if _st.get("last_tasks_file"):
+                self._last_tasks_file = _st["last_tasks_file"]
+        except Exception:
+            pass
         # Resultado del diagnóstico de runtime del turno actual (True=entorno
         # sano, False=hallazgos, None=no se ejecutó). Lo usa _closing_message
         # para concluir "probablemente ya está resuelto" cuando corresponde.
@@ -1830,6 +1850,7 @@ class Session:
                 }
         except Exception:
             pass
+        self._persist_turn_state()
 
     def _pop_failed_verify_record(self) -> dict:
         """Registro de la última verificación con rojos, una sola vez (consume).
@@ -1842,6 +1863,22 @@ class Session:
         if not last or last.get("passed", True):
             return {}
         return dict(last)
+
+    def _persist_turn_state(self) -> None:
+        """Persiste rojos + ancla en disco (sobreviven restart/pull). Fail-open."""
+        try:
+            from cache import save_repo_state, snapshot_hash
+
+            try:
+                snap = snapshot_hash(self.repo_path)
+            except Exception:
+                snap = ""
+            save_repo_state(
+                self.repo_path, last_verify=self._last_verify,
+                last_tasks_file=self._last_tasks_file, snapshot=snap,
+            )
+        except Exception:
+            pass
 
     def _pop_failed_verify(self) -> str:
         """Reporte de la última verificación con rojos, una sola vez (consume).
@@ -2562,7 +2599,9 @@ class Session:
             try:
                 for _cp in _collect_cited_paths(user_input, self.repo_path):
                     if _is_planning_file(str(_cp)):
-                        self._last_tasks_file = str(_cp)
+                        if self._last_tasks_file != str(_cp):
+                            self._last_tasks_file = str(_cp)
+                            self._persist_turn_state()
                         break
             except Exception:
                 pass
@@ -3201,6 +3240,11 @@ class Session:
                 # sin respaldo (E2E T005: "Tarea realizada" con
                 # "Verificación: no se corrió"). Una sola inyección de la
                 # compuerta antes de cerrar — acotada por gate_retries.
+                # MISMO rebuild que la compuerta post-write: el agente actual
+                # puede ser write-only (retry sin verify tools) y el gate le
+                # pediría tools que no tiene → el modelo alucina "no
+                # disponibles" y loopa (E2E turno rojo: CPA_DONE ×N tras
+                # "Verificando los cambios"). Sin rebuild, mejor cerrar.
                 # El cierre determinístico lo imprime el bloque post-turno.
                 if self._called_tools & WRITE_TOOL_NAMES:
                     if (
@@ -3210,6 +3254,12 @@ class Session:
                         gate_retries += 1
                         self._inject_verify_gate()
                         messages_for_agent = list(self._messages)
+                        self._explore_budget.max_calls = 3
+                        self._explore_budget.max_reads_after_explore = 4
+                        self._explore_budget.max_tools_before_write = 6
+                        self._explore_budget.reset()
+                        self._dedupe.max_repeats = 2
+                        self._rebuild_agent_gate_retry()
                         console.print(
                             "\n[dim]↻ Verificando los cambios "
                             "(lint/tests/build)…[/dim]\n"
