@@ -6,6 +6,7 @@ from pathlib import Path
 from langchain_core.messages import AIMessage, HumanMessage
 
 from orchestration.session import (
+    _CORRECTION_INTENT_RE,
     _build_chained_execute_suffix,
     _derive_task_from_history,
     _extract_target_files,
@@ -45,6 +46,17 @@ def test_is_ambiguous_execute_false_for_concrete_tasks():
 
 def test_is_ambiguous_execute_false_when_long_description():
     assert _is_ambiguous_execute("implementá el endpoint /health con validación") is False
+
+
+def test_correction_intent_cubre_lo_que_ambiguo_no_matchea():
+    """E2E: 'corregir los errores de tests' NO es ambiguo (el regex ambiguo
+    exige boundary tras 'correg[ií]') y re-ejecutaba la batería sin reds.
+    El gate de corrección lo cubre."""
+    assert _CORRECTION_INTENT_RE.search("corregir los errores de tests")
+    assert _is_ambiguous_execute("corregir los errores de tests") is False
+    # Sin pin de tarea ni paths: implement sigue siendo ambiguo (su rama)
+    assert _CORRECTION_INTENT_RE.search("implementar T007") is None
+    assert _is_ambiguous_execute("implementa") is True
 
 
 def test_derive_task_from_history_picks_last_ai_message():

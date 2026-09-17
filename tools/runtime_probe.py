@@ -21,6 +21,7 @@ from langchain_core.tools import tool
 # Solo localhost: el agente diagnostica la app local del usuario, nunca URLs
 # arbitrarias (evita exfiltración/SSRF desde un prompt malicioso del repo).
 _LOCALHOST_RE = re.compile(r"^https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::\d+)?(?:/|$)")
+_ALLOWED_TCP_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 _MAX_BODY = 2500
 _MAX_LOG = 4000
 _PORT_RE = re.compile(r"Local:\s+(https?://[^\s]+)")
@@ -70,6 +71,48 @@ def probe_http(url: str, timeout_s: float = 5.0) -> str:
             "¿El server está levantado? Si no, corré el dev server con "
             "capture_dev_server o revisá docker-compose."
         )
+
+
+@tool
+def probe_tcp(host: str = "127.0.0.1", port: int = 5432, timeout_s: float = 3.0) -> str:
+    """Comprueba si un puerto TCP local acepta conexiones (para servicios que
+    NO hablan HTTP: PostgreSQL, Redis...). Solo localhost/127.0.0.1/::1.
+    Uso típico: tests con ECONNREFUSED a PG → probe_tcp("127.0.0.1", 5433).
+    probe_http NO sirve para esto (habla HTTP y PG no responde HTTP)."""
+    import socket as _socket
+
+    host = (host or "").strip()
+    if host not in _ALLOWED_TCP_HOSTS:
+        return f"⛔ probe_tcp SOLO acepta localhost/127.0.0.1/::1 (recibí: {host})."
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        return f"⛔ puerto inválido: {port!r}."
+    if not 1 <= port <= 65535:
+        return f"⛔ puerto inválido: {port}."
+    try:
+        timeout_s = max(1.0, min(float(timeout_s), 10.0))
+    except (TypeError, ValueError):
+        timeout_s = 3.0
+    # "localhost" puede resolver a ::1: probar IPv4 y luego IPv6.
+    candidates = ["127.0.0.1", "::1"] if host == "localhost" else [host]
+    start = time.monotonic()
+    last_err: Exception | None = None
+    for cand in candidates:
+        fam = _socket.AF_INET6 if ":" in cand else _socket.AF_INET
+        try:
+            sock = _socket.socket(fam, _socket.SOCK_STREAM)
+            with sock:
+                sock.settimeout(timeout_s)
+                sock.connect((cand, port))
+            ms = (time.monotonic() - start) * 1000
+            return f"✅ TCP {host}:{port} ABIERTO (vía {cand}, {ms:.0f}ms) — hay algo escuchando."
+        except Exception as e:
+            last_err = e
+    return (
+        f"❌ TCP {host}:{port} CERRADO ({type(last_err).__name__}: {last_err}) — nada escucha ahí. "
+        "Si es PostgreSQL/Redis: levantá el servicio (docker compose up) y reintentá."
+    )
 
 
 @tool

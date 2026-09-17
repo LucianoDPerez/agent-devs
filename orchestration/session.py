@@ -311,6 +311,15 @@ _AMBIGUOUS_EXECUTE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Órdenes de CORRECCIÓN explícita ("corregir los errores de tests"): NO entran
+# a la rama ambigua ("corregir" no da boundary en el regex de arriba) pero los
+# rojos guardados mandan igual — sin esto re-ejecutaban la batería entera sin
+# reds (E2E). No incluye implement/hacer (eso lo cubre la rama ambigua).
+_CORRECTION_INTENT_RE = re.compile(
+    r"\b(correg|arregl|repar|fix|rojos?|fall[ao]s?|error(es)?|rot[oa]s?)\w*",
+    re.IGNORECASE,
+)
+
 # Extensions considered when extracting concrete file targets from a prior
 # analysis so the chained EXECUTE read them directly.
 # Extensions considered when extracting concrete file targets from a prior
@@ -2748,6 +2757,20 @@ class Session:
                             "diagnóstico previo antes de escribir código."
                         )
                         console.print("[dim]🔗 Análisis previo sin evidencia — explore acotado, verificar antes de escribir.[/dim]\n")
+            # Orden de CORRECCIÓN explícita ("corregir los errores de tests"):
+            # no entra a la rama ambigua pero los rojos guardados mandan igual
+            # (E2E: re-ejecutó batería + run_tests sin reds). Una sola vez;
+            # convive con preload pinnado (los números salen de user_input).
+            if not _is_ambiguous_execute(user_input, self.repo_path):
+                _corr = _CORRECTION_INTENT_RE.search(user_input or "")
+                if _corr:
+                    _crec = self._pop_failed_verify_record()
+                    if _crec:
+                        agent_input += _build_failed_verify_suffix(
+                            str(_crec.get("report") or ""),
+                            details=str(_crec.get("details") or ""),
+                        )
+                        console.print("[dim]🔗 Retomando rojos de la última verificación (sin re-ejecutar la batería).[/dim]\n")
         elif new_role == Role.REVIEW:
             agent_input = preload_for_review(user_input, self.repo_path)
             self._dedupe.max_repeats = 1

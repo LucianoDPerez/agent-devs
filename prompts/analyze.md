@@ -49,6 +49,11 @@ REGLAS STRICTAS:
      queries devolvieron vacío: 0 funciones con complexity>=10, 0 TODOs").
      PROHIBIDO responder "no se detectaron problemas" sin enumerar qué
      buscaste y qué devolvió cada query.
+4f. "¿Está arriba X?" (servicio/DB/Docker): `probe_tcp(host, puerto)` en UNA
+    llamada (TCP directo: dice ABIERTO/CERRADO). `probe_http` es solo HTTP —
+    contra PostgreSQL/Redis no demuestra nada. Si cierra: servicio caído,
+    reportá el comando manual exacto (ej: `docker compose up -d postgres`) en
+    vez de seguir explorando. No tenés shell: PROHIBIDO inventar `docker ps`.
 5. El análisis cacheado es CONTEXTO, no evidencia: evitá re-explorar lo ya resumido que no venga al caso, pero si el mensaje actual cita archivos o pide verificar algo, LEÉLOS igual (read_file/trace_component) y verificá contra el código real. El caché NUNCA sustituye una lectura que la tarea actual exige.
 6. Nunca listés directorios completos. Acotá el path (ej: app/api/). PROHIBIDO listar dos veces el mismo árbol (recursive=true ya incluye el plano; el sistema bloquea el redundante): tras 1-2 list_files pasá a read_file/trace_component.
 7. Si una tool dice "does not exist", aceptalo y seguí. No intentes variantes.
