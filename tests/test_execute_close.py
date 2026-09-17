@@ -524,3 +524,68 @@ def test_failed_verify_suffix_ordena_no_repetir_bateria():
     assert "❌ tests" in out
     assert "batería completa" in out
     assert "done sin verde" in out
+
+
+def test_has_verdict_markers():
+    """Conclusión vs plan: participios SÍ, infinitivos/futuro NO."""
+    from orchestration.session import _has_verdict_markers
+
+    assert _has_verdict_markers("T003 ya está implementada, cumple el AC")
+    assert _has_verdict_markers("build en verde, tests passed")
+    assert not _has_verdict_markers("Plan: voy a verificar los tests")
+    assert not _has_verdict_markers("leí tasks.json")
+    assert not _has_verdict_markers(None)
+
+
+def test_readonly_evidence_turn_rechaza_plan_en_futuro(tmp_path):
+    """Regresión turno A: plan en futuro citando tasks.json REAL no es
+    evidencia — debe reintentar, no cerrar hueco."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    (repo / ".agent").mkdir()
+    (repo / ".agent" / "tasks.json").write_text("[]", encoding="utf-8")
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools = {"read_file", "git_status"}
+    plan = (
+        "Plan: (1) leer .agent/tasks.json para confirmar qué subtareas ya "
+        "quedaron implementadas; (2) después completo y verifico."
+    )
+    assert s._readonly_evidence_turn(plan) is False
+
+
+def test_readonly_evidence_turn_acepta_veredicto_con_path_real(tmp_path):
+    """Veredicto en pasado con path real en disco SÍ cierra (sin file:línea)."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    (repo / ".agent").mkdir()
+    (repo / ".agent" / "tasks.json").write_text("[]", encoding="utf-8")
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools = {"read_file", "git_status"}
+    assert s._readonly_evidence_turn(
+        "T005 ya está implementada en .agent/tasks.json, verificado."
+    ) is True
+
+
+def test_tasks_anchor_line(tmp_path):
+    """Ancla contra paths adivinados: nombra el archivo real de la sesión."""
+    from orchestration.session import _tasks_anchor_line
+
+    assert _tasks_anchor_line(None) == ""
+    out = _tasks_anchor_line("/r/.agent/tasks/x/tasks.json")
+    assert ".agent/tasks/x/tasks.json" in out
+    assert "NO adivines" in out
+
+
+def test_close_pre_dirty_avisa_truncado(tmp_path):
+    """6 previas listan 5 + '(+1 más)' en vez de callar el truncado."""
+    repo = _init_repo(tmp_path)
+    for i in range(6):
+        (repo / f"f{i}.txt").write_text("x", encoding="utf-8")
+    s = _make_session(repo)
+    s._turn_start_dirty = frozenset(f"f{i}.txt" for i in range(6))
+    s._called_tools = set()
+    close = s._deterministic_close()
+    assert "(+1 más)" in close
+    assert "NO modificó archivos propios" in close

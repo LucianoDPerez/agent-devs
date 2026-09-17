@@ -351,6 +351,37 @@ _GROUNDED_EVIDENCE_RE = re.compile(
 )
 _CODE_BLOCK_RE = re.compile(r"```")
 
+# Lenguaje de VEREDICTO (conclusión, no plan): solo participios/estados, nunca
+# infinitivos ("verificar", "implementar") ni futuro ("voy a", "haré"). Un
+# path real citado con este lenguaje es evidencia; sin él es un plan
+# (E2E: cierre hueco con 3 planes pegados que citaban tasks.json).
+_VERDICT_MARKERS_RE = re.compile(
+    r"\b(ya\s+(está|estan|están|estaba|estaban|quedó|quedo)|"
+    r"implementad[oa]s?|cumpl(e|en|ido|ida|idos|idas)|verificad[oa]s?|"
+    r"list[oa]s?|terminad[oa]s?|complet[oa]s?|hech[oa]s?|funciona?n?|"
+    r"pas(ó|aron|ado|ada)|en verde|aprobad[oa]s?|correct[oa]s?|"
+    r"done\b|passed\b|works?\b|fixed\b|"
+    r"nada pendiente|sin pendientes|no\s+(falta|faltan|hay pendientes))",
+    re.IGNORECASE,
+)
+
+
+def _has_verdict_markers(text: str | None) -> bool:
+    """True si el texto concluye (no solo planea). Ver _VERDICT_MARKERS_RE."""
+    if not text:
+        return False
+    return bool(_VERDICT_MARKERS_RE.search(text))
+
+
+# Lenguaje de PLAN A FUTURO: anuncia trabajo pendiente. Con cita dura
+# (archivo:línea) no bloquea el cierre (veredicto parcial con respaldo);
+# con evidencia débil sí (todavía no concluyó nada).
+_FUTURE_PLAN_RE = re.compile(
+    r"\b(voy a|vamos a|har[ée]|haremos|plan\s*:|pendientes?|falta|faltan|"
+    r"pr[óo]ximo|despu[ée]s|por hacer|voy a continuar)\b",
+    re.IGNORECASE,
+)
+
 
 def _has_grounded_evidence(task: str) -> bool:
     """True si el análisis previo trae evidencia verificable.
@@ -655,6 +686,19 @@ def _build_failed_verify_suffix(report: str) -> str:
     )
 
 
+def _tasks_anchor_line(tasks_file: str | None) -> str:
+    """Línea de ancla con la lista de tareas de la sesión para turnos vagos.
+    Fail-open: "" sin archivo conocido."""
+    if not tasks_file:
+        return ""
+    return (
+        f"\n\n📌 Lista de tareas de esta sesión: {tasks_file} — leela si "
+        "necesitás el criterio exacto. NO adivines otros paths de tareas "
+        "ni traigas tareas de otro repo: si el path no existe en disco, "
+        "la tarea no existe."
+    )
+
+
 def _git_branch(repo_path: str) -> str:
     try:
         result = subprocess.run(
@@ -819,6 +863,11 @@ class Session:
         # SESIÓN: no se limpia por turno ni por /new (describe el repo, no el
         # turno). Verde → None (rojos resueltos). Se consume una sola vez.
         self._last_verify: dict | None = None
+        # Lista de tareas de la sesión (primer planning citado que exista en
+        # disco). Los turnos vagos la reinyectan como ancla (E2E: turno vago
+        # leyó .agent/tasks.json y .agent-devs/tasks.md inexistentes y deliró
+        # un T8 de otro repo). Vive a nivel SESIÓN, no se limpia por turno.
+        self._last_tasks_file: str | None = None
         # Resultado del diagnóstico de runtime del turno actual (True=entorno
         # sano, False=hallazgos, None=no se ejecutó). Lo usa _closing_message
         # para concluir "probablemente ya está resuelto" cuando corresponde.
@@ -1672,8 +1721,20 @@ class Session:
             productive = self._called_tools & (READISH_TOOL_NAMES | VERIFY_TOOL_NAMES)
             if len(productive) < 2:
                 return False
-        if _response_has_evidence(text):
+        # Cita dura (archivo:línea o bloque de código): veredicto con respaldo.
+        if _GROUNDED_EVIDENCE_RE.search(text or "") or _CODE_BLOCK_RE.search(text or ""):
             return True
+        # Sin lenguaje de veredicto no hay conclusión: "leí tasks.json" o
+        # "tests pendientes" no es evidencia.
+        if not _has_verdict_markers(text):
+            return False
+        # Planea a futuro aunque mencione hallazgos ("voy a continuar",
+        # "después completo", "Plan: (1) leer…"): todavía no concluyó nada
+        # (E2E: cierre hueco con 3 planes pegados que citaban tasks.json y
+        # decían "implementadas" en pasado). La cita dura de arriba sí vale
+        # con planes a futuro (veredicto parcial con respaldo).
+        if _FUTURE_PLAN_RE.search(text or ""):
+            return False
         # Evidencia en español: el veredicto cita un path REAL del repo
         # ("infra/iam.tf línea 28"). Anti-fantasma: se valida en DISCO — un
         # path inventado no cuenta (mismo criterio que find_unverifiable_cites).
@@ -1968,10 +2029,13 @@ class Session:
             return f"{head}\n{detail}\n{verify_line}{evidence_line}{scope_line}"
         if pre_dirty and not unknown_start:
             head = "↻ Este turno NO modificó archivos propios"
+            _shown = sorted(pre_dirty)[:5]
+            _rest = len(pre_dirty) - len(_shown)
             detail = (
                 f"   · {len(pre_dirty)} modificación(es) previa(s) en el árbol, "
                 "sin commitear — no son de este turno: "
-                + ", ".join(sorted(pre_dirty)[:5])
+                + ", ".join(_shown)
+                + (f" (+{_rest} más)" if _rest else "")
             )
             if verify_state is True:
                 verify_line = "   Verificación: lint/tests/build ✅"
@@ -2458,6 +2522,15 @@ class Session:
                     )
             except Exception:
                 pass
+            # Ancla de la lista de tareas: el primer planning citado que
+            # exista en disco queda registrado para los turnos vagos.
+            try:
+                for _cp in _collect_cited_paths(user_input, self.repo_path):
+                    if _is_planning_file(str(_cp)):
+                        self._last_tasks_file = str(_cp)
+                        break
+            except Exception:
+                pass
             # EXECUTE SIEMPRE recibe el mapa del repo (layout + símbolos), haya
             # paths citados o no. Sin esto, el modelo chico está ciego a la
             # estructura (E2E f2: leyó la raíz del repo como archivo 3 veces)
@@ -2570,6 +2643,9 @@ class Session:
                 if reds:
                     agent_input = user_input + _build_failed_verify_suffix(reds)
                     console.print("[dim]🔗 Retomando rojos de la última verificación (sin re-ejecutar la batería).[/dim]\n")
+                _anchor = _tasks_anchor_line(self._last_tasks_file)
+                if _anchor:
+                    agent_input += _anchor
                 if task:
                     targets = _extract_target_files(task)
                     if _has_grounded_evidence(task) and targets:
