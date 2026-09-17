@@ -499,7 +499,11 @@ def test_note_verify_result_guarda_rojos_y_limpia_en_verde(tmp_path):
     s = Session(llm=None, repo_path=str(tmp_path))
     assert s._last_verify is None
     s.note_verify_result(False, "  ❌ tests: [FAILED] exit=1")
-    assert s._last_verify == {"passed": False, "report": "  ❌ tests: [FAILED] exit=1"}
+    assert s._last_verify == {
+        "passed": False,
+        "report": "  ❌ tests: [FAILED] exit=1",
+        "details": "",
+    }
     s.note_verify_result(True, "todo verde")
     assert s._last_verify is None
 
@@ -524,6 +528,32 @@ def test_failed_verify_suffix_ordena_no_repetir_bateria():
     assert "❌ tests" in out
     assert "batería completa" in out
     assert "done sin verde" in out
+
+
+def test_note_verify_result_guarda_details(tmp_path):
+    """Los rojos se guardan con detalle (cola) para el turno siguiente."""
+    from orchestration.session import Session
+
+    s = Session(llm=None, repo_path=str(tmp_path))
+    s.note_verify_result(False, "rep", {"tests": "tail con sample_fail_test"})
+    assert s._last_verify is not None
+    assert s._last_verify["details"] == "--- tests (cola) ---\ntail con sample_fail_test"
+    rec = s._pop_failed_verify_record()
+    assert rec["report"] == "rep"
+    assert "sample_fail_test" in rec["details"]
+    assert s._last_verify is None
+
+
+def test_suffix_con_details_va_directo_a_archivos():
+    """Con detalle guardado, la orden es atacar archivos sin re-ejecutar."""
+    from orchestration.session import _build_failed_verify_suffix
+
+    out = _build_failed_verify_suffix(
+        "  ❌ tests: [FAILED] exit=1",
+        details="--- tests (cola) ---\nF sample_fail_test.py::test_rojo",
+    )
+    assert "DIRECTO" in out
+    assert "sample_fail_test" in out
 
 
 def test_has_verdict_markers():

@@ -342,11 +342,15 @@ def run_fullscreen(session) -> None:
             from orchestration.session import run_commit_verification
 
             console.print("[dim]🔍 Verificando (lint/tests/build)…[/dim]")
+            captured: dict = {}
             passed, report = run_commit_verification(
-                session.repo_path, reuse=getattr(session, "_verify_results", None)
+                session.repo_path, reuse=getattr(session, "_verify_results", None),
+                capture=captured,
             )
             console.print(report)
-            session.note_verify_result(passed, report)
+            for area, tail in captured.get("details", {}).items():
+                console.print(f"[dim]--- {area} (cola) ---[/dim]\n{tail}")
+            session.note_verify_result(passed, report, captured.get("details"))
             console.print(
                 "[green]✅ Todo verde.[/green]" if passed
                 else "[yellow]⛔ Hay rojos arriba — corregilos antes de commitear.[/yellow]"
@@ -790,11 +794,15 @@ def main():
                 from orchestration.session import run_commit_verification
 
                 console.print("[dim]🔍 Verificando (lint/tests/build)…[/dim]")
+                captured: dict = {}
                 passed, report = run_commit_verification(
-                    session.repo_path, reuse=getattr(session, "_verify_results", None)
+                    session.repo_path, reuse=getattr(session, "_verify_results", None),
+                    capture=captured,
                 )
                 console.print(report + "\n")
-                session.note_verify_result(passed, report)
+                for area, tail in captured.get("details", {}).items():
+                    console.print(f"[dim]--- {area} (cola) ---[/dim]\n{tail}\n")
+                session.note_verify_result(passed, report, captured.get("details"))
                 console.print(
                     "[green]✅ Todo verde.[/green]\n" if passed
                     else "[yellow]⛔ Hay rojos arriba — corregilos antes de commitear.[/yellow]\n"

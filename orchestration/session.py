@@ -666,19 +666,31 @@ def _build_chained_execute_suffix(task: str, target_files: list[str] | None = No
         )
 
 
-def _build_failed_verify_suffix(report: str) -> str:
+def _build_failed_verify_suffix(report: str, details: str = "") -> str:
     """Sufijo EXECUTE con los rojos de la última verificación guardada.
 
     El turno vago ("implementar", "arreglalo") retoma ESTOS fallos en vez de
     re-ejecutar la batería a ciegas o encadenar un éxito viejo del historial
     (E2E: /verify con tests ❌ → "implementar" retomaba el "T006 ✅" porque
     los rojos se habían evaporado). Prohíbe repetir la batería completa sin
-    un fix previo: el detalle fino sale del área en rojo, no de otra batería.
+    un fix previo. Con detalle guardado (/verify muestra la cola), el turno
+    va DIRECTO a los archivos sin siquiera correr el área.
     """
-    return (
+    head = (
         "\n\n⚠️ ÚLTIMA VERIFICACIÓN CON ROJOS (resultado guardado, NO "
         "re-ejecutés la batería completa todavía):\n"
         f"{report}\n"
+    )
+    if (details or "").strip():
+        return head + (
+            "Detalle guardado (cola de la salida — archivos que fallan):\n"
+            f"{details[:2000]}\n"
+            "Atacá DIRECTO esos archivos (ya tenés el detalle, no ejecutes "
+            "nada antes de tener un fix): 1) leé el archivo que falla y "
+            "corregí la causa raíz, 2) recién después volvé a correr la "
+            "batería. NO marques tasks como done sin verde."
+        )
+    return head + (
         "Empezá por ESTOS fallos: 1) corré la tool del área en rojo para ver "
         "los archivos exactos (p. ej. run_tests si fallan tests), 2) leé el "
         "archivo que falla y corregí la causa raíz, 3) recién después volvé a "
@@ -754,7 +766,8 @@ Resumen:"""
 
 
 def run_commit_verification(
-    repo_path: str, reuse: dict[str, bool | None] | None = None
+    repo_path: str, reuse: dict[str, bool | None] | None = None,
+    capture: dict | None = None,
 ) -> tuple[bool, str]:
     """Batería lint/tests/build para el gate de commit y /verify.
 
@@ -767,6 +780,11 @@ def run_commit_verification(
     están lint+tests+build en verde (o run_verify verde que los cubre), se
     reusa sin re-ejecutar: evita la 3ª batería del turno (modelo + post-write
     gate + commit gate) que quemaba contexto y tiempo.
+
+    ``capture``: si se pasa un dict, se llena capture["details"] con la cola
+    (últimos 1500 chars) de cada área en rojo — es lo que nombra los archivos
+    que fallan. /verify lo muestra y lo guarda en sesión para que el próximo
+    turno vaya directo a los archivos sin re-correr la batería.
     """
     if reuse:
         trio_ok = all(reuse.get(k) is True for k in ("run_lint", "run_tests", "run_build"))
@@ -792,6 +810,9 @@ def run_commit_verification(
         ok = out.startswith("[PASSED]") or out.startswith("[SKIPPED]")
         first = out.splitlines()[0][:120] if out else "(sin salida)"
         results.append((name, ok, first))
+        if capture is not None and not ok:
+            tail = out[-1500:] if len(out) > 1500 else out
+            capture.setdefault("details", {})[name] = tail
     passed = all(ok for _, ok, _ in results)
     report = "\n".join(
         f"  {'✅' if ok else '❌'} {name}: {first}" for name, ok, first in results
@@ -1785,7 +1806,7 @@ class Session:
         if any(v is False for v in verify_here.values()):
             self._turn_verify_failed = True
 
-    def note_verify_result(self, passed: bool, report: str) -> None:
+    def note_verify_result(self, passed: bool, report: str, details: dict | None = None) -> None:
         """Guarda el resultado de una verificación corrida FUERA del turno
         (/verify o gate de commit) para que el próximo turno vago lo retome.
         Verde → limpia (los rojos quedaron resueltos). Fail-open: nunca raisea.
@@ -1794,24 +1815,38 @@ class Session:
             if passed:
                 self._last_verify = None
             else:
+                det = ""
+                if details:
+                    bits = []
+                    for area, tail in details.items():
+                        tail = str(tail or "")[-1500:]
+                        if tail:
+                            bits.append(f"--- {area} (cola) ---\n{tail}")
+                    det = "\n\n".join(bits)[:2000]
                 self._last_verify = {
                     "passed": False,
                     "report": (report or "")[:1500],
+                    "details": det,
                 }
         except Exception:
             pass
 
-    def _pop_failed_verify(self) -> str:
-        """Reporte de la última verificación con rojos, una sola vez (consume).
-        Sin rojos guardados → ""."""
+    def _pop_failed_verify_record(self) -> dict:
+        """Registro de la última verificación con rojos, una sola vez (consume).
+        Sin rojos guardados → {}."""
         try:
             last = self._last_verify
             self._last_verify = None
         except Exception:
-            return ""
+            return {}
         if not last or last.get("passed", True):
-            return ""
-        return str(last.get("report") or "")
+            return {}
+        return dict(last)
+
+    def _pop_failed_verify(self) -> str:
+        """Reporte de la última verificación con rojos, una sola vez (consume).
+        Sin rojos guardados → ""."""
+        return str(self._pop_failed_verify_record().get("report") or "")
 
     def _verify_tools_called(self, messages: list | None = None) -> bool:
         """True si run_lint, run_tests o run_build fue llamado en el turno actual.
@@ -2638,10 +2673,13 @@ class Session:
                 # tests ❌ y luego "implementar" encadenaba el ÉXITO viejo
                 # porque los rojos se evaporaban entre turnos). Se consumen
                 # una sola vez; verde en un turno los limpia (ver cierre).
-                reds = self._pop_failed_verify()
+                record = self._pop_failed_verify_record()
+                reds = str(record.get("report") or "")
                 task = None if reds else _derive_task_from_history(self._messages)
                 if reds:
-                    agent_input = user_input + _build_failed_verify_suffix(reds)
+                    agent_input = user_input + _build_failed_verify_suffix(
+                        reds, details=str(record.get("details") or "")
+                    )
                     console.print("[dim]🔗 Retomando rojos de la última verificación (sin re-ejecutar la batería).[/dim]\n")
                 _anchor = _tasks_anchor_line(self._last_tasks_file)
                 if _anchor:
