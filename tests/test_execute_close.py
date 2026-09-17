@@ -415,3 +415,16 @@ def test_failed_close_flip_con_verify_no_avisa_extra(tmp_path):
     s._verify_results = {"run_verify": None}  # SKIPPED docs/infra
     msg = s._failed_turn_close()
     assert "SIN verificación" not in msg
+
+
+def test_closing_verdict_excerpt_trunca_y_vacio():
+    """El veredicto impreso al cerrar sin escribir: vacío → '' y largo → corte."""
+    from orchestration.session import _closing_verdict_excerpt
+
+    assert _closing_verdict_excerpt(None) == ""
+    assert _closing_verdict_excerpt("   ") == ""
+    corto = "T005 ya implementada en prisma/schema.prisma:42."
+    assert _closing_verdict_excerpt(corto) == corto
+    largo = "x" * 2000
+    out = _closing_verdict_excerpt(largo)
+    assert len(out) < len(largo) and out.endswith("…")

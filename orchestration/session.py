@@ -455,6 +455,25 @@ def _is_planning_file(path: str) -> bool:
     return bool(parts_lower & PROTECTED_TASK_DIRS)
 
 
+_CLOSING_VERDICT_MAX_CHARS = 800
+
+
+def _closing_verdict_excerpt(text: str | None) -> str:
+    """Extracto del veredicto del modelo para mostrar al cerrar sin escribir.
+
+    El razonamiento del modelo no se muestra en vivo: si el turno cierra
+    sin writes, el usuario debe ver QUÉ concluyó y POR QUÉ no escribió nada
+    (E2E T005: cierre honesto correcto pero opaco — ni la tarea ni los pasos
+    quedaron a la vista). Fail-open: "" si vacío.
+    """
+    clean = (text or "").strip()
+    if not clean:
+        return ""
+    if len(clean) > _CLOSING_VERDICT_MAX_CHARS:
+        clean = clean[:_CLOSING_VERDICT_MAX_CHARS].rstrip() + "…"
+    return clean
+
+
 def _is_ambiguous_execute(user_input: str, repo_path: str | None = None) -> bool:
     """True si el mensaje es un comando EXECUTE vago (sin archivos, sin tarea
     concreta). Caso típico del día a día: "analizá X" → "implementa".
@@ -1847,7 +1866,10 @@ class Session:
             elif self._verify_all_skipped():
                 verify_line = "   Verificación: N/A — sin stack compilable (docs/infra)"
             else:
-                verify_line = "   Verificación: no se corrió"
+                verify_line = (
+                    "   Verificación: no se corrió (sin escrituras propias "
+                    "no había nada que verificar con lint/tests/build)"
+                )
             return f"{head}\n{detail}\n{verify_line}{scope_line}"
         if verify_state is True:
             return "✅ Turno completado (verificación corrida y exitosa, sin cambios en disco)."
@@ -2381,6 +2403,14 @@ class Session:
                     self._explore_budget.max_tools_before_write = 12
                     self._dedupe.max_repeats = 1
                 extra = " · explore=acotado (hints)" if hints_on else ""
+                try:
+                    from orchestration.execute_bootstrap import pinned_task_header
+
+                    _task_header = pinned_task_header(user_input, self.repo_path)
+                except Exception:
+                    _task_header = ""
+                if _task_header:
+                    console.print(f"[bold cyan]{_task_header}[/bold cyan]\n")
                 console.print(
                     f"[dim]📎 Archivos de tareas pre-cargados{scope} "
                     f"+ checklist AC{extra}.[/dim]\n"
@@ -2985,6 +3015,9 @@ class Session:
                             "commiteado o verificado) — cerrando sin "
                             "reintentar.[/dim]"
                         )
+                        _verdict = _closing_verdict_excerpt(self._last_response)
+                        if _verdict:
+                            console.print(f"\n[dim]📋 Veredicto del turno:\n{_verdict}[/dim]")
                         break
                     # Turno ya-implementado con evidencia: el modelo leyó ≥2
                     # archivos/tools y dictaminó "ya cumple el AC" con
@@ -2996,10 +3029,12 @@ class Session:
                     ):
                         self._last_response = e.reasoning_text or ""
                         console.print(
-                            "\n[dim]✅ Turno de verificación con evidencia "
-                            "(0 escrituras necesarias) — cerrando sin "
-                            "reintentar.[/dim]"
+                            "\n[dim]✅ Solo-lectura con evidencia — nada que "
+                            "escribir, cerrando sin reintentar.[/dim]"
                         )
+                        _verdict = _closing_verdict_excerpt(self._last_response)
+                        if _verdict:
+                            console.print(f"\n[dim]📋 Veredicto del turno:\n{_verdict}[/dim]")
                         break
                     retry_msg = "Reintentando con lectura acotada + escritura…"
                 else:

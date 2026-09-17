@@ -15,6 +15,7 @@ from orchestration.execute_bootstrap import (
     filter_task_sections,
     format_done_checklist,
     inject_repo_hints,
+    pinned_task_header,
     pinned_task_scope_files,
     preload_cited_files,
     preload_for_review,
@@ -662,3 +663,52 @@ class TestJsonChecklist:
         # T013 filtrada del pin: ni en el JSON ni en el checklist
         cited = out.split("CONTENIDO YA CARGADO")[1]
         assert "T013" not in cited
+
+
+class TestPinnedTaskHeader:
+    """Encabezado QUÉ hace la tarea (título + criterio) impreso ANTES de
+    actuar. E2E T005: cierre honesto sin writes sin que quedara claro qué
+    pedía la tarea."""
+
+    def _tasks_json(self, tmp_path):
+        import json
+
+        p = tmp_path / "tasks.json"
+        p.write_text(json.dumps({"tasks": [
+            {"id": "T005", "title": "Relación desactivadaCommands en Prisma",
+             "status": "pending",
+             "acceptance": "prisma validate en verde y relación visible",
+             "depends_on": ["T004"]},
+            {"id": "T006", "title": "Otra cosa", "status": "pending"},
+        ]}), encoding="utf-8")
+        return p
+
+    def test_header_muestra_titulo_y_criterio(self, tmp_path):
+        p = self._tasks_json(tmp_path)
+        out = pinned_task_header(f"implementar T005 de {p}",
+                                 repo_path=str(tmp_path))
+        assert "T005" in out
+        assert "Relación desactivadaCommands" in out
+        assert "Criterio:" in out and "prisma validate" in out
+        assert "T006" not in out
+
+    def test_header_id_numerico_y_lista(self, tmp_path):
+        import json
+
+        p = tmp_path / "tasks.json"
+        p.write_text(json.dumps([
+            {"id": 5, "title": "Cinco", "status": "pending"},
+        ]), encoding="utf-8")
+        out = pinned_task_header(f"implementar la tarea 5 de {p}",
+                                 repo_path=str(tmp_path))
+        assert "Cinco" in out
+
+    def test_header_fail_open(self, tmp_path):
+        assert pinned_task_header("implementar algo", repo_path=str(tmp_path)) == ""
+        p = tmp_path / "tasks.json"
+        p.write_text("no-json{{{", encoding="utf-8")
+        assert pinned_task_header(f"implementar T005 de {p}",
+                                  repo_path=str(tmp_path)) == ""
+        p.write_text('{"otro": 1}', encoding="utf-8")
+        assert pinned_task_header(f"implementar T005 de {p}",
+                                  repo_path=str(tmp_path)) == ""

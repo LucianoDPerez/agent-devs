@@ -317,6 +317,81 @@ def format_json_checklist(raw_filtered: str, max_chars: int = 1500) -> str:
     )
 
 
+_PINNED_HEADER_MAX_CHARS = 800
+
+
+def _pinned_entry_header(num: int, entry: dict) -> str:
+    """Una línea de encabezado para una tarea pinnada: id + título + estado
+    + criterio. Mismas claves que _json_entry_checklist_line."""
+    head = str(entry.get("id") or f"T{num}")
+    line = f"📋 {head}"
+    title = str(entry.get("title") or entry.get("titulo") or "").strip()
+    if title:
+        line += f" — {title[:120]}"
+    if entry.get("status"):
+        line += f" [{entry['status']}]"
+    for key in ("verify", "acceptance", "criterios", "rubrica"):
+        if entry.get(key):
+            line += f"\n   Criterio: {str(entry[key])[:220]}"
+            break
+    return line
+
+
+def pinned_task_header(user_input: str, repo_path: str | None) -> str:
+    """Encabezado determinístico QUÉ debe hacer la tarea (título + criterio)
+    para las tareas pinnadas de los tasks.json citados.
+
+    El usuario ve qué se va a ejecutar ANTES de que el modelo actúe (E2E
+    T005: 0 escrituras y cierre honesto sin que quedara claro qué pedía la
+    tarea ni qué pasos seguirían). Fail-open: sin pin, sin json citado o
+    formato desconocido → "".
+    """
+    nums = extract_requested_task_numbers(user_input)
+    if not nums:
+        return ""
+    wanted = set(nums)
+    blocks: list[str] = []
+    total = 0
+    try:
+        import json
+
+        for p in _collect_cited_paths(user_input, repo_path):
+            if p.suffix.lower() != ".json":
+                continue
+            try:
+                data = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+            except (OSError, ValueError):
+                continue
+            entries: list[dict] = []
+            if isinstance(data, dict):
+                for val in data.values():
+                    if (
+                        isinstance(val, list)
+                        and val
+                        and all(isinstance(e, dict) for e in val)
+                    ):
+                        entries = val
+                        break
+                else:
+                    if data.get("id"):
+                        entries = [data]
+            elif isinstance(data, list):
+                entries = [e for e in data if isinstance(e, dict)]
+            for entry in entries:
+                if not _task_id_matches(entry.get("id"), wanted):
+                    continue
+                num_match = re.search(r"(\d+)", str(entry.get("id")))
+                num = int(num_match.group(1)) if num_match else 0
+                block = _pinned_entry_header(num, entry)
+                if total + len(block) > _PINNED_HEADER_MAX_CHARS:
+                    break
+                blocks.append(block)
+                total += len(block)
+    except Exception:
+        return ""
+    return "\n".join(blocks)
+
+
 def extract_checklist_items(content: str) -> list[str]:
     """Extrae ítems `- [ ] ...` de un markdown de tareas."""
     items: list[str] = []

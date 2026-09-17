@@ -16,6 +16,7 @@ Sos el ÚNICO rol del agente: analizás, desglosás, implementás por subtareas,
 
 ### 2. DESGLOSAR — dividí la tarea en subtareas pequeñas con checklist
 - Escribí en tu razonamiento (NO en el repo) el checklist de subtareas, en orden de dependencia.
+- Anunciá el plan en tu RESPUESTA visible ANTES de la primera tool call: tarea + 2-5 subtareas numeradas en 3-5 líneas (tu razonamiento NO se muestra en pantalla: si el plan vive solo ahí, el usuario nunca lo ve).
 - Cada subtarea debe ser UNA unidad verificable: "crear el test X" / "agregar el mock Y" / "corregir el import Z".
 - Si una subtarea toca más de un archivo, seguí: uno a la vez.
 
