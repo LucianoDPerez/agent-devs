@@ -17,7 +17,13 @@ import string
 import pytest
 from langchain_core.messages import AIMessageChunk
 
-from display.console import ReasoningOnlyResponse, stream_agent_turn
+from display.console import (
+    ReasoningOnlyResponse,
+    stream_agent_turn,
+)
+from display.console import (
+    _text_loop_detected as _detect_loop,
+)
 
 
 class _FakeAgent:
@@ -53,15 +59,10 @@ def _run(agent, **kwargs):
     )
 
 
-def _detect_loop(text: str, windows=(64, 128, 256)) -> bool:
-    """Réplica exacta de la lógica de sufijo repetido en stream_agent_turn."""
-    if len(text) < 512:
-        return False
-    for w in windows:
-        window = text[-w:]
-        if text[:-w].count(window) >= 2:
-            return True
-    return False
+# NOTE: _detect_loop ES la función de producción (display.console).
+# Antes era una réplica local que describía un comportamiento más robusto
+# que la implementación real — los tests pasaban y el loop T004 igual
+# llegaba a ×12. Ahora ejercen el código real.
 
 
 def test_detecta_repeticion_real():
@@ -99,6 +100,33 @@ def test_no_detecta_markdown_con_listas():
 def test_texto_corto_no_se_evalua():
     """Menos de 512 chars: sin loop (la respuesta corta es legítima)."""
     assert not _detect_loop("hola " * 20)
+
+
+_T004_BLOQUE = (
+    "T004 está **LISTO**.\n\n"
+    "- El test ya estaba implementado y cubre el payload cerrado, sin PII "
+    "y la idempotencia: `tests/unit/pauta-desactivada-command.test.ts:6`.\n"
+    "- Actualicé únicamente el campo de estado a `\"done\"` en "
+    "`.agent/tasks/ulab-1671-desactivacion-banner-sqs/tasks.json`.\n"
+    "<CPA_DONE>\n"
+)
+
+
+def test_detecta_bloque_listo_cpa_done_no_alineado():
+    """Regresión T004: bloque LISTO + <CPA_DONE> ×4 con largo NO múltiplo
+    de 256. La detección vieja (3 bloques consecutivos de 256 chars
+    idénticos) no lo atrapaba por desalineación → 12 repeticiones hasta
+    el corte de 90s de generación continua."""
+    assert len(_T004_BLOQUE) % 256 != 0
+    assert _detect_loop(_T004_BLOQUE * 4)
+    assert not _detect_loop(_T004_BLOQUE)
+
+
+def test_stream_corta_loop_listo_sin_colgarse():
+    """Integración: el stream corta el loop de cierre en vez de emitirlo ×12."""
+    out = _run(_FakeAgent([_text_chunk(_T004_BLOQUE) for _ in range(12)]))
+    assert "<CPA_DONE>" in out
+    assert len(out) < len(_T004_BLOQUE * 12)
 
 
 # ── require_text (respuesta vacía tras tools) ────────────────────────────────

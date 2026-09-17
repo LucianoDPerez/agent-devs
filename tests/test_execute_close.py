@@ -382,3 +382,36 @@ def test_close_snapshot_none_sin_claim(tmp_path):
     close = s._deterministic_close()
     assert "en este turno" not in close
     assert "a.ts" in close
+
+
+def test_failed_close_flip_done_sin_verify_avisa(tmp_path):
+    """Regresión T004: tasks.json marcado done sin verify corrido → el
+    cierre fallido lo señala explícito (antes quedaba done en silencio)."""
+    repo = _init_repo(tmp_path)
+    tasks_dir = repo / ".agent" / "tasks" / "ulab-1"
+    tasks_dir.mkdir(parents=True)
+    (tasks_dir / "tasks.json").write_text(
+        '[{"id": "T004", "status": "done"}]', encoding="utf-8",
+    )
+    s = _make_session(repo)
+    s._called_tools = {"apply_patch"}
+    msg = s._failed_turn_close()
+    assert "fallido" in msg.lower()
+    assert "SIN verificación" in msg
+    assert "tasks.json" in msg
+
+
+def test_failed_close_flip_con_verify_no_avisa_extra(tmp_path):
+    """Con verify corrido (aunque sea SKIPPED de docs), el aviso extra
+    sobre el flip no aparece: el done tiene respaldo."""
+    repo = _init_repo(tmp_path)
+    tasks_dir = repo / ".agent" / "tasks" / "ulab-1"
+    tasks_dir.mkdir(parents=True)
+    (tasks_dir / "tasks.json").write_text(
+        '[{"id": "T004", "status": "done"}]', encoding="utf-8",
+    )
+    s = _make_session(repo)
+    s._called_tools = {"apply_patch", "run_verify"}
+    s._verify_results = {"run_verify": None}  # SKIPPED docs/infra
+    msg = s._failed_turn_close()
+    assert "SIN verificación" not in msg

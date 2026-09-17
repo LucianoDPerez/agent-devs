@@ -56,6 +56,8 @@ from config import (
     PLAN_MAX_READS_AFTER_EXPLORE,
     POST_WRITE_GATE_ENABLED,
     POST_WRITE_GATE_MAX_RETRIES,
+    PROTECTED_TASK_DIRS,
+    PROTECTED_TASK_FILENAMES,
     REASONING_RETRY_ENABLED,
     REVIEW_EXPLORE_BUDGET,
     REVIEW_MAX_READS_AFTER_EXPLORE,
@@ -433,6 +435,24 @@ def _response_has_evidence(text: str | None) -> bool:
             "build", "tests", "test ",
         )
     )
+
+
+def _is_planning_file(path: str) -> bool:
+    """True si el path es un archivo de planificación (tasks.json de
+    .agent/tasks/, tasks.md, plan.md, …).
+
+    Se usa en el cierre de turno fallido para señalar flips pending→done
+    sin verificación. Mismos criterios que la protección anti-corrupción
+    (config.PROTECTED_*), más tasks.json — el vehículo del flip de status.
+    Solo informa, nunca bloquea (marcar done es flujo legítimo del usuario).
+    """
+    if not path:
+        return False
+    name_lower = Path(path).name.lower()
+    if name_lower in PROTECTED_TASK_FILENAMES or name_lower == "tasks.json":
+        return True
+    parts_lower = {part.lower() for part in Path(path).parts}
+    return bool(parts_lower & PROTECTED_TASK_DIRS)
 
 
 def _is_ambiguous_execute(user_input: str, repo_path: str | None = None) -> bool:
@@ -1857,10 +1877,25 @@ class Session:
                 "\n[dim]✅ Turno completado (cambios ya commiteados — el cierre "
                 "final no tenía nada que verificar).[/dim]"
             )
-        return (
+        msg = (
             "\n[dim]↻ Turno fallido (sin verificación) — no se ofrece "
             "commit. Revisá los cambios antes de commitearlos.[/dim]"
         )
+        # Flip de planning sin verificación: si el turno marcó tareas como
+        # done (tasks.json) pero NUNCA corrió verify, el archivo afirma algo
+        # sin respaldo — decirlo explícito para que no se dé por hecho
+        # (E2E T004: tasks.json en done con turno fallido sin lint/tests/
+        # build). Con verify corrido (aunque sea SKIPPED de docs) no hay
+        # nada que avisar. Solo informa, nunca bloquea.
+        if not (self._called_tools & VERIFY_TOOL_NAMES):
+            flips = [f for f in self._changed_files() if _is_planning_file(f)]
+            if flips:
+                msg += (
+                    "\n[dim]⚠️ " + ", ".join(flips[:5]) + ": marcado(s) como "
+                    "done SIN verificación corrida — no dar la tarea por "
+                    "hecha hasta verificar.[/dim]"
+                )
+        return msg
 
     def _git_cmd(self, args: list[str], timeout: int = 30) -> tuple[int, str]:
         """Ejecuta git en el repo del turno (para slash commands sin LLM)."""

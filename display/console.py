@@ -71,6 +71,33 @@ class ToolCallLimitExceeded(ReasoningOnlyResponse):
         )
 
 
+# Ventanas y largo mínimo para la detección de loop de texto (ver
+# _text_loop_detected). Umbrales validados en tests/test_stream_loop.py:
+# prosa aleatoria y listas markdown con items distintos jamás disparan.
+_TEXT_LOOP_WINDOWS = (64, 128, 256)
+_TEXT_LOOP_MIN_LEN = 512
+
+
+def _text_loop_detected(text: str) -> bool:
+    """True si el final de `text` repite un bloque ya emitido (loop del modelo).
+
+    El 4B a veces no emite EOS y repite el MISMO párrafo indefinidamente
+    (EXECUTE T004: bloque "LISTO … <CPA_DONE>" ×12 hasta el corte de 90s).
+    La versión anterior exigía 3 bloques CONSECUTIVOS de 256 chars idénticos
+    y no atrapaba párrafos cuya longitud no es múltiplo de 256. Acá se
+    detecta por sufijo: si los últimos N chars ya aparecieron ≥2 veces
+    antes, es repetición sin importar la alineación. Tablas/listas
+    legítimas tienen filas distintas y no disparan.
+    """
+    if len(text) < _TEXT_LOOP_MIN_LEN:
+        return False
+    for w in _TEXT_LOOP_WINDOWS:
+        window = text[-w:]
+        if text[:-w].count(window) >= 2:
+            return True
+    return False
+
+
 async def stream_agent_turn(agent, messages, config, idle_timeout: float | None = 120.0,
                             max_reasoning_seconds: float | None = None,
                             max_tool_calls: int | None = None,
@@ -221,27 +248,17 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                     last_emitted = "content"
                     response_parts.append(str(chunk.content))
                     produced_output = True
-                    # Loop de texto: si el MISMO bloque de ~TEXT_REPEAT_WINDOW
-                    # chars se repite N veces CONSECUTIVAS, cortar. Se comparan
-                    # bloques completos de tamaño fijo en posiciones contiguas
-                    # (el 4B repite el mismo párrafo textualmente).
-                    text_so_far = "".join(response_parts)
-                    # Loop de texto: el 4B a veces repite el MISMO párrafo
-                    # infinitamente (EXECUTE: "Would you like me to commit..."
-                    # ×17). Se detecta solo como 3 bloques CONSECUTIVOS
-                    # idénticos de 256 chars — imposible en una tabla legítima
-                    # donde cada fila es distinta, pero trivial en un loop real.
-                    if len(text_so_far) >= 768:
-                        w = 256
-                        if (
-                            text_so_far[-w:] == text_so_far[-2 * w : -w]  # noqa: E203
-                            == text_so_far[-3 * w : -2 * w]  # noqa: E203
-                        ):
-                            console.print(
-                                "\n\n[dim]↻ Modelo repitiendo el mismo texto "
-                                "(loop). Se corta el turno.[/dim]"
-                            )
-                            break
+                    # Loop de texto: si el final del texto repite un bloque ya
+                    # emitido, el modelo no va a emitir EOS (E2E T004: bloque
+                    # LISTO + <CPA_DONE> ×12 hasta el corte de 90s). Detección
+                    # por sufijo, sin importar la alineación del párrafo
+                    # (ver _text_loop_detected).
+                    if _text_loop_detected("".join(response_parts)):
+                        console.print(
+                            "\n\n[dim]↻ Modelo repitiendo el mismo texto "
+                            "(loop). Se corta el turno.[/dim]"
+                        )
+                        break
 
                 for tc in chunk.tool_call_chunks or []:
                     if tc.get("name"):
