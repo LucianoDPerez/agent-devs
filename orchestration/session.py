@@ -690,6 +690,13 @@ def _build_failed_verify_suffix(report: str, details: str = "") -> str:
         "re-ejecutés la batería completa todavía):\n"
         f"{report}\n"
     )
+    classify = (
+        "Paso 0 (ANTES de leer o editar nada): clasificá el rojo. ¿Dice "
+        "ECONNREFUSED, timeout, connection refused/terminated o falla en "
+        "beforeEach/connect? → es ENTORNO/CONEXIÓN (servicio caído), NO bug "
+        "de código: no edites ni reescribas nada, reportalo como "
+        "heredado/entorno. Solo si es fallo de LÓGICA seguí abajo."
+    )
     if (details or "").strip():
         steps = (
             "Detalle guardado (cola de la salida — archivos que fallan):\n"
@@ -706,11 +713,8 @@ def _build_failed_verify_suffix(report: str, details: str = "") -> str:
             "archivo que falla y corregí la causa raíz, 3) recién después volvé a "
             "correr la batería."
         )
-    return head + steps + (
-        " NO marques tasks como done sin verde. Si la cola muestra error de "
-        "CONEXIÓN (DB/servicio caído, ECONNREFUSED, timeout en beforeEach) y no "
-        "un fallo de lógica: es entorno — NO edites código ni tests, "
-        "reportalo como heredado/entorno."
+    return head + classify + "\n" + steps + (
+        " NO marques tasks como done sin verde."
     )
 
 
@@ -1224,19 +1228,15 @@ class Session:
             loop.close()
 
     def _inject_verify_gate(self) -> None:
-        """Inyecta la compuerta de verificación (obliga a correr
-        run_lint/run_tests/run_build) y reconstruye el agente gate-retry."""
+        """Inyecta la compuerta de verificación (obliga a correr run_verify
+        en UNA llamada) y reconstruye el agente gate-retry."""
         self._messages.append(HumanMessage(
-            "⚠️ No ejecutaste run_lint, run_tests ni run_build.\n"
-            "Es OBLIGATORIO verificar que el código compila y pasa "
-            "tests ANTES de dar la tarea por terminada.\n\n"
-            "Ejecutá AHORA (no respondas con texto — ejecutá las "
-            "tools directamente):\n"
-            f"  run_lint(path=\"{self.repo_path}\")\n"
-            f"  run_tests(path=\"{self.repo_path}\")\n"
-            f"  run_build(path=\"{self.repo_path}\")\n"
-            "\nSi alguna falla, CORREGÍ el error y volvé a ejecutar "
-            "la verificación hasta que las tres pasen."
+            "⚠️ No verificaste lo que escribiste.\n"
+            "Es OBLIGATORIO verificar ANTES de dar la tarea por terminada, "
+            "en UNA sola llamada (no 3 separadas):\n"
+            f"  run_verify(path=\"{self.repo_path}\")\n"
+            "\nSi algo falla, CORREGÍ el error y volvé a ejecutar "
+            "run_verify hasta que pase."
         ))
         self._explore_budget.max_calls = 3
         self._explore_budget.max_reads_after_explore = 4

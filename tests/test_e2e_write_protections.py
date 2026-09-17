@@ -212,8 +212,8 @@ def test_e2e_verify_gate_exists_in_session():
         "Verify gate comment must be present"
     )
     gate_src = inspect.getsource(Session._inject_verify_gate)
-    assert "No ejecutaste run_lint" in gate_src, (
-        "Verify gate message must mention run_lint/run_tests/run_build"
+    assert "run_verify(path=" in gate_src, (
+        "Verify gate message must order run_verify in ONE call (not 3 separate tools)"
     )
 
 
