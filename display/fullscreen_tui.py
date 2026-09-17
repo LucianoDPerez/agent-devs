@@ -239,7 +239,8 @@ class FullscreenTUI(App):
         self.on_submit = on_submit
         self.on_cancel = None
         self.pane_writer = PaneWriter()
-        self._busy = False
+        self._busy_count = 0
+        self._busy_lock = threading.Lock()
         self._pane_text: Text = Text()   # acumulado único del pane
         self._exit_armed = False         # confirmación de salida (ctl+c ×2)
         self._last_selected_text = ""    # cache del drag-selection (⌘C)
@@ -462,13 +463,33 @@ class FullscreenTUI(App):
         self.query_one("#toolbar", Static).update(txt)
 
     # ── acciones ───────────────────────────────────────────────────────
+    @property
+    def _busy(self) -> bool:
+        """Hay trabajo en curso (uno o más submits sin terminar).
+
+        Contador en vez de booleano: un slash instantáneo (/autoapprove)
+        que termina mientras un turno sigue corriendo no debe apagar el
+        indicador "trabajando…" (el finally del slash lo ponía en False
+        aunque el LLM seguía trabajando).
+        """
+        with self._busy_lock:
+            return self._busy_count > 0
+
+    def _mark_busy(self) -> None:
+        with self._busy_lock:
+            self._busy_count += 1
+
+    def _mark_idle(self) -> None:
+        with self._busy_lock:
+            self._busy_count = max(0, self._busy_count - 1)
+
     def action_submit(self) -> None:
         ta = self.query_one("#input", TextArea)
         text = ta.text
         if not text.strip():
             return
         ta.clear()
-        self._busy = True
+        self._mark_busy()
         self._refresh_toolbar()
         threading.Thread(target=self._safe_submit, args=(text,), daemon=True).start()
 
@@ -633,7 +654,7 @@ class FullscreenTUI(App):
         except Exception:
             self.pane_writer.write(traceback.format_exc())
         finally:
-            self._busy = False
+            self._mark_idle()
             with contextlib.suppress(Exception):
                 self.call_from_thread(self._refresh_toolbar)
 
