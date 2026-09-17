@@ -171,6 +171,36 @@ def _detect_stack(root: Path) -> str | None:
     return None
 
 
+_STACK_MARKERS = (
+    "package.json", "go.mod", "pyproject.toml", "requirements.txt",
+    "setup.py", "build.gradle", "build.gradle.kts", "pom.xml",
+)
+
+
+def _find_stack_root(path: str, max_up: int = 6) -> Path | None:
+    """Stack más cercano at-or-above `path` (monorepos).
+
+    El modelo corre verify con path al SUBPROYECTO (`apps/api`) pero el
+    package.json vive en la raíz del monorepo (E2E T003: lint/tests/build en
+    apps/api → [SKIPPED] aunque el repo sí tenía stack). Se sube hasta 6
+    niveles buscando marcadores; None = sin stack en ningún ancestro.
+    """
+    try:
+        cur = Path(path).resolve()
+    except OSError:
+        return None
+    for _ in range(max_up + 1):
+        try:
+            if any((cur / m).is_file() for m in _STACK_MARKERS):
+                return cur
+        except OSError:
+            return None
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+    return None
+
+
 def _gradle_cmd(root: Path, *args: str) -> list[str]:
     """Comando gradle usando el wrapper si existe, sino gradle global."""
     wrapper = root / "gradlew"
@@ -351,20 +381,26 @@ def _run_verify(path: str, action: str) -> str:
         return error
 
     root = Path(path)
-    # Sin stack verificable (docs/infra puros): NO es un fallo, es N/A.
-    # Antes devolvía el mensaje crudo ("Could not detect...") y la batería lo
-    # contaba como [FAILED] → cierre en rojo en tareas de documentación
-    # (E2E T001: ADR en .md → "FALLÓ, no commitear" siendo todo correcto).
-    if _detect_stack(root) is None:
+    # Monorepo: si el subpath no tiene stack propio, se ejecuta en el stack
+    # ancestro más cercano (y se avisa). Solo si no hay stack en ningún
+    # ancestro es [SKIPPED] de verdad (docs/infra puros).
+    stack_root = _find_stack_root(path)
+    if stack_root is None:
         return (
             f"[SKIPPED] {action}: sin stack verificable en {root} "
             "(docs/infra) — no aplica lint/tests/build"
         )
-    command = _resolve_command(root, action)
+    note = ""
+    try:
+        if stack_root != root.resolve():
+            note = f"\n(nota: sin stack propio en {path} → se ejecuta en {stack_root})"
+    except OSError:
+        pass
+    command = _resolve_command(stack_root, action)
     if isinstance(command, str):
-        return command
+        return command + note
 
-    result = _run_command(path, command)
+    result = _run_command(str(stack_root), command)
 
     # Auto-detect missing dependencies: los LLM chicos (4B/9B) sistemáticamente
     # ignoran el hint de correr run_install (visto N veces en E2E real: el
@@ -372,20 +408,20 @@ def _run_verify(path: str, action: str) -> str:
     # FALLA y faltan deps declaradas, el harness instala solo (npm install es
     # idempotente) y re-corre el verify UNA vez. Config: AUTO_INSTALL_ON_VERIFY_FAIL.
     if "FAILED" in result and AUTO_INSTALL_ON_VERIFY_FAIL:
-        stack = _detect_stack(root)
-        if stack == "node" and _needs_node_install(root):
+        stack = _detect_stack(stack_root)
+        if stack == "node" and _needs_node_install(stack_root):
             result += (
                 "\n⚠️  Dependencias faltantes detectadas (node_modules incompleto). "
                 "El sistema ejecuta npm install automáticamente y re-corre la verificación..."
             )
-            install_result = _run_node_install(root)
+            install_result = _run_node_install(stack_root)
             result += "\n\n--- npm install ---\n" + install_result
-            rerun = _run_command(path, command)
+            rerun = _run_command(str(stack_root), command)
             result += "\n\n--- Re-run después del install ---\n" + rerun
-        elif stack == "python" and not (root / ".venv").is_dir():
+        elif stack == "python" and not (stack_root / ".venv").is_dir():
             result += "\n⚠️  .venv missing. Run: run_install(path=...) first."
 
-    return _shorten_passed(result)
+    return _shorten_passed(result) + note
 
 
 @tool
@@ -484,7 +520,7 @@ def run_install(path: str) -> str:
     if error:
         return error
 
-    root = Path(path)
+    root = _find_stack_root(path) or Path(path)
     stack = _detect_stack(root)
     if stack is None:
         return f"Could not detect project type in {root}"
@@ -515,7 +551,9 @@ def run_npm_script(path: str, script: str) -> str:
     if error:
         return error
 
-    root = Path(path)
+    # Monorepo: el script puede estar declarado en el package.json de un
+    # ancestro (raíz con workspaces), no en el subpath dado.
+    root = _find_stack_root(path) or Path(path)
     stack = _detect_stack(root)
     if stack is not None and stack != "node":
         # Este repo NO es Node: run_npm_script solo sirve para scripts declarados
@@ -544,5 +582,5 @@ def run_npm_script(path: str, script: str) -> str:
         scripts = ", ".join(sorted((pkg or {}).get("scripts") or {}))
         return f"{resolved}. Available scripts: {scripts or '(none)'}"
 
-    result = _run_command(path, resolved)
+    result = _run_command(str(root), resolved)
     return result

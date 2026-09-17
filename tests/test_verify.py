@@ -238,7 +238,9 @@ class TestRunVerifyTools:
             result = run_tests.invoke({"path": tmp})
 
         assert "PASSED" in result
-        mock_run.assert_called_once_with(tmp, ["pytest", "-q"])
+        called_path, called_cmd = mock_run.call_args[0]
+        assert Path(called_path).resolve() == Path(tmp).resolve()
+        assert called_cmd == ["pytest", "-q"]
 
     @patch("tools.verify._run_command")
     def test_run_build_invokes_npm(self, mock_run):
@@ -252,7 +254,9 @@ class TestRunVerifyTools:
             result = run_build.invoke({"path": tmp})
 
         assert "PASSED" in result
-        mock_run.assert_called_once_with(tmp, ["npm", "run", "build"])
+        called_path, called_cmd = mock_run.call_args[0]
+        assert Path(called_path).resolve() == Path(tmp).resolve()
+        assert called_cmd == ["npm", "run", "build"]
 
 
 def test_run_install_reinstalls_when_workspaces_missing_symlinks(tmp_path):
@@ -493,3 +497,40 @@ def test_run_verify_mixto_no_esconde_rojos(tmp_path):
     with patch.object(v, "_run_command", return_value="[FAILED] exit=1\nF"):
         out = v._run_verify(str(tmp_path), "test")
     assert out.startswith("[FAILED]")
+
+
+def test_find_stack_root_sub_monorepo(tmp_path):
+    """Monorepo: apps/api sin package.json propio → stack de la raíz (T003:
+    lint/tests/build en subpath daban [SKIPPED] teniendo stack)."""
+    import json
+
+    from tools import verify as v
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"lint": "x"}}))
+    sub = tmp_path / "apps" / "api"
+    sub.mkdir(parents=True)
+    found = v._find_stack_root(str(sub))
+    assert found is not None
+    assert (found / "package.json").is_file()
+
+
+def test_find_stack_root_sin_stack(tmp_path):
+    from tools import verify as v
+
+    assert v._find_stack_root(str(tmp_path)) is None
+    assert v._find_stack_root("/nonexistent/xyz-123") is None
+
+
+def test_run_lint_subpath_usa_raiz_y_avisa(tmp_path):
+    import json
+    from unittest.mock import patch
+
+    from tools import verify as v
+    (tmp_path / "package.json").write_text(json.dumps({"scripts": {"lint": "eslint ."}}))
+    sub = tmp_path / "apps" / "api"
+    sub.mkdir(parents=True)
+    with patch.object(v, "_run_command", return_value="[PASSED] exit=0 ok") as m:
+        out = v.run_lint.invoke({"path": str(sub)})
+    assert out.startswith("[PASSED]")
+    assert "se ejecuta en" in out
+    # el comando corrió en la raíz (donde está el package.json)
+    assert Path(m.call_args[0][0]).resolve() == tmp_path.resolve()
