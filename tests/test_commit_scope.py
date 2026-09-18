@@ -131,6 +131,7 @@ def test_slash_commit_untracked_solo_avisa(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Nada para commitear" in out
     assert "agregar a mano" in out
+    assert "git add -- N" in out
     assert _git_log_count(repo) == 1
 
 

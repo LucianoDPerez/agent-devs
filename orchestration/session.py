@@ -2551,11 +2551,7 @@ class Session:
                 "[yellow]↻ Nada para commitear en ese alcance "
                 "(¿todo untracked? agregalo a mano).[/yellow]"
             )
-            if untracked:
-                console.print(
-                    "[dim]Untracked (agregar a mano): "
-                    + escape(", ".join(untracked[:8])) + "[/dim]"
-                )
+            self._print_untracked_hint(untracked)
             return
         console.print("[dim]🔍 Verificando antes de commitear (lint/tests/build)…[/dim]")
         try:
@@ -2592,24 +2588,31 @@ class Session:
             code, out = self._git_cmd(["commit", "-m", message])
             if code == 0:
                 console.print(f"[green]✅ Commit creado: {escape(message)}[/green]")
-                if untracked:
-                    console.print(
-                        "[dim]ℹ️  Untracked NO incluidos: "
-                        + escape(", ".join(untracked[:8])) + "[/dim]"
-                    )
-                    session_untracked = [
-                        u for u in untracked if u in self._session_touched_files
-                    ]
-                    if session_untracked:
-                        console.print(
-                            "[dim]Para agregar los de esta sesión a mano:\n"
-                            "  git add -- "
-                            + escape(" ".join(session_untracked[:8])) + "[/dim]"
-                        )
+                self._print_untracked_hint(untracked)
             else:
                 console.print(f"[red]⛔ git commit falló:\n{escape(out)}[/red]")
         except Exception as e:
             console.print(f"[red]⛔ git falló: {escape(str(e))}[/red]")
+
+    def _print_untracked_hint(self, untracked: list[str]) -> None:
+        """Lista untracked + comando exacto para agregarlos a mano.
+
+        Untracked JAMÁS se stagea automático (credenciales): el usuario
+        copia, revisa y ejecuta. Hasta 12 paths; el resto se avisa.
+        """
+        from rich.markup import escape
+
+        if not untracked:
+            return
+        shown = untracked[:12]
+        extra = f" (+{len(untracked) - len(shown)} más)" if len(untracked) > len(shown) else ""
+        console.print(
+            "[dim]Untracked (agregar a mano): "
+            + escape(", ".join(shown)) + extra + "[/dim]"
+        )
+        console.print(
+            "[dim]  git add -- " + escape(" ".join(shown)) + "[/dim]"
+        )
 
     def slash_push(self, arg: str) -> None:
         """Comando /push [remote] — push de la rama actual, determinístico."""
