@@ -809,6 +809,88 @@ def _tasks_anchor_line(tasks_file: str | None) -> str:
     )
 
 
+def _porcelain_paths(lines: list[str] | None) -> set[str]:
+    """Paths mencionados en un porcelain (renombres resueltos a destino)."""
+    out: set[str] = set()
+    for ln in lines or []:
+        if len(ln) < 4:
+            continue
+        path = ln[3:].strip()
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1].strip()
+        path = path.strip().strip('"')
+        if path:
+            out.add(path)
+    return out
+
+
+def _parse_commit_candidates(
+    lines: list[str] | None, session_files: set[str] | None,
+    max_show: int = 15,
+) -> str:
+    """Bloque de texto: pendientes agrupados (staged/modificados/untracked)
+    con marca [sesión] vs [previo]. Puro y testeable. Untracked jamás se
+    stagea automático (credenciales): se listan con el comando para agregarlos.
+    """
+    staged, modified, untracked = [], [], []
+    known = session_files or set()
+    for ln in lines or []:
+        if len(ln) < 4:
+            continue
+        status, path = ln[:2], ln[3:].strip()
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1].strip()
+        path = path.strip().strip('"')
+        if not path:
+            continue
+        mark = "[sesión]" if path in known else "[previo]"
+        if status == "??":
+            untracked.append(f"  {mark} {path}")
+        elif status[0] not in (" ", "?"):
+            staged.append(f"  {mark} {path}")
+        else:
+            modified.append(f"  {mark} {path}")
+
+    def _block(title: str, items: list[str]) -> str:
+        shown = "\n".join(items[:max_show])
+        extra = f"\n  …(+{len(items) - max_show} más)" if len(items) > max_show else ""
+        return f"{title} ({len(items)}):\n{shown}{extra}" if items else ""
+
+    blocks = [
+        _block("● Staged", staged),
+        _block("● Modificados tracked", modified),
+        _block("● Nuevos untracked", untracked),
+    ]
+    body = "\n".join(b for b in blocks if b)
+    if not body:
+        return "↻ Árbol limpio — nada pendiente."
+    return "📦 Pendientes de stage/commit:\n" + body
+
+
+def _commit_stage_set(
+    lines: list[str] | None, scope: str, session_files: set[str] | None,
+) -> list[str]:
+    """Paths tracked a stagear según alcance ('todo' | 'sesion').
+
+    Untracked JAMÁS (credenciales: el usuario los agrega a mano).
+    """
+    out: list[str] = []
+    known = session_files or set()
+    for ln in lines or []:
+        if len(ln) < 4:
+            continue
+        status, path = ln[:2], ln[3:].strip()
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1].strip()
+        path = path.strip().strip('"')
+        if not path or status == "??":
+            continue
+        if scope == "sesion" and path not in known:
+            continue
+        out.append(path)
+    return out
+
+
 def _baseline_key(item: str) -> str:
     """Archivo del identificador de fallo (sin ::caso ni sufijos)."""
     return re.split(r"::| — ", (item or "").strip(), maxsplit=1)[0].strip()
@@ -1021,6 +1103,13 @@ class Session:
         # leyó .agent/tasks.json y .agent-devs/tasks.md inexistentes y deliró
         # un T8 de otro repo). Vive a nivel SESIÓN, no se limpia por turno.
         self._last_tasks_file: str | None = None
+        # Archivos tocados por turnos EXECUTE de ESTA sesión (para /commit
+        # sesion): unión por turno de (dirty al cerrar − dirty al abrir),
+        # con paths CRUDOS de porcelain (sin filtros). /new lo limpia.
+        self._session_touched_files: set[str] = set()
+        # Snapshot crudo (sin filtrar) del inicio del turno, para el cálculo
+        # anterior. None = git falló (no se atribuye ese turno).
+        self._turn_start_raw: set[str] | None = None
         # Baseline flaco: SET de tests que fallaban al cerrar el turno ANTERIOR
         # {"failing": [...], "snapshot": ...} o None si se desconoce. El cierre
         # del turno N lo guarda (cosecha salidas ya corridas: cero baterías
@@ -1260,6 +1349,7 @@ class Session:
         self.session_id = str(uuid.uuid4())[:8]
         self._session_time = 0.0
         self._auto_approve = False
+        self._session_touched_files = set()
         self.current_role = Role.ANALYZE
         self._load_previous_sessions()
         self._rebuild_agent(Role.ANALYZE)
@@ -2227,6 +2317,19 @@ class Session:
         except Exception:
             return []
 
+    def _accumulate_session_files(self) -> None:
+        """Suma a _session_touched_files lo que el turno ensució (para /commit
+        sesion): dirty crudo al cerrar menos dirty crudo al abrir. Fail-open."""
+        try:
+            if self._turn_start_raw is None:
+                return
+            cur = self._porcelain_lines()
+            if cur is None:
+                return
+            self._session_touched_files |= _porcelain_paths(cur) - set(self._turn_start_raw)
+        except Exception:
+            pass
+
     def _deterministic_close(self) -> str:
         """Resumen de cierre determinístico del SISTEMA (no del modelo).
 
@@ -2403,49 +2506,108 @@ class Session:
         return proc.returncode, (proc.stdout or "").strip() + (proc.stderr or "").strip()
 
     def slash_commit(self, arg: str) -> None:
-        """Comando /commit [mensaje] — determinístico, SIN pasar por el LLM.
+        """Comando /commit — determinístico, SIN pasar por el LLM.
 
-        stage tracked (-u) + compuerta lint/tests/build + commit. Los untracked
-        quedan afuera A PROPÓSITO (el usuario decide: lista explícita o -u).
-        Repite el flujo de _maybe_ask_commit usable desde la TUI (donde el
-        prompt interactivo está deshabilitado y el LLM tardaba minutos en
-        commitear: E2E 'implementar commit...' → 150s de thinking + ESC).
+        Sin alcance: LISTA pendientes (tracked/untracked) marcando [sesión]
+        vs [previo] y explica los subcomandos (no commitea nada).
+        /commit todo [msg]: stagea tracked (add -u) + gate + commit.
+        /commit sesion [msg]: stagea SOLO tracked tocados en esta sesión
+        (paths explícitos) + gate + commit.
+        Untracked JAMÁS se stagea automático (credenciales): se listan con
+        el comando exacto para agregarlos a mano. Repite el flujo de
+        _maybe_ask_commit usable desde la TUI (donde el prompt interactivo
+        está deshabilitado y el LLM tardaba minutos en commitear).
         """
+        from rich.markup import escape
+
+        parts = (arg or "").strip().split(None, 1)
+        scope = parts[0].lower() if parts else ""
+        message = parts[1].strip() if len(parts) > 1 else ""
+        _code, status = self._git_cmd(
+            ["status", "--porcelain", "--untracked-files=all"]
+        )
+        lines = status.splitlines() if status.strip() else []
+        if scope not in ("todo", "sesion"):
+            console.print(
+                escape(_parse_commit_candidates(lines, self._session_touched_files))
+            )
+            console.print(
+                "[dim]" + escape(
+                    "Usá /commit todo [mensaje] (todos los tracked) o "
+                    "/commit sesion [mensaje] (solo lo tocado en esta sesión). "
+                    "Untracked siempre a mano."
+                ) + "[/dim]"
+            )
+            return
         console.print("[dim]🔍 Verificando antes de commitear (lint/tests/build)…[/dim]")
         try:
             passed, report = run_commit_verification(self.repo_path, reuse=self._verify_results)
         except Exception as e:
-            console.print(f"[dim]No se pudo verificar ({e}): commiteo igual bajo tu responsabilidad.[/dim]")
+            console.print(f"[dim]No se pudo verificar ({escape(str(e))}): commiteo igual bajo tu responsabilidad.[/dim]")
             passed, report = True, ""
-        console.print(report)
+        console.print(escape(report))
         if not passed:
             console.print(
                 "[yellow]⛔ Verificación en rojo — NO commiteo. Corregí arriba o usá /verify.[/yellow]"
             )
             self.note_verify_result(passed, report)
             return
-        _code, status = self._git_cmd(["status", "--porcelain"])
-        if not status.strip():
-            console.print("[yellow]↻ No hay cambios que commitear.[/yellow]")
+        paths = _commit_stage_set(lines, scope, self._session_touched_files)
+        untracked = [
+            ln[3:].strip() for ln in lines
+            if len(ln) >= 4 and ln.startswith("??")
+        ]
+        if not paths:
+            console.print(
+                "[yellow]↻ Nada para commitear en ese alcance "
+                "(¿todo untracked? agregalo a mano).[/yellow]"
+            )
+            if untracked:
+                console.print(
+                    "[dim]Untracked (agregar a mano): "
+                    + escape(", ".join(untracked[:8])) + "[/dim]"
+                )
             return
         try:
-            self._git_cmd(["add", "-u"], timeout=15)
-            untracked = [
-                ln[3:] for ln in status.splitlines() if ln.startswith("??")
-            ]
-            message = arg.strip() or f"chore: cambios pendientes ({len(status.splitlines())} archivos)"
+            if scope == "todo":
+                self._git_cmd(["add", "-u"], timeout=15)
+            else:
+                self._git_cmd(["add", "--", *paths], timeout=15)
+            staged_code, staged = self._git_cmd(["diff", "--cached", "--name-only"])
+            if staged_code != 0 or not staged.strip():
+                console.print(
+                    "[yellow]↻ Nada quedó stageado — no commiteo "
+                    "(revisá el árbol a mano).[/yellow]"
+                )
+                return
+            if not message:
+                n = len(staged.splitlines())
+                message = (
+                    f"chore: cambios pendientes ({n} archivos)"
+                    if scope == "todo"
+                    else f"chore: cambios de la sesión ({n} archivos)"
+                )
             code, out = self._git_cmd(["commit", "-m", message])
             if code == 0:
-                console.print(f"[green]✅ Commit creado: {message}[/green]")
+                console.print(f"[green]✅ Commit creado: {escape(message)}[/green]")
                 if untracked:
                     console.print(
-                        "[dim]ℹ️  Untracked NO incluidos (agregalos a mano o pedí "
-                        f"stagearlos explícitos): {', '.join(untracked[:8])}[/dim]"
+                        "[dim]ℹ️  Untracked NO incluidos: "
+                        + escape(", ".join(untracked[:8])) + "[/dim]"
                     )
+                    session_untracked = [
+                        u for u in untracked if u in self._session_touched_files
+                    ]
+                    if session_untracked:
+                        console.print(
+                            "[dim]Para agregar los de esta sesión a mano:\n"
+                            "  git add -- "
+                            + escape(" ".join(session_untracked[:8])) + "[/dim]"
+                        )
             else:
-                console.print(f"[red]⛔ git commit falló:\n{out}[/red]")
+                console.print(f"[red]⛔ git commit falló:\n{escape(out)}[/red]")
         except Exception as e:
-            console.print(f"[red]⛔ git falló: {e}[/red]")
+            console.print(f"[red]⛔ git falló: {escape(str(e))}[/red]")
 
     def slash_push(self, arg: str) -> None:
         """Comando /push [remote] — push de la rama actual, determinístico."""
@@ -3156,6 +3318,10 @@ class Session:
             None if _snap_lines is None
             else frozenset(self._filter_porcelain(_snap_lines))
         )
+        self._turn_start_raw = (
+            None if _snap_lines is None
+            else set(_porcelain_paths(_snap_lines))
+        )
 
         reset_turn_usage()
         start = time.monotonic()
@@ -3828,6 +3994,8 @@ class Session:
 
         elapsed = time.monotonic() - start
         self._session_time += elapsed
+        if new_role == Role.EXECUTE:
+            self._accumulate_session_files()
 
         usage = get_usage()
         turn_tokens = usage["turn"]["prompt"] + usage["turn"]["completion"]
