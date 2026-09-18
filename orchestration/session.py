@@ -2539,6 +2539,24 @@ class Session:
                 ) + "[/dim]"
             )
             return
+        paths = _commit_stage_set(lines, scope, self._session_touched_files)
+        untracked = [
+            ln[3:].strip() for ln in lines
+            if len(ln) >= 4 and ln.startswith("??")
+        ]
+        if not paths:
+            # Sin nada stageable no se corre la batería (E2E: 3 baterías
+            # seguidas para descubrir que todo era untracked).
+            console.print(
+                "[yellow]↻ Nada para commitear en ese alcance "
+                "(¿todo untracked? agregalo a mano).[/yellow]"
+            )
+            if untracked:
+                console.print(
+                    "[dim]Untracked (agregar a mano): "
+                    + escape(", ".join(untracked[:8])) + "[/dim]"
+                )
+            return
         console.print("[dim]🔍 Verificando antes de commitear (lint/tests/build)…[/dim]")
         try:
             passed, report = run_commit_verification(self.repo_path, reuse=self._verify_results)
@@ -2551,22 +2569,6 @@ class Session:
                 "[yellow]⛔ Verificación en rojo — NO commiteo. Corregí arriba o usá /verify.[/yellow]"
             )
             self.note_verify_result(passed, report)
-            return
-        paths = _commit_stage_set(lines, scope, self._session_touched_files)
-        untracked = [
-            ln[3:].strip() for ln in lines
-            if len(ln) >= 4 and ln.startswith("??")
-        ]
-        if not paths:
-            console.print(
-                "[yellow]↻ Nada para commitear en ese alcance "
-                "(¿todo untracked? agregalo a mano).[/yellow]"
-            )
-            if untracked:
-                console.print(
-                    "[dim]Untracked (agregar a mano): "
-                    + escape(", ".join(untracked[:8])) + "[/dim]"
-                )
             return
         try:
             if scope == "todo":

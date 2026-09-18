@@ -135,7 +135,7 @@ def test_slash_commit_untracked_solo_avisa(tmp_path, capsys):
 
 
 def test_slash_commit_sin_nada_stageable(tmp_path, capsys):
-    """Árbol limpio: mensaje limpio, sin error crudo de git."""
+    """Árbol limpio: mensaje limpio SIN correr la batería, sin error crudo."""
     from orchestration.session import Session
 
     repo = _init_repo(tmp_path)
@@ -143,5 +143,6 @@ def test_slash_commit_sin_nada_stageable(tmp_path, capsys):
     s.slash_commit("todo")
     out = capsys.readouterr().out
     assert "Nada para commitear" in out
+    assert "Verificando antes de commitear" not in out
     assert "falló" not in out
     assert _git_log_count(repo) == 1

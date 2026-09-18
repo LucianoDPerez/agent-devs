@@ -287,6 +287,14 @@ def run_fullscreen(session) -> None:
             return
         if not text.strip():
             return
+        # ECO del prompt (también slash y sí/no: el input se limpia al enviar
+        # y sin esto lo tipeado no aparece en el panel).
+        from rich.markup import escape
+
+        console.print()
+        console.print("[bold dark_orange]🧑 vos ›[/bold dark_orange]")
+        console.print(f"[dark_orange]{escape(text)}[/dark_orange]")
+        console.print()
         # Confirmación de write pendiente (EXECUTE_CONFIRM_WRITES): el input
         # resuelve la aprobación en vez de lanzar un turno nuevo. Se normaliza
         # el texto (minúsculas + sin acentos) para aceptar sí/SÍ/si por igual.
@@ -385,15 +393,7 @@ def run_fullscreen(session) -> None:
             console.print("[bold]Comandos:[/bold]\n" + format_help())
             return
 
-        # ECO del prompt ANTES de llamar al LLM (en full-screen el input se
-        # limpia al enviar y sin esto la pregunta no aparece en el panel).
-        # Color destacado para distinguir preguntas (cian brillante) de
-        # respuestas del agente (blanco default).
-        from rich.markup import escape
-        console.print()
-        console.print("[bold dark_orange]🧑 vos ›[/bold dark_orange]")
-        console.print(f"[dark_orange]{escape(text)}[/dark_orange]")
-        console.print()
+        # Turno normal del agente (el eco ya se imprimió arriba).
         session.run_turn(text)
 
     tui.on_submit = on_submit
