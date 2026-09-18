@@ -177,3 +177,28 @@ class TestCreateBranch:
         create_branch.invoke({"path": repo, "name": "feat/wip"})
         assert (Path(repo) / "nuevo.txt").exists()
         assert current_branch.invoke({"path": repo}) == "feat/wip"
+
+    def test_bloqueada_sin_permiso_del_turno(self, monkeypatch):
+        """E2E T012: crear rama sin que la pidan, estando en feature branch.
+        Con el flag apagado (lo setea Session por turno) se bloquea sin tocar git."""
+        import subprocess
+
+        import tools.git as git_mod
+        from tools.git import create_branch
+
+        repo = _init_repo()
+        subprocess.run(["git", "checkout", "-qb", "feat/previa"], cwd=repo, check=True)
+        monkeypatch.setattr(git_mod, "BRANCH_CHANGE_ALLOWED", False)
+        out = create_branch.invoke({"path": repo, "name": "feat/otra"})
+        assert "bloqueado" in out
+        assert "feat/previa" in out
+        assert current_branch.invoke({"path": repo}) == "feat/previa"
+
+    def test_branch_intent_regex(self):
+        """Solo mención explícita habilita (lo evalúa Session por turno)."""
+        from orchestration.session import _BRANCH_INTENT_RE
+
+        assert _BRANCH_INTENT_RE.search("creame una branch feat/x")
+        assert _BRANCH_INTENT_RE.search("trabajá en la rama docs/y")
+        assert not _BRANCH_INTENT_RE.search("implementar T012 de tasks.json")
+        assert not _BRANCH_INTENT_RE.search("corregir los errores de tests")

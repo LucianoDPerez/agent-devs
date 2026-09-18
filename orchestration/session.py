@@ -320,6 +320,13 @@ _CORRECTION_INTENT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Mención explícita de ramas por el usuario ("creame la branch X"): única vía
+# (junto a estar en main/master) que habilita create_branch en el turno.
+_BRANCH_INTENT_RE = re.compile(
+    r"\b(branch|rama|sucursal|checkout -b)\w*",
+    re.IGNORECASE,
+)
+
 # Extensions considered when extracting concrete file targets from a prior
 # analysis so the chained EXECUTE read them directly.
 # Extensions considered when extracting concrete file targets from a prior
@@ -2623,6 +2630,9 @@ class Session:
             from tools.filesystem import clear_task_allow, clear_write_overrides
             clear_write_overrides()
             clear_task_allow()
+            import tools.git as _gitmod
+
+            _gitmod.BRANCH_CHANGE_ALLOWED = True
         except Exception:
             pass
         # Archivos de planificación citados EXPLÍCITAMENTE por el usuario
@@ -2657,6 +2667,23 @@ class Session:
                     self._dedupe.scope_files = frozenset(
                         pinned_task_scope_files(user_input, self.repo_path)
                     )
+            except Exception:
+                pass
+            # create_branch por iniciativa propia: bloqueado salvo orden
+            # explícita o main/master (E2E T012: creó feat/... sin que se lo
+            # pidieran, estando ya en feature branch; el prompt solo lo
+            # permite en main/master). Silencioso: si el modelo lo intenta,
+            # la tool devuelve el bloqueo con la rama actual.
+            try:
+                import tools.git as _gitmod
+
+                _branch_ok = True
+                if not _BRANCH_INTENT_RE.search(user_input or ""):
+                    _code, _cur = self._git_cmd(["branch", "--show-current"])
+                    _cur = (_cur or "").strip().splitlines()[0] if _cur else ""
+                    if _code == 0 and _cur and _cur not in ("main", "master"):
+                        _branch_ok = False
+                _gitmod.BRANCH_CHANGE_ALLOWED = _branch_ok
             except Exception:
                 pass
             # Ancla de la lista de tareas: el primer planning citado que

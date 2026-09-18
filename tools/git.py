@@ -13,6 +13,10 @@ from langchain_core.tools import ToolException, tool
 _MAX_DIFF_BYTES = 30_000
 _MAX_LOG_LINES = 50
 
+# Permiso para create_branch, seteado por turno desde Session (EXECUTE).
+# Default True = fail-open fuera de turnos (uso directo, tests, scripts).
+BRANCH_CHANGE_ALLOWED = True
+
 
 def _run(path: str, args: list[str], timeout: int = 60) -> str:
     """Ejecuta un comando git/gh en `path` y devuelve stdout+stderr limpio."""
@@ -206,6 +210,20 @@ def create_branch(path: str, name: str) -> str:
         c in branch for c in (" ", "~", "^", ":", "?", "*", "[", "\\")
     ):
         raise ToolException(f"⛔ Nombre de rama inválido: {branch!r}")
+    # Permiso por turno (lo setea Session en EXECUTE): crear/cambiar de rama
+    # por iniciativa propia está bloqueado salvo orden explícita del usuario
+    # o estar en main/master (E2E T012: creó feat/... sin que se lo pidieran,
+    # estando ya en feature branch). Default True = fail-open fuera de turnos.
+    if not BRANCH_CHANGE_ALLOWED:
+        try:
+            cur = _current_branch_impl(path)
+        except Exception:
+            cur = "?"
+        return (
+            f"⛔ Crear/cambiar de rama por iniciativa propia está bloqueado "
+            f"este turno (rama actual: '{cur}'). Solo con orden explícita del "
+            f"usuario ('creame la branch X'). Pedí la orden o seguí en '{cur}'."
+        )
     try:
         existing = _run(path, ["git", "branch", "--list", branch])
     except ToolException:
