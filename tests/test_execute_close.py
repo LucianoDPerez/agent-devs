@@ -803,3 +803,27 @@ def test_run_turn_rechaza_si_hay_otro_en_curso(tmp_path, capsys):
     assert "turno en curso" in capsys.readouterr().out
     s._release_turn()
     assert s._turn_thread is None
+
+
+def test_readonly_evidence_turn_plan_inicial_no_tapa_veredicto(tmp_path):
+    """Regresión T011: turno que EMPIEZA con Plan y TERMINA con veredicto
+    con evidencia cierra (el plan inicial no contamina la conclusión)."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    (repo / ".agent").mkdir()
+    (repo / ".agent" / "tasks.json").write_text("[]", encoding="utf-8")
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools = {"read_file", "git_status"}
+    plan = (
+        "Plan: (1) leer .agent/tasks.json para confirmar el criterio; "
+        "(2) revisar implementación y tests ya presentes; "
+        "(3) voy a continuar después con la verificación. " * 6
+    )
+    verdict = (
+        "T011 verificada: .agent/tasks.json ya existe y contiene la "
+        "implementación completa. No hay edits que hacer."
+    )
+    text = plan + verdict
+    assert len(plan) > 600  # el plan queda FUERA de la cola evaluada
+    assert s._readonly_evidence_turn(text) is True

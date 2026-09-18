@@ -374,7 +374,7 @@ _CODE_BLOCK_RE = re.compile(r"```")
 _VERDICT_MARKERS_RE = re.compile(
     r"\b(ya\s+(está|estan|están|estaba|estaban|quedó|quedo)|"
     r"implementad[oa]s?|cumpl(e|en|ido|ida|idos|idas)|verificad[oa]s?|"
-    r"list[oa]s?|terminad[oa]s?|complet[oa]s?|hech[oa]s?|funciona?n?|"
+    r"list[oa]s?|terminad[oa]s?|completad[oa]s?|hech[oa]s?|funciona?n?|"
     r"pas(ó|aron|ado|ada)|en verde|aprobad[oa]s?|correct[oa]s?|"
     r"done\b|passed\b|works?\b|fixed\b|"
     r"nada pendiente|sin pendientes|no\s+(falta|faltan|hay pendientes))",
@@ -1826,16 +1826,22 @@ class Session:
         # Cita dura (archivo:línea o bloque de código): veredicto con respaldo.
         if _GROUNDED_EVIDENCE_RE.search(text or "") or _CODE_BLOCK_RE.search(text or ""):
             return True
-        # Sin lenguaje de veredicto no hay conclusión: "leí tasks.json" o
-        # "tests pendientes" no es evidencia.
-        if not _has_verdict_markers(text):
+        # La CONCLUSIÓN debe ser lo último: el plan inicial ("Plan:", "voy
+        # a…") no contamina el veredicto final (E2E T011: veredicto válido
+        # fue a retry por el plan del inicio), pero un plan AL FINAL
+        # ("después completo") significa que todavía no concluyó (E2E cierre
+        # hueco con 3 planes pegados). Vale: último veredicto después del
+        # último plan. La cita dura de arriba vale siempre (respaldo).
+        body = text or ""
+        _verdict_pos = max(
+            (m.end() for m in _VERDICT_MARKERS_RE.finditer(body)), default=-1
+        )
+        if _verdict_pos < 0:
             return False
-        # Planea a futuro aunque mencione hallazgos ("voy a continuar",
-        # "después completo", "Plan: (1) leer…"): todavía no concluyó nada
-        # (E2E: cierre hueco con 3 planes pegados que citaban tasks.json y
-        # decían "implementadas" en pasado). La cita dura de arriba sí vale
-        # con planes a futuro (veredicto parcial con respaldo).
-        if _FUTURE_PLAN_RE.search(text or ""):
+        _future_pos = max(
+            (m.end() for m in _FUTURE_PLAN_RE.finditer(body)), default=-1
+        )
+        if _future_pos > _verdict_pos:
             return False
         # Evidencia en español: el veredicto cita un path REAL del repo
         # ("infra/iam.tf línea 28"). Anti-fantasma: se valida en DISCO — un
