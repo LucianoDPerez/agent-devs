@@ -48,3 +48,36 @@ def test_doctor_chequea_checkout():
     src = inspect.getsource(main.run_doctor)
     assert "Checkout del harness" in src
     assert "rev-list" in src
+
+
+def test_imports_blindados_contra_cwd_con_config(tmp_path):
+    """Un CWD con config/ genérico no rompe los imports (shadowing).
+
+    E2E: `python -c "import orchestration..."` desde otro repo fallaba con
+    ImportError de `config` en ubicación desconocida.
+    """
+    import subprocess
+    import sys
+
+    (tmp_path / "config").mkdir()  # namespace package trampa, sin __init__
+    r = subprocess.run(
+        [sys.executable, "-c", "import orchestration.tool_dedupe; print('OK')"],
+        capture_output=True, text=True, cwd=str(tmp_path), timeout=120,
+    )
+    assert r.returncode == 0, r.stderr[-500:]
+    assert "OK" in r.stdout
+
+
+def test_main_arranca_desde_cwd_con_config(tmp_path):
+    """`python main.py --help` funciona aunque el CWD tenga config/."""
+    import subprocess
+    import sys
+
+    (tmp_path / "config").mkdir()
+    repo = Path(__file__).resolve().parent.parent
+    r = subprocess.run(
+        [sys.executable, str(repo / "main.py"), "--help"],
+        capture_output=True, text=True, cwd=str(tmp_path), timeout=180,
+    )
+    assert r.returncode == 0, r.stderr[-500:]
+    assert "AgentDevs" in r.stdout

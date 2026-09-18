@@ -18,9 +18,25 @@ import sys
 import warnings
 from pathlib import Path
 
-from analyzer import run_analysis
-from cache import list_repos, load_analysis, save_analysis, snapshot_diff_files, snapshot_entries, snapshot_hash
-from config import (
+# Blindaje de imports: el repo del harness va PRIMERO en sys.path para que un
+# CWD con módulos genéricos (config/, tools/) no haga shadowing de los
+# nuestros (E2E: `python -c "import orchestration..."` desde otro repo fallaba
+# con ImportError de `config` en ubicación desconocida). No hay colisión con
+# paquetes instalados (verificado: ningún dist provee esos top-levels).
+_harness_root = str(Path(__file__).resolve().parent)
+if _harness_root not in sys.path:
+    sys.path.insert(0, _harness_root)
+
+from analyzer import run_analysis  # noqa: E402
+from cache import (  # noqa: E402
+    list_repos,
+    load_analysis,
+    save_analysis,
+    snapshot_diff_files,
+    snapshot_entries,
+    snapshot_hash,
+)
+from config import (  # noqa: E402
     ANALYSIS_LLM_TIMEOUT,
     ANALYSIS_REUSE_MAX_FILES,
     LLM_BASE_URL,
@@ -28,13 +44,13 @@ from config import (
     LLM_MODEL_NAME,
     LLM_TEMPERATURE,
 )
-from core.textutil import normalize
-from display.commands import format_help, interpret_slash
-from display.console import console, print_welcome
-from display.tui import get_user_input
-from llm_wrapper import LocalLLM, get_usage, reset_turn_usage
-from orchestration.session import Session
-from tools import ALL_TOOLS
+from core.textutil import normalize  # noqa: E402
+from display.commands import format_help, interpret_slash  # noqa: E402
+from display.console import console, print_welcome  # noqa: E402
+from display.tui import get_user_input  # noqa: E402
+from llm_wrapper import LocalLLM, get_usage, reset_turn_usage  # noqa: E402
+from orchestration.session import Session  # noqa: E402
+from tools import ALL_TOOLS  # noqa: E402
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -675,7 +691,8 @@ def run_doctor() -> int:
         )
         branch = (br.stdout or "").strip() or "?"
         st = sp.run(
-            ["git", "-C", str(repo), "status", "--porcelain"],
+            ["git", "-C", str(repo), "status", "--porcelain",
+             "--untracked-files=no"],
             capture_output=True, text=True, timeout=10,
         )
         dirty = bool((st.stdout or "").strip())

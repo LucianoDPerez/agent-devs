@@ -375,7 +375,8 @@ def harness_head() -> str:
             capture_output=True, text=True, timeout=5,
         ).stdout.strip()
         dirty = subprocess.run(
-            ["git", "-C", str(repo), "status", "--porcelain"],
+            ["git", "-C", str(repo), "status", "--porcelain",
+             "--untracked-files=no"],
             capture_output=True, text=True, timeout=5,
         ).stdout.strip()
         return (head or "?") + ("*" if dirty else "")
