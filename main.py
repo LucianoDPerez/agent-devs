@@ -542,6 +542,7 @@ def run_update() -> int:
         print("❌ pip install -e . falló — revisá el output de pip arriba.")
         return 1
     print("✅ Actualizado. Corré agent-devs --doctor si querés verificar el entorno.")
+    print("⚠️  Reiniciá cualquier sesión abierta de agent-devs: los módulos ya cargados no cambian solos.")
     return 0
 
 
@@ -654,6 +655,50 @@ def run_doctor() -> int:
             f"       llama-server -hf unsloth/Qwen3-6B-GGUF --port 8080",
         )
         problems += 1
+
+    # 7) Checkout del harness: hash visible + estado (sucio/atrás).
+    # E2E: crash por mezcla de versiones tras un update (session.py nuevo +
+    # tool_dedupe viejo en el mismo proceso). El hash también va en cada
+    # turno ([Ejecución] … harness X) para que salga en los transcripts.
+    repo = _locate_install_repo()
+    if repo is None:
+        print("  ⚠️  Checkout del harness: no lo ubiqué (¿instalación rota?)")
+    else:
+        head = sp.run(
+            ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=10,
+        )
+        cur = (head.stdout or "").strip() or "?"
+        br = sp.run(
+            ["git", "-C", str(repo), "branch", "--show-current"],
+            capture_output=True, text=True, timeout=10,
+        )
+        branch = (br.stdout or "").strip() or "?"
+        st = sp.run(
+            ["git", "-C", str(repo), "status", "--porcelain"],
+            capture_output=True, text=True, timeout=10,
+        )
+        dirty = bool((st.stdout or "").strip())
+        _doctor_ok(
+            "Checkout del harness",
+            f"{cur} en {branch}" + (" (sucio: cambios locales sin commitear)" if dirty else ""),
+        )
+        if dirty:
+            print("     ⚠️  Con cambios locales, un --update puede fallar o dejar mezcla vieja/nueva: commiteá o stash antes.")
+        try:
+            sp.run(
+                ["git", "-C", str(repo), "fetch", "-q", "origin"],
+                capture_output=True, timeout=20,
+            )
+            behind = sp.run(
+                ["git", "-C", str(repo), "rev-list", "--count", "HEAD..@{u}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            n = int((behind.stdout or "0").strip() or 0)
+            if n > 0:
+                print(f"     ⚠️  Estás {n} commit(s) atrás del remoto: corré agent-devs --update Y reiniciá las sesiones abiertas.")
+        except Exception:
+            pass
 
     # Resumen
     print()

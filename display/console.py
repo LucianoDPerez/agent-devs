@@ -352,7 +352,35 @@ def print_turn_summary(elapsed: float, interrupted: bool, session_time: float,
 
 
 def print_role_switch(role_label: str, local_count: int, mcp_count: int):
-    console.print(f"\n[{role_label}] [dim]Tools: {local_count} locales + {mcp_count} graph[/dim]")
+    console.print(f"\n[{role_label}] [dim]Tools: {local_count} locales + {mcp_count} graph · harness {harness_head()}[/dim]")
+
+
+def harness_head() -> str:
+    """Short-hash + dirty-flag del checkout del harness (versión visible).
+
+    Va en CADA turno y en el header: si una máquina corre mezcla de versiones
+    o quedó atrás, se ve en el transcript sin preguntar (E2E: crash por
+    session.py nuevo + tool_dedupe viejo tras un update). Fail-open: "?"
+    sin git. Sin caché a propósito: refleja el disco en cada turno.
+    """
+    import subprocess
+    from pathlib import Path as _Path
+
+    try:
+        repo = _Path(__file__).resolve().parent.parent
+        if not (repo / ".git").exists():
+            return "?"
+        head = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        return (head or "?") + ("*" if dirty else "")
+    except Exception:
+        return "?"
 
 
 def print_welcome(repo_path: str, model: str, url: str, temp: float, tool_counts: tuple, branch: str = ""):
@@ -365,6 +393,7 @@ def print_welcome(repo_path: str, model: str, url: str, temp: float, tool_counts
         f"[bold cyan]🔌 LLM:[/bold cyan] {url}\n"
         f"{repo_line}\n"
         f"[bold cyan]⚡ Modelo:[/bold cyan] {model} | Temp: {temp} | Max: {LLM_MAX_TOKENS}\n"
-        f"[bold cyan]🛠️  Tools:[/bold cyan] {local} locales + {mcp} graph (cm__*)"
+        f"[bold cyan]🛠️  Tools:[/bold cyan] {local} locales + {mcp} graph (cm__*)\n"
+        f"[dim]📌 Harness: {harness_head()} (agent-devs --update lo actualiza; reiniciá la sesión después)[/dim]"
     )
     console.print(Panel(info, title="[bold]AgentDevs[/bold]", border_style="cyan", padding=(0, 1)))

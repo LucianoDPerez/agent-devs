@@ -27,7 +27,7 @@ from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.widgets import Static, TextArea
 
-from display.console import MD_BEGIN, MD_END
+from display.console import MD_BEGIN, MD_END, harness_head
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _MAX_PANE_CHARS = 200_000   # tope de memoria del pane (trims desde el head)
@@ -312,6 +312,7 @@ class FullscreenTUI(App):
         ]
         right = [
             (" ⚡ ", "yellow bold"), (self._model_name, ""),
+            (" 📌 ", "cyan"), (harness_head(), ""),
         ]
         from rich.panel import Panel
         inner = Text.assemble(*lines)
