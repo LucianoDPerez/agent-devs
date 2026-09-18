@@ -488,6 +488,21 @@ class FullscreenTUI(App):
         text = ta.text
         if not text.strip():
             return
+        if self._busy and not text.strip().startswith("/"):
+            # Turno en curso: no pisarlo (dos run_turn mezclan estado y el ESC
+            # pierde al turno viejo). Se preserva el input. Slash y respuestas
+            # a confirmaciones ("sí"/"no") pasan igual: on_submit los rutea sin
+            # abrir turno nuevo.
+            try:
+                confirming = bool((self.status_provider() or {}).get("confirm_pending"))
+            except Exception:
+                confirming = False
+            if not confirming:
+                self.notify(
+                    "Hay un turno en curso — esperá o cancelalo con ESC",
+                    severity="warning",
+                )
+                return
         ta.clear()
         self._mark_busy()
         self._refresh_toolbar()

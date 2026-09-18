@@ -649,3 +649,120 @@ def test_close_pre_dirty_avisa_truncado(tmp_path):
     close = s._deterministic_close()
     assert "(+1 más)" in close
     assert "NO modificó archivos propios" in close
+
+
+def test_claim_turn_rechaza_segunda_hebra(tmp_path):
+    """Un turno a la vez: otra hebra es rechazada, la misma puede anidar
+    (bulk-chain, retry de credencial). E2E T011/T013 mezclados."""
+    import threading
+
+    from orchestration.session import Session
+
+    s = Session(llm=None, repo_path=str(tmp_path))
+    assert s._try_claim_turn() is True
+    assert s._try_claim_turn() is True  # anidado misma hebra: OK
+    s._release_turn()
+    assert s._turn_thread is not None  # depth 1: sigue reclamado
+    errors = []
+
+    def otra_hebra():
+        if s._try_claim_turn() is not False:
+            errors.append("debió rechazar")
+
+    t = threading.Thread(target=otra_hebra)
+    t.start()
+    t.join()
+    assert not errors
+    s._release_turn()
+    assert s._turn_thread is None
+    ok = []
+
+    def otra_hebra_2():
+        ok.append(s._try_claim_turn())
+        s._release_turn()
+
+    t2 = threading.Thread(target=otra_hebra_2)
+    t2.start()
+    t2.join()
+    assert ok == [True]
+    assert s._turn_thread is None
+
+
+def test_release_turn_ajena_no_libera(tmp_path):
+    """Release desde otra hebra es no-op: no roba el reclamo."""
+    import threading
+
+    from orchestration.session import Session
+
+    s = Session(llm=None, repo_path=str(tmp_path))
+    assert s._try_claim_turn() is True
+    done = threading.Event()
+
+    def ajena():
+        s._release_turn()
+        done.set()
+
+    t = threading.Thread(target=ajena)
+    t.start()
+    assert done.wait(timeout=5)
+    t.join()
+    assert s._turn_thread is not None
+    s._release_turn()
+    assert s._turn_thread is None
+
+
+def test_cancel_turn_alcanza_a_todas_las_vivas(tmp_path):
+    """ESC cancela TODAS las tasks vivas, no solo la última (E2E post-ESC
+    escribiendo: el puntero único mataba al turno nuevo)."""
+    from orchestration.session import Session
+
+    cancelled = []
+
+    class FakeLoop:
+        def call_soon_threadsafe(self, cb):
+            cb()
+
+    class FakeTask:
+        def cancel(self):
+            cancelled.append(True)
+
+    s = Session(llm=None, repo_path=str(tmp_path))
+    loop = FakeLoop()
+    t1, t2 = FakeTask(), FakeTask()
+    s._track_turn_task(loop, t1)
+    s._track_turn_task(loop, t2)
+    s._cancel_turn()
+    assert len(cancelled) == 2
+    s._untrack_turn_task(t1)
+    s._cancel_turn()
+    assert len(cancelled) == 3
+
+
+def test_run_turn_rechaza_si_hay_otro_en_curso(tmp_path, capsys):
+    """Segundo run_turn concurrente vuelve al instante con aviso (sin LLM)."""
+    import threading
+    import time
+
+    from orchestration.session import Session
+
+    s = Session(llm=None, repo_path=str(tmp_path))
+    assert s._try_claim_turn() is True  # simula turno en curso
+    errors = []
+    started = time.monotonic()
+
+    def otro_turno():
+        try:
+            s.run_turn("implementar T999")
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+
+    t = threading.Thread(target=otro_turno)
+    t.start()
+    t.join(timeout=30)
+    elapsed = time.monotonic() - started
+    assert not t.is_alive()
+    assert not errors
+    assert elapsed < 10
+    assert "turno en curso" in capsys.readouterr().out
+    s._release_turn()
+    assert s._turn_thread is None

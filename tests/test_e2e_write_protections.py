@@ -170,7 +170,8 @@ def test_e2e_gate_retry_includes_read_cache_snapshot():
     import inspect
 
     from orchestration.session import Session
-    orig_src = inspect.getsource(Session.run_turn)
+    # run_turn es wrapper de exclusión mutua; la implementación vive en _run_turn_inner.
+    orig_src = inspect.getsource(Session._run_turn_inner)
     gate_src = inspect.getsource(Session._rebuild_agent_gate_retry)
     assert "_read_cache" in orig_src, "Gate retry must snapshot _read_cache"
     assert "CONTENIDO ORIGINAL" in orig_src, "Gate retry must inject original content"
@@ -204,7 +205,8 @@ def test_e2e_verify_gate_exists_in_session():
     assert hasattr(Session, "_verify_tools_called"), (
         "Missing _verify_tools_called method"
     )
-    src = inspect.getsource(Session.run_turn)
+    # run_turn es wrapper de exclusión mutua; la implementación vive en _run_turn_inner.
+    src = inspect.getsource(Session._run_turn_inner)
     assert "_verify_tools_called" in src, (
         "run_turn must call _verify_tools_called in verify gate"
     )
@@ -337,7 +339,8 @@ def test_e2e_recursion_retries_instead_of_failing():
 
     from orchestration.session import Session
 
-    src = inspect.getsource(Session.run_turn)
+    # run_turn es wrapper de exclusión mutua; la implementación vive en _run_turn_inner.
+    src = inspect.getsource(Session._run_turn_inner)
     assert "_enter_budget_retry" in src, "Recursion retry must reuse _enter_budget_retry"
     # El retry de recursion solo aplica a EXECUTE (los cambios quedan en disco;
     # el ancla inyecta el contenido leído para que el retry continúe).

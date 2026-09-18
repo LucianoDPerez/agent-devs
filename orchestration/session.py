@@ -1001,8 +1001,13 @@ class Session:
         # por sesión, para no olvidar que está prendido).
         self._auto_approve: bool = False
         self._confirm_lock = threading.Lock()
-        # Cancel del turno EN CURSO: lo setea run_turn; lo llama la TUI con ESC.
-        self._turn_cancel = None
+        # Exclusión mutua de turnos (un turno a la vez) + cancelación de TODOS
+        # los vivos: dos run_turn concurrentes mezclaban _messages/tools y el
+        # ESC solo alcanzaba al último (E2E T011/T013 + post-ESC escribiendo).
+        self._turn_lock = threading.Lock()
+        self._turn_thread: int | None = None
+        self._turn_depth = 0
+        self._turn_tasks: set = set()
         # Edit pendiente cuando la confirmación vence por timeout: el usuario
         # dijo 'continua' después y espera que NO se re-explore todo. Se guarda
         # acá y el próximo turno lo reaplica sin LLM.
@@ -2421,6 +2426,57 @@ class Session:
             console.print(f"[dim]Commit falló: {e}[/dim]")
 
     def run_turn(self, user_input: str, status: str | None = None) -> None:
+        """Punto de entrada de turnos con exclusión mutua (un turno a la vez).
+
+        Un segundo turno concurrente (otra hebra, ej. submit en TUI mientras
+        uno corre) se rechaza con aviso en vez de mezclar _messages/tools y
+        dejar al ESC apuntando al turno equivocado. La misma hebra puede
+        anidar (bulk-chain, retry de credencial). Slash y approvals no llegan
+        acá con turno ajeno en curso (la TUI los deja pasar igual).
+        """
+        if not self._try_claim_turn():
+            console.print(
+                "[yellow]⏳ Hay un turno en curso — esperá a que termine o "
+                "cancelalo con ESC. Tu mensaje no se ejecutó: reenvialo.[/yellow]"
+            )
+            return
+        try:
+            return self._run_turn_inner(user_input, status=status)
+        finally:
+            self._release_turn()
+
+    def _try_claim_turn(self) -> bool:
+        """True si esta hebra puede correr un turno (con anidado misma-hebra)."""
+        ident = threading.get_ident()
+        with self._turn_lock:
+            if self._turn_thread is not None and self._turn_thread != ident:
+                return False
+            if self._turn_thread is None:
+                self._turn_thread = ident
+            self._turn_depth += 1
+            return True
+
+    def _release_turn(self) -> None:
+        """Libera el reclamo (solo la hebra dueña, por profundidad)."""
+        ident = threading.get_ident()
+        with self._turn_lock:
+            if self._turn_thread != ident:
+                return
+            self._turn_depth = max(0, self._turn_depth - 1)
+            if self._turn_depth == 0:
+                self._turn_thread = None
+
+    def _track_turn_task(self, loop, task) -> None:
+        """Registra una task viva para que ESC las cancele a TODAS."""
+        with self._turn_lock:
+            self._turn_tasks.add((id(task), loop, task))
+
+    def _untrack_turn_task(self, task) -> None:
+        ident = id(task)
+        with self._turn_lock:
+            self._turn_tasks = {t for t in self._turn_tasks if t[0] != ident}
+
+    def _run_turn_inner(self, user_input: str, status: str | None = None) -> None:
         """Clasifica, cambia rol, ejecuta con historial, persiste en SQLite."""
         # Chequeo rápido: si llama.cpp está apagado, no intentar clasificar
         # (también usa LLM). Evita 60s de timeout + traceback crudo.
@@ -2971,14 +3027,14 @@ class Session:
                 watcher = EscWatcher(
                     # Bindeo por valor (B023): el callback puede dispararse
                     # tarde desde el thread del watcher, cuando `loop`/`task`
-                    # ya apuntan al reintento siguiente — cancelaría el turno
-                    # equivocado. _turn_cancel sí quiere lo último (noqa).
+                    # ya apuntan al reintento siguiente. Como cancela solo su
+                    # intento, _cancel_turn() cubre además a TODOS los vivos.
                     cancel_cb=lambda _loop=loop, _task=task: _loop.call_soon_threadsafe(
                         _task.cancel
                     )
                 )
                 watcher.start()
-            self._turn_cancel = lambda: loop.call_soon_threadsafe(task.cancel)  # noqa: B023
+            self._track_turn_task(loop, task)
 
             try:
                 loop.run_until_complete(task)
@@ -3527,6 +3583,7 @@ class Session:
             finally:
                 if watcher is not None:
                     watcher.stop()
+                self._untrack_turn_task(task)
                 loop.close()
 
         elapsed = time.monotonic() - start
@@ -3891,11 +3948,16 @@ class Session:
         return True, f"✅ Sesión {sid} retomada: {len(data)} turno(s){extra}. Seguí donde habías quedado.", data
 
     def _cancel_turn(self) -> None:
-        """Cancela el turno en curso (thread-safe, mismo camino que ESC)."""
-        cb = self._turn_cancel
-        if cb is not None:
+        """Cancela TODOS los turnos vivos (mismo camino que ESC).
+
+        Antes apuntaba solo al último (_turn_cancel sobrescrito por intento):
+        el ESC mataba al turno nuevo y el viejo seguía escribiendo (E2E
+        post-ESC con rewrite + flip de tasks.json)."""
+        with self._turn_lock:
+            live = list(self._turn_tasks)
+        for _, loop, task in live:
             with contextlib.suppress(Exception):
-                cb()
+                loop.call_soon_threadsafe(task.cancel)
 
     def request_cancel(self) -> None:
         """Cancela el turno en curso (lo llama la TUI full-screen con ESC).
