@@ -304,6 +304,12 @@ def run_fullscreen(session) -> None:
             else:
                 session.resolve_confirm(False)
             return
+        # Selección pendiente de untracked (/commit lista + "1 3"/"todos"):
+        # se resuelve acá sin abrir turno nuevo.
+        pick_msg = session.try_commit_pick(text)
+        if pick_msg is not None:
+            console.print(pick_msg)
+            return
         kind, payload = interpret_slash(text)
         if kind == "message":
             pass  # sigue abajo: eco + run_turn
@@ -828,6 +834,11 @@ def main():
                 print("👋 ¡Hasta luego!")
                 break
             if not user_input.strip():
+                continue
+            # Selección pendiente de untracked (/commit lista + "1 3"/"todos").
+            pick_msg = session.try_commit_pick(user_input)
+            if pick_msg is not None:
+                console.print(pick_msg + "\n")
                 continue
             kind, payload = interpret_slash(user_input)
             if kind == "help":

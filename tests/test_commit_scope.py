@@ -46,7 +46,8 @@ def test_parse_agrupa_y_marca():
     assert "[sesión] c" in out
     assert "Staged (2)" in out
     assert "Modificados tracked (1)" in out
-    assert "Nuevos untracked (1)" in out
+    assert "Nuevos untracked (respondé" in out
+    assert "1. [sesión] c" in out
 
 
 def test_parse_arbol_limpio():
@@ -147,3 +148,58 @@ def test_slash_commit_sin_nada_stageable(tmp_path, capsys):
     assert "Verificando antes de commitear" not in out
     assert "falló" not in out
     assert _git_log_count(repo) == 1
+
+
+def test_parse_commit_pick():
+    from orchestration.session import _parse_commit_pick
+
+    assert _parse_commit_pick("todos") == "all"
+    assert _parse_commit_pick(" 1, 3 ") == [1, 3]
+    assert _parse_commit_pick("2 2 1") == [1, 2]
+    assert _parse_commit_pick("ninguno") == "none"
+    assert _parse_commit_pick("hola") is None
+    assert _parse_commit_pick("implementar T5") is None
+
+
+def test_try_commit_pick_stagea_elegidos(tmp_path, capsys):
+    """'1 3' stagea solo esos; el resto sigue untracked; consume el pendiente."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    for name in ("A", "B", "C"):
+        (repo / name).write_text("x", encoding="utf-8")
+    s = Session(llm=None, repo_path=str(repo))
+    s._pending_commit_pick = ["A", "B", "C"]
+    msg = s.try_commit_pick("1 3")
+    assert msg is not None and "Stageados 2" in msg
+    assert s._pending_commit_pick is None
+    staged = subprocess.run(
+        ["git", "diff", "--cached", "--name-only"], cwd=str(repo),
+        capture_output=True, text=True, check=True,
+    ).stdout.split()
+    assert sorted(staged) == ["A", "C"]
+
+
+def test_try_commit_pick_todos_y_ninguno(tmp_path):
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    (repo / "A").write_text("x", encoding="utf-8")
+    s = Session(llm=None, repo_path=str(repo))
+    s._pending_commit_pick = ["A"]
+    assert "Stageados 1" in (s.try_commit_pick("todos") or "")
+    s._pending_commit_pick = ["Z"]
+    assert "OK, no stageo" in (s.try_commit_pick("ninguno") or "")
+    assert s._pending_commit_pick is None
+
+
+def test_try_commit_pick_sin_pendiente_pasa_de_largo(tmp_path):
+    """Sin pick pendiente (o texto normal) devuelve None: sigue flujo normal."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    assert s.try_commit_pick("1 2") is None
+    s._pending_commit_pick = ["A"]
+    assert s.try_commit_pick("hola qué tal") is None
+    assert s._pending_commit_pick is None  # se limpió para no secuestrar turnos

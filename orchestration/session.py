@@ -845,7 +845,7 @@ def _parse_commit_candidates(
             continue
         mark = "[sesión]" if path in known else "[previo]"
         if status == "??":
-            untracked.append(f"  {mark} {path}")
+            untracked.append((f"{len(untracked) + 1}. {mark} {path}", path))
         elif status[0] not in (" ", "?"):
             staged.append(f"  {mark} {path}")
         else:
@@ -859,7 +859,10 @@ def _parse_commit_candidates(
     blocks = [
         _block("● Staged", staged),
         _block("● Modificados tracked", modified),
-        _block("● Nuevos untracked", untracked),
+        _block(
+            "● Nuevos untracked (respondé 1 2 3, 'todos' o 'ninguno')",
+            [label for label, _ in untracked],
+        ),
     ]
     body = "\n".join(b for b in blocks if b)
     if not body:
@@ -889,6 +892,19 @@ def _commit_stage_set(
             continue
         out.append(path)
     return out
+
+
+def _parse_commit_pick(text: str) -> str | list[int] | None:
+    """Interpreta la respuesta a la lista de untracked: 'todos' | 'ninguno' |
+    [números 1-based] | None (no es pick: sigue flujo normal y se limpia)."""
+    t = (text or "").strip().lower()
+    if t in ("todos", "todo"):
+        return "all"
+    if t in ("ninguno", "ninguna", "no", "nada"):
+        return "none"
+    if not re.fullmatch(r"[\d\s,]+", t):
+        return None
+    return sorted({int(n) for n in re.findall(r"\d+", t) if int(n) >= 1})
 
 
 def _baseline_key(item: str) -> str:
@@ -1107,6 +1123,9 @@ class Session:
         # sesion): unión por turno de (dirty al cerrar − dirty al abrir),
         # con paths CRUDOS de porcelain (sin filtros). /new lo limpia.
         self._session_touched_files: set[str] = set()
+        # Selección pendiente de untracked para stagear (/commit lista y el
+        # usuario responde "1 3" o "todos"). Se consume al usarse; /new limpia.
+        self._pending_commit_pick: list[str] | None = None
         # Snapshot crudo (sin filtrar) del inicio del turno, para el cálculo
         # anterior. None = git falló (no se atribuye ese turno).
         self._turn_start_raw: set[str] | None = None
@@ -1350,6 +1369,7 @@ class Session:
         self._session_time = 0.0
         self._auto_approve = False
         self._session_touched_files = set()
+        self._pending_commit_pick = None
         self.current_role = Role.ANALYZE
         self._load_previous_sessions()
         self._rebuild_agent(Role.ANALYZE)
@@ -2531,11 +2551,17 @@ class Session:
             console.print(
                 escape(_parse_commit_candidates(lines, self._session_touched_files))
             )
+            untracked_pick = [
+                ln[3:].strip() for ln in lines
+                if len(ln) >= 4 and ln.startswith("??")
+            ]
+            self._pending_commit_pick = untracked_pick or None
             console.print(
                 "[dim]" + escape(
                     "Usá /commit todo [mensaje] (todos los tracked) o "
                     "/commit sesion [mensaje] (solo lo tocado en esta sesión). "
-                    "Untracked siempre a mano."
+                    "Para untracked respondé con números (1 3), 'todos' o "
+                    "'ninguno' — nunca se stagean solos."
                 ) + "[/dim]"
             )
             return
@@ -2593,6 +2619,51 @@ class Session:
                 console.print(f"[red]⛔ git commit falló:\n{escape(out)}[/red]")
         except Exception as e:
             console.print(f"[red]⛔ git falló: {escape(str(e))}[/red]")
+
+    def try_commit_pick(self, text: str) -> str | None:
+        """Consume la selección pendiente de untracked (/commit lista y el
+        usuario responde '1 3', 'todos' o 'ninguno'). Retorna el mensaje a
+        mostrar si la manejó, None si sigue flujo normal (limpiando el
+        pendiente para no secuestrar turnos futuros). Solo stagea paths que
+        SIGUEN untracked (revalida contra git)."""
+        if not self._pending_commit_pick:
+            return None
+        from rich.markup import escape
+
+        pending = self._pending_commit_pick
+        parsed = _parse_commit_pick(text)
+        self._pending_commit_pick = None
+        if parsed is None:
+            return None
+        if parsed == "none":
+            return "[dim]OK, no stageo nada.[/dim]"
+        _code, status = self._git_cmd(
+            ["status", "--porcelain", "--untracked-files=all"]
+        )
+        still_untracked = {
+            ln[3:].strip() for ln in (status.splitlines() if status.strip() else [])
+            if len(ln) >= 4 and ln.startswith("??")
+        }
+        if parsed == "all":
+            chosen = [p for p in pending if p in still_untracked]
+        else:
+            chosen = [
+                pending[i - 1] for i in parsed
+                if 1 <= i <= len(pending) and pending[i - 1] in still_untracked
+            ]
+        if not chosen:
+            return (
+                "[yellow]↻ Ningún número válido (o ya no están untracked). "
+                "Pedí /commit de nuevo para ver la lista actual.[/yellow]"
+            )
+        code, out = self._git_cmd(["add", "--", *chosen], timeout=15)
+        if code != 0:
+            return f"[red]⛔ git add falló:\n{escape(out)}[/red]"
+        return (
+            f"[green]✅ Stageados {len(chosen)}: {escape(', '.join(chosen[:8]))}[/green]\n"
+            "[dim]Ahora /commit todo [mensaje] o /commit sesion [mensaje] "
+            "para commitear.[/dim]"
+        )
 
     def _print_untracked_hint(self, untracked: list[str]) -> None:
         """Lista untracked + comando exacto para agregarlos a mano.
