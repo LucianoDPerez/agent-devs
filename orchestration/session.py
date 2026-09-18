@@ -327,6 +327,77 @@ _BRANCH_INTENT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Fuentes críticas del harness para detectar proceso STALE: si estos archivos
+# cambian bajo una sesión abierta (pull con el CLI corriendo), el proceso
+# sigue corriendo código viejo y falla raro (E2E: session.py nuevo en disco +
+# tool_dedupe viejo en memoria → AttributeError en cada turno). Se hace
+# snapshot al crear la Session y se compara al arrancar cada turno.
+_WATCHED_SOURCE_FILES = (
+    "main.py",
+    "cache.py",
+    "config.py",
+    "orchestration/session.py",
+    "orchestration/tool_dedupe.py",
+    "orchestration/agent_builder.py",
+    "orchestration/execute_bootstrap.py",
+    "tools/__init__.py",
+    "tools/verify.py",
+    "tools/filesystem.py",
+    "tools/git.py",
+    "tools/runtime_probe.py",
+    "display/console.py",
+    "display/fullscreen_tui.py",
+)
+
+
+def _repo_root() -> str:
+    return str(Path(__file__).resolve().parent.parent)
+
+
+def _snapshot_sources(
+    paths: tuple[str, ...] = _WATCHED_SOURCE_FILES, root: str | None = None
+) -> dict:
+    """{(path): (mtime_ns, size)} de las fuentes vigiladas. Fail-open: {}."""
+    import os
+
+    snap: dict = {}
+    try:
+        root = root or _repo_root()
+        for rel in paths:
+            try:
+                st = os.stat(os.path.join(root, rel))
+                snap[rel] = (st.st_mtime_ns, st.st_size)
+            except OSError:
+                snap[rel] = None
+    except Exception:
+        return {}
+    return snap
+
+
+def _sources_changed(
+    snap: dict,
+    paths: tuple[str, ...] = _WATCHED_SOURCE_FILES,
+    root: str | None = None,
+) -> bool:
+    """True si alguna fuente vigilada cambió o falta respecto al snapshot."""
+    if not snap:
+        return False
+    import os
+
+    try:
+        root = root or _repo_root()
+        for rel in paths:
+            try:
+                st = os.stat(os.path.join(root, rel))
+                cur = (st.st_mtime_ns, st.st_size)
+            except OSError:
+                cur = None
+            if snap.get(rel) != cur:
+                return True
+    except Exception:
+        return False
+    return False
+
 # Extensions considered when extracting concrete file targets from a prior
 # analysis so the chained EXECUTE read them directly.
 # Extensions considered when extracting concrete file targets from a prior
@@ -973,6 +1044,9 @@ class Session:
         # sano, False=hallazgos, None=no se ejecutó). Lo usa _closing_message
         # para concluir "probablemente ya está resuelto" cuando corresponde.
         self._runtime_healthy: bool | None = None
+        # Snapshot de fuentes vigiladas para detectar proceso STALE (ver
+        # _WATCHED_SOURCE_FILES). Se toma una vez al crear la Session.
+        self._source_snapshot: dict = _snapshot_sources(_WATCHED_SOURCE_FILES)
         # Reporte completo del runtime (para la evidencia del cierre).
         self._runtime_report: str | None = None
         self._dedupe = ToolCallDedupe(max_repeats=1)
@@ -2561,6 +2635,15 @@ class Session:
         anidar (bulk-chain, retry de credencial). Slash y approvals no llegan
         acá con turno ajeno en curso (la TUI los deja pasar igual).
         """
+        if _sources_changed(self._source_snapshot, _WATCHED_SOURCE_FILES):
+            console.print(
+                "[red]⛔ Los archivos del harness cambiaron bajo esta sesión "
+                "abierta (pull o edición con el CLI corriendo): este proceso "
+                "sigue corriendo código viejo y puede fallar raro. Cerrá el "
+                "programa del todo y abrilo de nuevo (/new NO alcanza: no "
+                "recarga módulos). Tu mensaje no se ejecutó.[/red]"
+            )
+            return
         if not self._try_claim_turn():
             console.print(
                 "[yellow]⏳ Hay un turno en curso — esperá a que termine o "

@@ -50,6 +50,38 @@ def test_doctor_chequea_checkout():
     assert "rev-list" in src
 
 
+def test_snapshot_detecta_cambio_y_faltante(tmp_path):
+    from orchestration.session import _snapshot_sources, _sources_changed
+
+    a = tmp_path / "a.py"
+    a.write_text("v1\n", encoding="utf-8")
+    snap = _snapshot_sources(("a.py",), root=str(tmp_path))
+    assert _sources_changed(snap, ("a.py",), root=str(tmp_path)) is False
+    a.write_text("v2 mucho más largo\n", encoding="utf-8")
+    assert _sources_changed(snap, ("a.py",), root=str(tmp_path)) is True
+    a.unlink()
+    assert _sources_changed(snap, ("a.py",), root=str(tmp_path)) is True
+    assert _sources_changed({}, ("a.py",), root=str(tmp_path)) is False
+
+
+def test_run_turn_rechaza_proceso_stale(tmp_path, monkeypatch, capsys):
+    """Proceso con código viejo en memoria: el turno se niega con aviso
+    (E2E: AttributeError en cada turno tras update sin restart)."""
+    from orchestration import session as session_mod
+    from orchestration.session import Session
+
+    watched = tmp_path / "w.py"
+    watched.write_text("v1\n", encoding="utf-8")
+    monkeypatch.setattr(session_mod, "_WATCHED_SOURCE_FILES", ("w.py",))
+    monkeypatch.setattr(session_mod, "_repo_root", lambda: str(tmp_path))
+    s = Session(llm=None, repo_path=str(tmp_path))
+    watched.write_text("v2 mucho más largo\n", encoding="utf-8")
+    s.run_turn("implementar T999")
+    out = capsys.readouterr().out
+    assert "Cerrá el programa" in out
+    assert "/new NO alcanza" in out
+
+
 def test_imports_blindados_contra_cwd_con_config(tmp_path):
     """Un CWD con config/ genérico no rompe los imports (shadowing).
 
