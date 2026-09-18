@@ -1994,11 +1994,11 @@ class Session:
         self._persist_turn_state()
 
     def _current_failing_tests(self) -> list[str]:
-        """Unión de fallos del turno (colas del dedupe), sin duplicados."""
+        """Unión de fallos del turno (colas del budget), sin duplicados."""
         out: list[str] = []
         seen: set[str] = set()
         try:
-            tails = self._dedupe._failure_tails
+            tails = self._explore_budget._failure_tails
         except Exception:
             return []
         for items in (tails or {}).values():
@@ -2686,6 +2686,38 @@ class Session:
         with self._turn_lock:
             self._turn_tasks = {t for t in self._turn_tasks if t[0] != ident}
 
+    def _reset_turn_state(self) -> None:
+        """Limpia el estado POR TURNO (budgets, dedupe, verify, overrides).
+
+        Extraído como método para poder testearlo sin LLM: un error acá rompe
+        TODOS los turnos (E2E: clear_failure_tails llamado sobre _dedupe en
+        vez de _explore_budget → AttributeError en cada EXECUTE).
+        """
+        self._dedupe.reset()
+        self._explore_budget.reset()
+        self._analyze_budget.reset()
+        self._called_tools.clear()
+        self._verify_results.clear()
+        self._explore_budget.clear_failure_tails()
+        self._turn_verify_tools = set()
+        self._turn_verify_results = {}
+        self._turn_wrote = False
+        self._turn_saw_pass = False
+        self._turn_verify_failed = False
+        self._turn_writes_after_pass = False
+        # Alcance pinnado por tarea (breaker de scope creep): se recalcula
+        # abajo para EXECUTE con Tarea(s) pinnada(s). Los retries del turno
+        # reutilizan el mismo dedupe → el contador persiste en el turno.
+        self._scope_nums = []
+        self._dedupe.scope_files = frozenset()
+        self._dedupe.scope_violations = {}
+        # Contadores anti-loop por TURNO (los retries NO los borran): writes
+        # a planificación protegida y edits no-op. Solo la sesión limpia.
+        self._dedupe.protected_rejects = {}
+        self._dedupe.noop_rejects = {}
+        self._runtime_healthy = None
+        self._runtime_report = None
+
     def _run_turn_inner(self, user_input: str, status: str | None = None) -> None:
         """Clasifica, cambia rol, ejecuta con historial, persiste en SQLite."""
         # Chequeo rápido: si llama.cpp está apagado, no intentar clasificar
@@ -2803,30 +2835,7 @@ class Session:
         elif new_role == Role.PLAN:
             self._analyze_budget.max_calls = PLAN_EXPLORE_BUDGET
             self._analyze_budget.max_reads_after_explore = PLAN_MAX_READS_AFTER_EXPLORE
-        self._dedupe.reset()
-        self._explore_budget.reset()
-        self._analyze_budget.reset()
-        self._called_tools.clear()
-        self._verify_results.clear()
-        self._dedupe.clear_failure_tails()
-        self._turn_verify_tools = set()
-        self._turn_verify_results = {}
-        self._turn_wrote = False
-        self._turn_saw_pass = False
-        self._turn_verify_failed = False
-        self._turn_writes_after_pass = False
-        # Alcance pinnado por tarea (breaker de scope creep): se recalcula
-        # abajo para EXECUTE con Tarea(s) pinnada(s). Los retries del turno
-        # reutilizan el mismo dedupe → el contador persiste en el turno.
-        self._scope_nums = []
-        self._dedupe.scope_files = frozenset()
-        self._dedupe.scope_violations = {}
-        # Contadores anti-loop por TURNO (los retries NO los borran): writes
-        # a planificación protegida y edits no-op. Solo la sesión limpia.
-        self._dedupe.protected_rejects = {}
-        self._dedupe.noop_rejects = {}
-        self._runtime_healthy = None
-        self._runtime_report = None
+        self._reset_turn_state()
         # Los overrides de write_file (habilitados tras fallar la cirugía fina
         # de edit_file) son por TURNO: limpiar para que el próximo turno
         # arranque con los guards de sobrescritura activos.

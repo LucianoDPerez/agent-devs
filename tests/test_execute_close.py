@@ -658,7 +658,7 @@ def test_close_con_rojos_muestra_atribucion(tmp_path):
     s = _make_session(repo)
     s._called_tools = {"edit_file", "run_tests"}
     s._verify_results = {"run_tests": False}
-    s._dedupe._failure_tails = {
+    s._explore_budget._failure_tails = {
         ("run_tests", str(repo)): [
             "tests/integration/users-table.test.ts",
             "tests/new.test.ts",
@@ -679,7 +679,7 @@ def test_failed_close_con_rojos_muestra_atribucion(tmp_path):
     s = _make_session(repo)
     s._called_tools = set()
     s._verify_results = {}
-    s._dedupe._failure_tails = {
+    s._explore_budget._failure_tails = {
         ("run_tests", str(repo)): ["tests/integration/users-table.test.ts"]
     }
     s._baseline = {"failing": ["tests/integration/users-table.test.ts"]}
@@ -827,3 +827,17 @@ def test_readonly_evidence_turn_plan_inicial_no_tapa_veredicto(tmp_path):
     text = plan + verdict
     assert len(plan) > 600  # el plan queda FUERA de la cola evaluada
     assert s._readonly_evidence_turn(text) is True
+
+
+def test_reset_turn_state_no_revienta(tmp_path):
+    """Regresión E2E: el reset de inicio de turno tocaba clear_failure_tails
+    sobre _dedupe (clase sin ese método) en vez de _explore_budget →
+    AttributeError en CADA turno. Esto lo atrapa sin LLM."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    s._explore_budget._failure_tails = {("run_tests", "x"): ["a.test.ts"]}
+    s._reset_turn_state()  # antes: AttributeError acá mismo
+    assert s._explore_budget._failure_tails == {}
+    assert s._turn_verify_tools == set()
