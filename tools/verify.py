@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -584,3 +585,54 @@ def run_npm_script(path: str, script: str) -> str:
 
     result = _run_command(str(root), resolved)
     return result
+
+
+_BASELINE_MAX_ITEMS = 30
+_BASELINE_MAX_LEN = 160
+
+
+def extract_failing_tests(output: str) -> list[str]:
+    """Nombres de tests/archivos que fallan en una salida de verify.
+
+    Baseline flaco: el cierre del turno N guarda este SET y el turno N+1
+    distingue heredados (ya fallaban) de nuevos SIN batería extra. Solo
+    identificadores — una línea por fallo, nunca logs. Fail-open: [].
+    """
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def _add(item: str) -> None:
+        item = (item or "").strip()[:_BASELINE_MAX_LEN]
+        if item and item not in seen:
+            seen.add(item)
+            found.append(item)
+
+    try:
+        lines = (output or "").splitlines()
+    except Exception:
+        return []
+    for raw in lines:
+        if len(found) >= _BASELINE_MAX_ITEMS:
+            break
+        line = raw.strip()
+        # vitest: "FAIL  tests/integration/users-table.test.ts > suite > caso"
+        m = re.match(r"FAIL\s+([\w./-]+\.(?:test|spec)\.[tj]sx?)\b", line)
+        if m:
+            _add(m.group(1))
+            continue
+        # pytest: "FAILED tests/test_x.py::test_y" / "ERROR tests/...py"
+        m = re.match(r"(?:FAILED|ERROR)\s+([\w./-]+\.py)(?:::(\S+))?", line)
+        if m:
+            _add(m.group(1) + (f"::{m.group(2)}" if m.group(2) else ""))
+            continue
+        # go: "--- FAIL: TestNombre" (sin archivo; nombre grepeable)
+        m = re.match(r"--- FAIL:\s+(\S+)", line)
+        if m:
+            _add(m.group(1))
+            continue
+        # go: "FAIL\tpkg/ruta" (paquete que falla)
+        m = re.match(r"FAIL\s+(\S+)", line)
+        if m and "/" in m.group(1):
+            _add(m.group(1))
+            continue
+    return found

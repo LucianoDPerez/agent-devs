@@ -184,3 +184,32 @@ class TestRepoState:
     def test_sin_fila_da_vacio(self, tmp_path, monkeypatch):
         monkeypatch.setattr(cache_mod, "CACHE_DB", str(tmp_path / "t.db"))
         assert cache_mod.load_repo_state(str(tmp_path / "nada")) == {}
+
+
+class TestBaseline:
+    """SET de fallos por turno para atribuir heredados vs nuevos."""
+
+    def test_roundtrip(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cache_mod, "CACHE_DB", str(tmp_path / "t.db"))
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "a.test.ts").write_text("x", encoding="utf-8")
+        snap = cache_mod.snapshot_hash(str(proj))
+        cache_mod.save_test_baseline(
+            str(proj), failing=["a.test.ts"], snapshot=snap
+        )
+        assert cache_mod.load_test_baseline(str(proj)) == {"failing": ["a.test.ts"]}
+
+    def test_snapshot_viejo_descarta(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cache_mod, "CACHE_DB", str(tmp_path / "t.db"))
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        (proj / "a.test.ts").write_text("x", encoding="utf-8")
+        cache_mod.save_test_baseline(
+            str(proj), failing=["a.test.ts"], snapshot="muertomuertomuert00"
+        )
+        assert cache_mod.load_test_baseline(str(proj)) == {}
+
+    def test_sin_fila_da_vacio(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cache_mod, "CACHE_DB", str(tmp_path / "t.db"))
+        assert cache_mod.load_test_baseline(str(tmp_path / "nada")) == {}

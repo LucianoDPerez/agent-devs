@@ -258,6 +258,11 @@ class ExploreBudget:
         # real T004: 12 run_verify repetidos tras PASSED hasta ESC). Al 2º
         # cache-hit seguido se levanta excepción dura.
         self._verify_cache_hit_streak = 0
+        # Cola de fallos por (tool, path) para el baseline flaco: nombres de
+        # tests que fallan, sin logs (el cierre N la guarda, el turno N+1
+        # distingue heredados de nuevos). Sobrevive a reset() (reintentos):
+        # se limpia por TURNO vía clear_failure_tails().
+        self._failure_tails: dict[tuple[str, str], list[str]] = {}
         # El wrapper de tools difiere el raise de VerifyRequired al POST-ejecución:
         # así los writes FALLIDOS se pueden refundir (no disparan compuertas
         # falsas) y el raise solo ocurre tras un write EFECTIVO. consume() con
@@ -278,6 +283,11 @@ class ExploreBudget:
         self._writes_since_verify = 0
         self._verify_streak = 0
         self._verify_cache_hit_streak = 0
+
+    def clear_failure_tails(self) -> None:
+        """Limpia la cola de fallos (inicio de turno). Los reintentos NO la
+        tocan: verificar antes del retry también es evidencia del turno."""
+        self._failure_tails = {}
 
     @staticmethod
     def _verify_cache_key(name: str, kwargs: dict[str, Any] | None) -> tuple[str, str]:
@@ -305,8 +315,25 @@ class ExploreBudget:
         if isinstance(result, str) and result.startswith("[PASSED]"):
             first = result.splitlines()[0][:160] if result else ""
             self._verified_clean[key] = first
+            self._failure_tails.pop(key, None)
         else:
             self._verified_clean.pop(key, None)
+            # Cola de fallos para el baseline flaco (ver atributo). Solo si
+            # hay nombres extraíbles; si no, se invalida la entrada.
+            try:
+                from tools.verify import extract_failing_tests
+
+                failing = (
+                    extract_failing_tests(result)
+                    if isinstance(result, str)
+                    else []
+                )
+            except Exception:
+                failing = []
+            if failing:
+                self._failure_tails[key] = failing
+            else:
+                self._failure_tails.pop(key, None)
 
     def set_read_limit(self, path: str, limit: int) -> None:
         """Sube el tope de lecturas para UN path.

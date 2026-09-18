@@ -65,6 +65,15 @@ CREATE TABLE IF NOT EXISTS repo_state (
     snapshot_hash TEXT,
     updated_at TEXT
 );
+
+-- Baseline flaco de tests: SET de fallos al cerrar un turno, para que el
+-- siguiente distinga heredados de nuevos sin batería extra.
+CREATE TABLE IF NOT EXISTS test_baseline (
+    path TEXT PRIMARY KEY,
+    failing_json TEXT,
+    snapshot_hash TEXT,
+    updated_at TEXT
+);
 """
 
 
@@ -528,3 +537,56 @@ def load_repo_state(repo_path: str) -> dict:
         except Exception:
             pass
     return out
+
+
+def save_test_baseline(repo_path: str, *, failing: list, snapshot: str = "") -> None:
+    """Guarda el SET de fallos del turno como baseline. Fail-open."""
+    try:
+        conn = _connect()
+        now = _now()
+        conn.execute(
+            """
+            INSERT INTO test_baseline (path, failing_json, snapshot_hash, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(path) DO UPDATE SET
+                failing_json = excluded.failing_json,
+                snapshot_hash = excluded.snapshot_hash,
+                updated_at = excluded.updated_at
+            """,
+            (
+                normalize_path(repo_path),
+                json.dumps([str(x) for x in (failing or [])]),
+                snapshot or "",
+                now,
+            ),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def load_test_baseline(repo_path: str) -> dict:
+    """{"failing": [...]} si el árbol no cambió desde que se guardó, {} si no.
+    Fail-open ante cualquier duda."""
+    try:
+        conn = _connect()
+        row = conn.execute(
+            "SELECT failing_json, snapshot_hash FROM test_baseline WHERE path = ?",
+            (normalize_path(repo_path),),
+        ).fetchone()
+        conn.close()
+    except Exception:
+        return {}
+    if not row or not row["failing_json"]:
+        return {}
+    try:
+        saved_snapshot = row["snapshot_hash"] or ""
+        if saved_snapshot and saved_snapshot != snapshot_hash(repo_path):
+            return {}
+        parsed = json.loads(row["failing_json"])
+        if not isinstance(parsed, list):
+            return {}
+        return {"failing": [str(x) for x in parsed]}
+    except Exception:
+        return {}

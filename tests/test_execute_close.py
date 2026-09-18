@@ -651,6 +651,43 @@ def test_close_pre_dirty_avisa_truncado(tmp_path):
     assert "NO modificó archivos propios" in close
 
 
+def test_close_con_rojos_muestra_atribucion(tmp_path):
+    """Cierre con rojos + baseline: Heredados vs Nuevos con nombres."""
+    repo = _init_repo(tmp_path)
+    (repo / "README.md").write_text("# repo\n\nEDITADO\n")
+    s = _make_session(repo)
+    s._called_tools = {"edit_file", "run_tests"}
+    s._verify_results = {"run_tests": False}
+    s._dedupe._failure_tails = {
+        ("run_tests", str(repo)): [
+            "tests/integration/users-table.test.ts",
+            "tests/new.test.ts",
+        ]
+    }
+    s._baseline = {"failing": ["tests/integration/users-table.test.ts"]}
+    close = s._deterministic_close()
+    assert "FALLÓ" in close
+    assert "Heredados: 1" in close
+    assert "Nuevos: 1" in close
+    assert "users-table.test.ts" in close
+
+
+def test_failed_close_con_rojos_muestra_atribucion(tmp_path):
+    """Cierre fallido con rojos observados: atribuye aunque el intento quedó limpio."""
+    repo = _init_repo(tmp_path)
+    (repo / "README.md").write_text("# repo\n\nPENDIENTE\n")
+    s = _make_session(repo)
+    s._called_tools = set()
+    s._verify_results = {}
+    s._dedupe._failure_tails = {
+        ("run_tests", str(repo)): ["tests/integration/users-table.test.ts"]
+    }
+    s._baseline = {"failing": ["tests/integration/users-table.test.ts"]}
+    msg = s._failed_turn_close()
+    assert "Heredados: 1" in msg
+    assert "Nuevos: 0" in msg
+
+
 def test_claim_turn_rechaza_segunda_hebra(tmp_path):
     """Un turno a la vez: otra hebra es rechazada, la misma puede anidar
     (bulk-chain, retry de credencial). E2E T011/T013 mezclados."""

@@ -738,6 +738,40 @@ def _tasks_anchor_line(tasks_file: str | None) -> str:
     )
 
 
+def _baseline_key(item: str) -> str:
+    """Archivo del identificador de fallo (sin ::caso ni sufijos)."""
+    return re.split(r"::| — ", (item or "").strip(), maxsplit=1)[0].strip()
+
+
+def _split_reds(
+    current: list[str], baseline: list[str] | None
+) -> tuple[list[str], list[str]] | None:
+    """(heredados, nuevos) comparando fallos actuales vs baseline anterior.
+
+    None si no hay baseline (se desconoce: sin línea de atribución). []
+    como baseline es válido (estaba todo verde → todo rojo actual es nuevo).
+    """
+    if baseline is None:
+        return None
+    base = {_baseline_key(b) for b in baseline}
+    heredados = [c for c in current if _baseline_key(c) in base]
+    nuevos = [c for c in current if _baseline_key(c) not in base]
+    return heredados, nuevos
+
+
+def _format_reds_attribution(heredados: list[str], nuevos: list[str]) -> str:
+    """Línea compacta de atribución para el cierre (nombres, no logs)."""
+    def _short(items: list[str], n: int = 2) -> str:
+        shown = ", ".join(_baseline_key(i).split("/")[-1] for i in items[:n])
+        extra = f" (+{len(items) - n} más)" if len(items) > n else ""
+        return f"{shown}{extra}" if shown else "—"
+
+    return (
+        f"   Heredados: {len(heredados)} (ya fallaban: {_short(heredados)}) · "
+        f"Nuevos: {len(nuevos)} ({_short(nuevos) if nuevos else 'ninguno'})"
+    )
+
+
 def _git_branch(repo_path: str) -> str:
     try:
         result = subprocess.run(
@@ -916,6 +950,12 @@ class Session:
         # leyó .agent/tasks.json y .agent-devs/tasks.md inexistentes y deliró
         # un T8 de otro repo). Vive a nivel SESIÓN, no se limpia por turno.
         self._last_tasks_file: str | None = None
+        # Baseline flaco: SET de tests que fallaban al cerrar el turno ANTERIOR
+        # {"failing": [...], "snapshot": ...} o None si se desconoce. El cierre
+        # del turno N lo guarda (cosecha salidas ya corridas: cero baterías
+        # extra) y el turno N+1 distingue heredados de nuevos. [] = estaba
+        # todo verde (cualquier rojo actual es nuevo).
+        self._baseline: dict | None = None
         # Hidratación desde disco: un restart/pull entre /verify y el turno
         # no debe evaporar los rojos ni el ancla (E2E turno rojo: sesión
         # fresca sin "🔗 Retomando rojos"). Fail-open.
@@ -1873,6 +1913,60 @@ class Session:
             pass
         self._persist_turn_state()
 
+    def _current_failing_tests(self) -> list[str]:
+        """Unión de fallos del turno (colas del dedupe), sin duplicados."""
+        out: list[str] = []
+        seen: set[str] = set()
+        try:
+            tails = self._dedupe._failure_tails
+        except Exception:
+            return []
+        for items in (tails or {}).values():
+            for it in items or []:
+                if it not in seen:
+                    seen.add(it)
+                    out.append(it)
+        return out
+
+    def _ensure_baseline(self) -> list[str] | None:
+        """SET de fallos del turno anterior (memoria o disco con snapshot).
+
+        None = se desconoce (sin línea de atribución). [] = estaba todo
+        verde (cualquier rojo actual es nuevo). Solo lee disco una vez por
+        sesión (después queda en memoria).
+        """
+        if self._baseline is not None:
+            failing = self._baseline.get("failing")
+            return list(failing) if isinstance(failing, list) else None
+        try:
+            from cache import load_test_baseline
+
+            loaded = load_test_baseline(self.repo_path)
+        except Exception:
+            return None
+        failing = loaded.get("failing") if isinstance(loaded, dict) else None
+        if not isinstance(failing, list):
+            return None
+        self._baseline = {"failing": [str(x) for x in failing]}
+        return list(self._baseline["failing"])
+
+    def _store_baseline(self) -> None:
+        """Guarda el SET de fallos del turno como baseline del siguiente
+        (memoria + disco). Cuesta cero baterías: cosecha salidas ya corridas
+        por las tools del turno."""
+        try:
+            from cache import save_test_baseline, snapshot_hash
+
+            failing = self._current_failing_tests()
+            try:
+                snap = snapshot_hash(self.repo_path)
+            except Exception:
+                snap = ""
+            self._baseline = {"failing": failing}
+            save_test_baseline(self.repo_path, failing=failing, snapshot=snap)
+        except Exception:
+            pass
+
     def _pop_failed_verify_record(self) -> dict:
         """Registro de la última verificación con rojos, una sola vez (consume).
         Sin rojos guardados → {}."""
@@ -2092,6 +2186,18 @@ class Session:
                 )
         except Exception:
             scope_line = ""
+        reds_line = ""
+        if verify_state is False:
+            # Atribución heredados vs nuevos contra el baseline del turno
+            # anterior (cero baterías: cosecha salidas ya corridas).
+            try:
+                _reds_now = self._current_failing_tests()
+                _base_now = self._ensure_baseline()
+            except Exception:
+                _reds_now, _base_now = [], None
+            if _reds_now and _base_now is not None:
+                _her_now, _new_now = _split_reds(_reds_now, _base_now) or ([], [])
+                reds_line = "\n" + _format_reds_attribution(_her_now, _new_now)
         if own_files:
             head = f"✅ Tarea realizada: {len(own_files)} archivo(s) modificado(s){turn_suffix}"
             detail = "   · " + "\n   · ".join(own_files[:8])
@@ -2119,7 +2225,7 @@ class Session:
                     "verificación exitosa — VERIFICAR CON EVIDENCIA ANTES DE "
                     "CONFIRMAR (revisá el diff antes de commitear)"
                 )
-            return f"{head}\n{detail}\n{verify_line}{evidence_line}{scope_line}"
+            return f"{head}\n{detail}\n{verify_line}{reds_line}{evidence_line}{scope_line}"
         if pre_dirty and not unknown_start:
             head = "↻ Este turno NO modificó archivos propios"
             _shown = sorted(pre_dirty)[:5]
@@ -2141,11 +2247,11 @@ class Session:
                     "   Verificación: no se corrió (sin escrituras propias "
                     "no había nada que verificar con lint/tests/build)"
                 )
-            return f"{head}\n{detail}\n{verify_line}{scope_line}"
+            return f"{head}\n{detail}\n{verify_line}{reds_line}{scope_line}"
         if verify_state is True:
             return "✅ Turno completado (verificación corrida y exitosa, sin cambios en disco)."
         if verify_state is False:
-            return "⚠️ Turno sin cambios en disco y la verificación FALLÓ (ver output arriba)."
+            return "⚠️ Turno sin cambios en disco y la verificación FALLÓ (ver output arriba)." + reds_line
         return "↻ El turno terminó sin cambios detectados en disco."
 
     def _failed_turn_close(self) -> str:
@@ -2198,6 +2304,14 @@ class Session:
                     "done SIN verificación corrida — no dar la tarea por "
                     "hecha hasta verificar.[/dim]"
                 )
+        try:
+            _reds_f = self._current_failing_tests()
+            _base_f = self._ensure_baseline()
+        except Exception:
+            _reds_f, _base_f = [], None
+        if _reds_f and _base_f is not None:
+            _her_f, _new_f = _split_reds(_reds_f, _base_f) or ([], [])
+            msg += "\n[dim]" + _format_reds_attribution(_her_f, _new_f).strip() + "[/dim]"
         return msg
 
     def _git_cmd(self, args: list[str], timeout: int = 30) -> tuple[int, str]:
@@ -2605,6 +2719,7 @@ class Session:
         self._analyze_budget.reset()
         self._called_tools.clear()
         self._verify_results.clear()
+        self._dedupe.clear_failure_tails()
         self._turn_verify_tools = set()
         self._turn_verify_results = {}
         self._turn_wrote = False
@@ -3691,6 +3806,7 @@ class Session:
             console.print(f"\n[dim]{self._deterministic_close()}[/dim]")
             if self._verify_all_passed() is True:
                 self._last_verify = None  # verde en el turno: rojos resueltos
+            self._store_baseline()  # el cierre de este turno es baseline del próximo
         _bulk_more_pending = (
             _bulk_chain is not None
             and next_pending_batch(_bulk_chain[0]) is not None
@@ -3700,6 +3816,7 @@ class Session:
                 self._maybe_ask_commit(user_input)
         elif new_role == Role.EXECUTE and turn_failed and not interrupted:
             console.print(self._failed_turn_close(), end="")
+            self._store_baseline()  # los rojos observados son baseline del próximo
             # CREDENCIALES / ENTORNO EXTERNO: si el turno falló (probablemente
             # porque la tarea requiere una credencial/entorno que el agente no
             # tiene), invitar al usuario a proveerla o pedir los pasos manuales.
