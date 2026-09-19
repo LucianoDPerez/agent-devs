@@ -1050,6 +1050,46 @@ def run_commit_verification(
     return passed, report
 
 
+def _resolve_repo_file(repo_path: str, cand: str) -> str | None:
+    """Resuelve un path citado a archivo real del repo (o None).
+
+    1) Exacto relativo/absoluto en disco. 2) Basename con match ÚNICO en el
+    índice git (tracked + untracked no ignorados). Lo 2) cubre citas sin
+    directorio; con 0 o 2+ matches no se atribuye (anti-fantasma).
+    Fail-open: None ante cualquier error.
+    """
+    import subprocess
+
+    try:
+        if not cand:
+            return None
+        p = Path(cand)
+        if p.is_absolute():
+            return str(p) if p.is_file() else None
+        root = Path(repo_path)
+        if (root / cand).is_file():
+            return str(root / cand)
+        name = p.name
+        if "/" in cand or not name:
+            return None
+        proc = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--cached", "--others",
+             "--exclude-standard", "--", f"*{name}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if proc.returncode != 0:
+            return None
+        matches = [
+            ln.strip() for ln in proc.stdout.splitlines()
+            if ln.strip() and ln.strip().rsplit("/", 1)[-1] == name
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        return None
+    except Exception:
+        return None
+
+
 class Session:
     """Sesión con memoria, persistencia SQLite y gestión de contexto.
 
@@ -2030,11 +2070,16 @@ class Session:
         # Evidencia en español: el veredicto cita un path REAL del repo
         # ("infra/iam.tf línea 28"). Anti-fantasma: se valida en DISCO — un
         # path inventado no cuenta (mismo criterio que find_unverifiable_cites).
+        # Vale nombre pelado si resuelve a UN solo archivo en el índice git
+        # (E2E T016/T018: el modelo citó "handle-pauta-finalizada.ts" sin
+        # directorio y el veredicto válido fue a retry).
         root = Path(self.repo_path)
         for m in re.finditer(rf"[\w.\-/]+\.(?:{_EVIDENCE_EXT_PATTERN})\b", text or ""):
             cand = m.group(0)
             p = Path(cand) if Path(cand).is_absolute() else root / cand
             if p.is_file():
+                return True
+            if _resolve_repo_file(self.repo_path, cand) is not None:
                 return True
         return False
 

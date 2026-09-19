@@ -841,3 +841,38 @@ def test_reset_turn_state_no_revienta(tmp_path):
     s._reset_turn_state()  # antes: AttributeError acá mismo
     assert s._explore_budget._failure_tails == {}
     assert s._turn_verify_tools == set()
+
+
+def test_resolve_repo_file_bare_unico_y_ambiguo(tmp_path):
+    """Nombre pelado: resuelve si hay UN match en el índice, None si no."""
+    from orchestration.session import _resolve_repo_file
+
+    repo = _init_repo(tmp_path)
+    nested = repo / "src" / "a"
+    nested.mkdir(parents=True)
+    (nested / "handle.ts").write_text("x", encoding="utf-8")
+    assert _resolve_repo_file(str(repo), "handle.ts") == "src/a/handle.ts"
+    assert _resolve_repo_file(str(repo), "src/a/handle.ts") is not None
+    assert _resolve_repo_file(str(repo), "no-existo.ts") is None
+    (repo / "other").mkdir()
+    (repo / "other" / "handle.ts").write_text("x", encoding="utf-8")
+    assert _resolve_repo_file(str(repo), "handle.ts") is None  # ambiguo
+
+
+def test_readonly_evidence_turn_acepta_nombre_pelado(tmp_path):
+    """Regresión T016/T018: veredicto que cita 'archivo.ts' sin directorio
+    cierra si resuelve a un único archivo real del repo."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    nested = repo / "src" / "m"
+    nested.mkdir(parents=True)
+    (nested / "handle-pauta-finalizada.ts").write_text("x", encoding="utf-8")
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools = {"read_file", "git_status"}
+    text = (
+        "El archivo handle-pauta-finalizada.ts ya tiene el cuerpo actualizado: "
+        "la línea 58 usa deps.desactivadaOutbox.enqueue(...). "
+        "T016 ya está implementada. No se requiere ningún cambio."
+    )
+    assert s._readonly_evidence_turn(text) is True
