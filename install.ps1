@@ -74,9 +74,13 @@ if (($userPath -split ";") -notcontains $binDir) {
 }
 
 # ── doctor: verifica todo e instala faltantes ──────────────────────────────
+# Paridad con install.sh: el doctor advierte pero no bloquea el instalador
+# (MCP/modelo pueden quedar pendientes y el harness igual funciona).
 Write-Host ""
 & $shim --doctor
-if ($LASTEXITCODE -ne 0) { exit 1 }
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "⚠️  El doctor dejó pendientes (ver arriba) — el instalador igual terminó; resolvelos y re-corré agent-devs --doctor"
+}
 
 Write-Host ""
 Write-Host "Listo. Desde cualquier repositorio:"

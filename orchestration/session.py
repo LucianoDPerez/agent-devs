@@ -136,7 +136,7 @@ def _llama_down_console_msg() -> None:
     from config import LLM_BASE_URL as _BASE
     console.print(f"\n[red]❌ llama.cpp está apagado — no se pudo conectar a {_BASE}[/red]")
     console.print("[yellow]   Encendelo antes de seguir, por ejemplo:[/yellow]")
-    console.print("[dim]     llama-server -hf unsloth/Qwen3-6B-GGUF --port 8080[/dim]")
+    console.print("[dim]     llama-server -hf bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M --port 8080[/dim]")
     console.print("[dim]   Verificá con: agent-devs --doctor[/dim]\n")
 
 _ROLE_LABELS = {

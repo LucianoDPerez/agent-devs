@@ -441,6 +441,80 @@ _CMCP_INSTALL_CMD = (
     "curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash"
 )
 
+# Recomendación de modelo por RAM (verificado: los repos existen en HF y
+# las familias pasaron por el banco del harness — Qwen3 base NO: sin tool
+# calling probado acá, no se recomienda). El doctor nunca descarga solo.
+_MODEL_TIERS = (
+    # (ram_min_gb, etiqueta, comando -hf, peso aprox, nota)
+    (48, "64GB o más",
+     "unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M", "~17GB",
+     "lo mejor actual en benchmarks externos; acá probado al 100%: "
+     "Qwen3.6-35B-A3B (7/7 en nuestro banco)"),
+    (28, "32GB",
+     "unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL", "~7GB",
+     "probado en el banco small-llm"),
+    (20, "24GB",
+     "unsloth/Qwen3.5-9B-GGUF:Q4_K_M", "~5.5GB",
+     "5/5 análisis + 1/2 ejecución en nuestro banco"),
+    (0, "16GB",
+     "bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M", "~2.5GB",
+     "probado en el banco (tiende a loopear; el harness lo contiene). "
+     "Alt: Spark-X2.5-4B (mejor agentic, pero exige el fork XHToken/llama.cpp)"),
+)
+
+
+def _total_ram_gb() -> float | None:
+    """RAM total en GB (multiplataforma, solo stdlib). None si no se puede."""
+    import subprocess as sp
+
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            class _MemStatus(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            st = _MemStatus()
+            st.dwLength = ctypes.sizeof(_MemStatus)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+                return st.ullTotalPhys / 1_000_000_000
+            return None
+        if sys.platform == "darwin":
+            out = sp.run(["sysctl", "-n", "hw.memsize"],
+                         capture_output=True, text=True, timeout=10)
+            return int((out.stdout or "0").strip() or 0) / 1_000_000_000 or None
+        pages = os.sysconf("SC_PHYS_PAGES")
+        return os.sysconf("SC_PAGE_SIZE") * pages / 1_000_000_000
+    except Exception:
+        return None
+
+
+def _doctor_model_advice() -> None:
+    """Tabla de modelos por RAM + highlight de tu tier. Solo informa."""
+    ram = _total_ram_gb()
+    print("     📦 Bajá el modelo acorde a tu RAM (Q4_K_M en todos los casos):")
+    tiers = list(_MODEL_TIERS)  # ordenados de mayor a menor RAM mínima
+    for i, (ram_min, label, hf, size, note) in enumerate(tiers):
+        ceiling = tiers[i - 1][0] if i > 0 else float("inf")
+        mine = ram is not None and ram_min <= ram < ceiling
+        mark = "  ← TU LIGA" if mine else ""
+        print(f"     · {label}: llama-server -hf {hf} --port 8080  ({size}){mark}")
+        print(f"       {note}")
+    if ram is None:
+        print("     (no pude detectar tu RAM — elegí por tamaño de tu máquina)")
+    else:
+        print(f"     (detecté ~{ram:.0f}GB de RAM)")
+
 
 def _doctor_ok(name, detail=""):
     print(f"  ✅ {name}" + (f" — {detail}" if detail else ""))
@@ -509,7 +583,7 @@ def _llama_down_exit() -> None:
     # No re-chequear con timeout largo: LLM_BASE_URL ya es la fuente de verdad
     print(f"\n❌ llama.cpp está apagado — no se pudo conectar a {LLM_BASE_URL}", flush=True)
     print("   Encendelo antes de ejecutar agent-devs, por ejemplo:", flush=True)
-    print("     llama-server -hf unsloth/Qwen3-6B-GGUF --port 8080", flush=True)
+    print("     llama-server -hf bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M --port 8080", flush=True)
     print("   Si ya está corriendo en otro puerto/host, revisá config.py → LLM_BASE_URL", flush=True)
     print("   Verificá el estado con: agent-devs --doctor\n", flush=True)
     sys.exit(1)
@@ -572,8 +646,10 @@ def run_doctor() -> int:
     """Verifica el entorno completo e instala de a uno los faltantes.
 
     Chequeos: Python, venv, git, deps Python (instalables), MCP
-    codebase-memory-mcp (instalable en mac/linux) y llama-server (binario +
-    server vivo en :8080 — solo detecta e instruye, no auto-instala).
+    codebase-memory-mcp (instalable en mac/linux) y llama-server (binario:
+    auto-instala con brew en macOS, en el resto solo detecta e instruye;
+    server vivo en :8080 — siempre solo detecta). Si falta el modelo,
+    recomienda cuál bajar según tu RAM (nunca descarga solo).
     Devuelve exit code: 0 = todo listo para usar agent-devs.
     """
     import importlib.util
@@ -656,8 +732,17 @@ def run_doctor() -> int:
             )
             problems += 1
 
-    # 6) llama.cpp: binario + server vivo (solo detecta e instruye)
+    # 6) llama.cpp: binario (auto-instala con brew en macOS) + server vivo
     has_llama_bin = shutil.which("llama-server") or shutil.which("llama-server.exe")
+    if not has_llama_bin and sys.platform == "darwin" and shutil.which("brew"):
+        print("     ⏳ llama-server no encontrado — instalando con brew…\n     $ brew install llama.cpp")
+        r = sp.run(["brew", "install", "llama.cpp"], capture_output=True, text=True, timeout=900)
+        if r.returncode == 0 and shutil.which("llama-server"):
+            _doctor_fixed("llama.cpp (llama-server)", "instalado con brew")
+            has_llama_bin = shutil.which("llama-server") or shutil.which("llama-server.exe")
+        else:
+            tail = ((r.stderr or r.stdout) or "").strip()[-300:]
+            print(f"     ⚠️  brew falló: {tail}")
     alive, base = _llama_server_alive()
     if has_llama_bin:
         _doctor_ok("llama.cpp (llama-server)", shutil.which("llama-server"))
@@ -673,9 +758,9 @@ def run_doctor() -> int:
     else:
         _doctor_fail(
             "Modelo corriendo",
-            f"nadie responde en {base}. Levantalo antes de usar agent-devs, ej.:\n"
-            f"       llama-server -hf unsloth/Qwen3-6B-GGUF --port 8080",
+            f"nadie responde en {base}. Bajá uno y levantalo antes de usar agent-devs.",
         )
+        _doctor_model_advice()
         problems += 1
 
     # 7) Checkout del harness: hash visible + estado (sucio/atrás).
@@ -939,7 +1024,7 @@ def main():
                     console.print(
                         f"\n[red]❌ llama.cpp está apagado — no se pudo conectar a {LLM_BASE_URL}[/red]\n"
                         "[yellow]   Encendelo antes de seguir, por ejemplo:[/yellow]\n"
-                        "[dim]     llama-server -hf unsloth/Qwen3-6B-GGUF --port 8080[/dim]\n"
+                        "[dim]     llama-server -hf bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M --port 8080[/dim]\n"
                         "[dim]   Verificá con: agent-devs --doctor[/dim]\n"
                     )
                     continue
