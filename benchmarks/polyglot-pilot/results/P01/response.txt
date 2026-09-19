@@ -1,0 +1,8 @@
+Voy a leer el test y el archivo de implementación para entender los casos exactos antes de escribir nada.He leído los casos exactos del test:
+
+1. `test_basico`: `slugify('Hola Mundo')` → `'hola-mundo'`
+2. `test_guiones`: `slugify('hola__mundo  test')` → `'hola-mundo-test'` (espacios + guiones bajos → guion simple, colapsa guiones repetidos)
+3. `test_signos`: `slugify('¡Hola, Mundo!')` → `'hola-mundo'` (elimina caracteres no alfanumericos ni guion)
+4. `test_vacio`: `slugify('')` → `''`
+
+El archivo `slugify.py` no existe aún, así que lo creo con la función que cubre todos los casos.He creado el archivo. Ahora verifico con el lint y los tests.

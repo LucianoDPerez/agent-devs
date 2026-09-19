@@ -4,7 +4,12 @@ Fecha: 2026-09-19. Harness: Fase 1 (read-before-edit + PLAN exploratorio).
 Modelo: `spark2.5-4B` local (llama.cpp :8080, n_ctx 26624), temperature 0.2,
 max_tokens 2048, 1 trial/tarea, timeout 900s. Criterio: `pytest tests/` exit 0.
 
-## Resultado: 11/12 (91.7%)
+## Resultado: 11/12 (91.7%) → 12/12 tras fix P01
+
+Baseline (harness Fase 1 sin fix): 11/12. El único FAIL (P01) era bug del
+harness (`_nothing_pending_to_write()` confundía el setup-commit con trabajo
+hecho). Tras el fix (`_commit_during_turn()`), re-run P01: ✅ PASS en 335.8s
+(tools: read_file → write_file → run_lint/run_tests). Estado actual: **12/12**.
 
 | id | tarea | veredicto | secs | tools |
 |---|---|---|---|---|
