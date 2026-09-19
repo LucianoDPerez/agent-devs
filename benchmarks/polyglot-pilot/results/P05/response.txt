@@ -1,0 +1,8 @@
+**Plan:**
+
+1. **Análisis**: Leí el test `tests/test_dedup.py`. Requiere `dedup(xs: list) -> list` que elimine duplicados preservando orden. Los casos: `[3,1,3,2,1]→[3,1,2]`, `[]→[]`, `[1,2,3]→[1,2,3]`.
+2. **Subtareas**:
+   - Crear `dedup.py` con la función `dedup` que preserva orden y elimina duplicados (usando un conjunto para tracking de vistas).
+   - Verificar con `run_tests` (el test suite detecta el stack y corre los tests de `tests/`).
+
+Comienzo por crear el archivo `dedup.py`.Archivo creado. Ahora verifico con el test suite.

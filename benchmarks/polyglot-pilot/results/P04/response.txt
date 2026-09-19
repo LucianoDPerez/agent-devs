@@ -1,0 +1,12 @@
+Voy a analizar primero el test y el archivo existente para entender las expectativas exactas.El archivo `bsearch.py` NO EXISTE, pero el test `tests/test_bsearch.py` ya está creado y define claramente las expectativas:
+
+- `test_encontrado`: `binary_search([1, 3, 5, 7], 5) == 2`
+- `test_primero`: `binary_search([1, 3, 5], 1) == 0`
+- `test_ausente`: `binary_search([1, 3, 5], 4) == -1`
+- `test_vacia`: `binary_search([], 1) == -1`
+
+**Plan:**
+1. Crear `bsearch.py` con la función `binary_search(xs: list[int], x: int) -> int` implementada con búsqueda binaria estándar.
+2. Verificar con `run_tests` para confirmar que todos los casos pasan.
+
+Implementaré el archivo:Archivo creado. Ahora verifico con la batería de tests:El `run_tests` reportó SKIPPED sin stack verificable, lo cual no es el comportamiento esperado para un proyecto Python. Voy a ejecutar los tests directamente con Python para obtener evidencia real de que los casos pasan:El `run_tests` no detectó stack. Voy a ejecutar los tests directamente con Python para obtener evidencia real:El `run_tests` no detectó el stack. Voy a ejecutar los tests directamente con Python para obtener evid

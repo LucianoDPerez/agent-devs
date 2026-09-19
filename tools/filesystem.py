@@ -67,6 +67,26 @@ def _status_only_flip(before: object, after: object) -> bool:
     return before == after
 
 
+# Paths que el harness YA leyó en esta sesión (read_file exitoso) o creó
+# con write_file. edit_file/apply_patch EXIGEN haber leído antes: el modelo
+# chico inventa old_str de memoria y corrompe el archivo (fase 1 little-coder:
+# invariante Read-before-Edit). Se limpia solo al arrancar sesión nueva, no
+# por turno (leer en turno N habilita editar en turno N+1).
+READ_SEEN_PATHS: set[str] = set()
+
+
+def clear_read_tracker() -> None:
+    READ_SEEN_PATHS.clear()
+
+
+def _mark_read(path: str) -> None:
+    READ_SEEN_PATHS.add(_resolved_key(path))
+
+
+def _was_read(path: str) -> bool:
+    return _resolved_key(path) in READ_SEEN_PATHS
+
+
 def clear_write_overrides() -> None:
     WRITE_OVERRIDE_PATHS.clear()
 
@@ -275,6 +295,7 @@ def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> st
         header += f" [TRUNCATED at {MAX_FILE_READ_BYTES:,} bytes]"
     header += f"\n{'─' * 60}\n"
 
+    _mark_read(str(p))
     return header + content
 
 
@@ -546,6 +567,7 @@ def write_file(path: str, content: str) -> str:
         p.write_text(content, encoding="utf-8")
     except (OSError, IsADirectoryError, FileExistsError) as e:
         return f"⛔ Failed to write {path}: {e}. Choose a different file path."
+    _mark_read(str(p))
     result = f"✅ Written {len(content)} characters to {path}"
     if p.suffix.lower() == ".md":
         flags = _md_integrity(content)
@@ -693,6 +715,19 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
         return (
             f"'{path}' is a directory, not a file. Use list_files to browse it. "
             "Do not call edit_file on this path again."
+        )
+
+    # INVARIANTE Read-before-Edit (fase 1): editar sin haber leído antes
+    # es adivinar old_str de memoria — el 4B corrompe el archivo. Exigir
+    # read_file previo en esta sesión (o archivo creado con write_file).
+    if not _was_read(str(p)):
+        return (
+            f"⛔ Edit RECHAZADO por read-before-edit en {path}: todavía no lo "
+            f"leíste en esta sesión.\n"
+            f"PROCEDÉ ASÍ:\n"
+            f"  1) read_file(path='{path}') para ver el contenido EXACTO.\n"
+            f"  2) Rehacé el edit con old_str copiado LITERAL del archivo "
+            f"(2-5 líneas de contexto)."
         )
 
     # GUARD ANTI-BORRADO DE FUNCIONES: edit_file con new_str VACÍO que
@@ -889,6 +924,15 @@ def apply_patch(path: str, edits: str) -> str:
         return f"File does not exist: {path}. Create it with write_file first."
     if p.is_dir():
         return f"'{path}' is a directory, not a file."
+    # INVARIANTE Read-before-Edit (fase 1, igual que edit_file).
+    if not _was_read(str(p)):
+        return (
+            f"⛔ Patch RECHAZADO por read-before-edit en {path}: todavía no lo "
+            f"leíste en esta sesión.\n"
+            f"PROCEDÉ ASÍ:\n"
+            f"  1) read_file(path='{path}') para ver el contenido EXACTO.\n"
+            f"  2) Rehacé el patch con old_string copiados LITERALES."
+        )
     try:
         parsed = _json.loads(edits) if isinstance(edits, str) else edits
     except Exception as e:

@@ -1,5 +1,6 @@
 """Tests para filesystem tools."""
 
+import contextlib
 import tempfile
 from pathlib import Path
 
@@ -12,6 +13,13 @@ def _create_repo(files: dict[str, str]) -> str:
         p = Path(tmp) / name
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
+    # Setup simula "el agente ya leyó": seed del tracker read-before-edit.
+    # Los tests de ESTE archivo verifican otros guards (fuzzy, JSON, md...),
+    # no el invariante — ese tiene su propia clase TestReadBeforeEdit abajo
+    # que crea archivos SIN pasar por acá.
+    for name in files:
+        with contextlib.suppress(Exception):
+            read_file.invoke({"path": str(Path(tmp) / name)})
     return tmp
 
 
@@ -412,6 +420,7 @@ class TestMdIntegrityGuard:
         repo = tempfile.mkdtemp()
         path = str(Path(repo) / "cmd.md")
         Path(path).write_text(self._template_md(), encoding="utf-8")
+        read_file.invoke({"path": path})
         # old_str fuzzy-incorrecto (como el E2E real): el modelo pasa un
         # frontmatter DISTINTO al real; el matcher ancla en líneas parecidas
         # y el new_str inserta un segundo bloque ---
@@ -443,6 +452,7 @@ class TestMdIntegrityGuard:
         repo = tempfile.mkdtemp()
         path = str(Path(repo) / "cmd.md")
         Path(path).write_text(self._template_md(), encoding="utf-8")
+        read_file.invoke({"path": path})
         # Fusionar ```text + $ARGUMENTS (pierde el fence de apertura)
         result = edit_file.invoke({
             "path": path,
@@ -459,6 +469,7 @@ class TestMdIntegrityGuard:
         original = self._template_md()
         Path(path).write_text(original, encoding="utf-8")
         hook = "\nRun: `.spec-kitti/bin/spec-kitti-telemetry end cmd`\n"
+        read_file.invoke({"path": path})
         result = edit_file.invoke({
             "path": path,
             "old_str": "Pasos del comando.\n",
@@ -480,6 +491,7 @@ class TestMdIntegrityGuard:
             "contenido\n"
         )
         Path(path).write_text(broken, encoding="utf-8")
+        read_file.invoke({"path": path})
         # Editar un archivo YA corrupto no debe bloquearse por este guard
         result = edit_file.invoke({
             "path": path,
@@ -492,6 +504,7 @@ class TestMdIntegrityGuard:
         repo = tempfile.mkdtemp()
         path = str(Path(repo) / "code.py")
         Path(path).write_text("x = 1\n", encoding="utf-8")
+        read_file.invoke({"path": path})
         result = edit_file.invoke({"path": path, "old_str": "x = 1", "new_str": "x = 2"})
         assert "✅" in result
 
@@ -503,6 +516,7 @@ class TestNoopEditGuard:
         repo = tempfile.mkdtemp()
         path = str(Path(repo) / "x.md")
         Path(path).write_text("línea\n", encoding="utf-8")
+        read_file.invoke({"path": path})
         result = edit_file.invoke({
             "path": path, "old_str": "línea", "new_str": "línea",
         })
@@ -513,6 +527,7 @@ class TestNoopEditGuard:
         repo = tempfile.mkdtemp()
         path = str(Path(repo) / "y.md")
         Path(path).write_text("hola mundo\n", encoding="utf-8")
+        read_file.invoke({"path": path})
         result = edit_file.invoke({
             "path": path,
             "old_str": "hola mundo",
@@ -567,6 +582,7 @@ class TestTaskAllowExplicitUserCite:
         TASK_PATH_ALLOW.add(str(p))
         try:
             assert _is_protected_task_path(str(p)) is False
+            read_file.invoke({"path": str(p)})
             result = edit_file.invoke({
                 "path": str(p),
                 "old_str": '"tasks": []',
@@ -599,6 +615,7 @@ class TestJsonGate:
         p = Path(repo) / "tasks.json"
         original = '{"a": 1, "b": 2}'
         p.write_text(original, encoding="utf-8")
+        read_file.invoke({"path": str(p)})
         result = edit_file.invoke({
             "path": str(p), "old_str": '"a": 1,', "new_str": '"a": ',
         })
@@ -609,6 +626,7 @@ class TestJsonGate:
         repo = tempfile.mkdtemp()
         p = Path(repo) / "tasks.json"
         p.write_text('{"a": 1}', encoding="utf-8")
+        read_file.invoke({"path": str(p)})
         result = edit_file.invoke({
             "path": str(p), "old_str": '"a": 1', "new_str": '"a": 2',
         })
@@ -638,6 +656,7 @@ def test_status_flip_pending_a_done_en_tasks_json(tmp_path):
         {"id": "T007", "title": "y", "status": "pending"},
     ]}, indent=2))
 
+    read_file.invoke({"path": str(p)})
     r = edit_file.invoke({
         "path": str(p),
         "old_str": '"status": "pending",\n      "file": "src/a.ts"',
@@ -702,3 +721,54 @@ def test_status_only_flip_puro():
         {"tasks": [{"id": "T1", "status": "pending"}]},
         {"tasks": [{"id": "T1", "status": "DONE"}, {"id": "T2", "status": "DONE"}]},
     ) is False
+
+
+class TestReadBeforeEdit:
+    """Fase 1 (little-coder): invariante Read-before-Edit. Editar sin haber
+    leído antes es adivinar old_str de memoria — se RECHAZA."""
+
+    def test_edit_sin_read_previo_rechazado(self, tmp_path):
+        from tools.filesystem import clear_read_tracker
+
+        clear_read_tracker()
+        p = tmp_path / "a.py"
+        p.write_text("x = 1\n", encoding="utf-8")
+        r = edit_file.invoke({"path": str(p), "old_str": "x = 1", "new_str": "x = 2"})
+        assert "read-before-edit" in r
+        assert p.read_text(encoding="utf-8") == "x = 1\n"
+
+    def test_edit_tras_read_pasa(self, tmp_path):
+        from tools.filesystem import clear_read_tracker
+
+        clear_read_tracker()
+        p = tmp_path / "a.py"
+        p.write_text("x = 1\n", encoding="utf-8")
+        read_file.invoke({"path": str(p)})
+        r = edit_file.invoke({"path": str(p), "old_str": "x = 1", "new_str": "x = 2"})
+        assert r.startswith("✅")
+        assert p.read_text(encoding="utf-8") == "x = 2\n"
+
+    def test_patch_sin_read_previo_rechazado(self, tmp_path):
+        import json
+
+        from tools.filesystem import apply_patch, clear_read_tracker
+
+        clear_read_tracker()
+        p = tmp_path / "b.py"
+        p.write_text("y = 1\n", encoding="utf-8")
+        edits = json.dumps([{"old_string": "y = 1", "new_string": "y = 2"}])
+        r = apply_patch.invoke({"path": str(p), "edits": edits})
+        assert "read-before-edit" in r
+        assert p.read_text(encoding="utf-8") == "y = 1\n"
+
+    def test_write_nuevo_marca_read(self, tmp_path):
+        """write_file (archivo NUEVO) habilita edits posteriores sin read
+        explícito: el creador conoce el contenido."""
+        from tools.filesystem import clear_read_tracker
+
+        clear_read_tracker()
+        p = tmp_path / "nuevo.txt"
+        r1 = write_file.invoke({"path": str(p), "content": "hola"})
+        assert r1.startswith("✅")
+        r2 = edit_file.invoke({"path": str(p), "old_str": "hola", "new_str": "chau"})
+        assert r2.startswith("✅")

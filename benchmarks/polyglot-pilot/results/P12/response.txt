@@ -1,0 +1,4 @@
+✅ Tarea realizada: 1 archivo(s) modificado(s) en este turno
+   · merge_sorted.py
+   Verificación: N/A — sin stack compilable (docs/infra); vale la verificación documental con citas
+   Evidencia: ⚠️ la respuesta no cita archivo:línea ni verificación exitosa — VERIFICAR CON EVIDENCIA ANTES DE CONFIRMAR (revisá el diff antes de commitear)

@@ -1,0 +1,7 @@
+**Plan:**
+
+1. **Leer los tests** (ya tengo el contenido): `tests/test_chunks.py` define 3 casos: `test_basico` (splita `[1,2,3,4,5]` a tamaño 2), `test_exactos` (exactos, tamaño 2), `test_invalido` (n<=0 → `ValueError`).
+2. **Crear `chunks.py`** en la raíz del repo: implemento `chunks(xs, n)` que valida `n>0` (lanzando `ValueError` si no), y devuelve la lista de sub-listas usando una comprensión con `range(0, len(xs), n)`.
+3. **Verificar** con `run_verify` (lint + tests + build) al final.
+
+El archivo `chunks.py` no existe aún, así que lo escribiré.Archivo creado. Ahora verifico con la batería completa (lint + tests + build).El `run_verify` reportó "sin stack verificable" en el path. Verifico la estructura real del repo para encontrar el stack correcto.El repo no tiene stack verificable (solo el test con pytest, sin configuración de build/lint). Como verificación directa, ejecuto el test con Python para confirmar que `chunks.py` cumple los 3 casos.No hay scripts en package.json. Ejecuto pytest directamente con Python para verificar los casos.Las herramientas de verificación no detectan el stack. Ejecuto pytest directamente con Python para verificar los casos de forma directa.

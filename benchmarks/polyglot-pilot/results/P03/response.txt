@@ -1,0 +1,10 @@
+Voy a analizar primero el test y el archivo existente para entender el comportamiento esperado.El archivo `wordcount.py` NO EXISTE, pero el test `tests/test_wordcount.py` ya está completo y espera una implementación específica:
+- `word_count('Hola hola mundo')` → `{'hola': 2, 'mundo': 1}` (case-insensitive)
+- `word_count('hola, mundo! hola.')` → `{'hola': 2, 'mundo': 1}` (ignora puntuación)
+- `word_count('')` → `{}`
+
+**Plan:**
+1. Crear `wordcount.py` con `word_count(text: str) -> dict[str, int]`: normalizar (minúsculas + eliminar signos de puntuación) y contar palabras case-insensitive.
+2. Verificar con `run_tests` sobre el subproyecto.
+
+Voy a crear el archivo:Archivo creado. Ahora verifico con la batería de tests sobre el subproyecto:El `run_tests` reportó `[SKIPPED]` con "sin stack verificable" — esto sugiere que el runner no detectó el stack correctamente. Voy a inspeccionar la estructura del proyecto para entender por qué:El proyecto es Python sin configuración formal de test runner (no hay `pyproject.toml`, `setup.py`, etc.), y el runner no detectó el stack. Voy a verificar directamente con `pytest` para confirmar que el test pasa:El runner no detectó el stack Python. Voy a probar `run_lint` para ver si detecta Python y ejecuta `ruff`, y también intentaré `run_verify` para ver el resultado completo:El runner no detecta el stack Python en este repo. Voy a verificar directamente ejecutando el test con `python -m pytest` para confirmar que el comportamiento cumple los criterios:El runner no detectó el stack Python. Voy a probar `run_build` (que para Python usa `python -m build`) para ver si puede validar la sintaxis:El runner no detecta el stack Python en este repo. Voy a verificar directamente con `python` para confirmar la sintaxis y ejecutar el test manualmente:

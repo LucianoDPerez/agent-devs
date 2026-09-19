@@ -127,13 +127,14 @@ def test_close_sin_cambios_con_fallo_avisa(tmp_path):
 
 def test_failed_close_con_commit_reciente_informa_completado(tmp_path):
     """E2E real: turno que commiteó y luego loo interesting narrando cerraba
-    como 'fallido' aunque todo estaba hecho. Con árbol limpio + commit
-    reciente, informa completado."""
+    como 'fallido' aunque todo estaba hecho. Con árbol limpio + commit hecho
+    DURANTE la sesión, informa completado. Un commit previo a la sesión (setup)
+    ya NO cuenta (pilot P01)."""
     repo = _init_repo(tmp_path)
+    s = _make_session(repo)
     (repo / "x.txt").write_text("v2", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "feat: x")
-    s = _make_session(repo)
     msg = s._failed_turn_close()
     assert "ya commiteados" in msg
     assert "fallido" not in msg.lower()
@@ -188,11 +189,19 @@ def _old_commit(repo: Path) -> None:
 
 def test_nothing_pending_commit_reciente_arbol_limpio(tmp_path):
     """E2E real: turno 'hacer commit' tras e7c8f3a — no hay nada que escribir,
-    el retry no-write debe cerrarse, no inventar edits."""
+    el retry no-write debe cerrarse, no inventar edits. El commit cuenta porque
+    se hizo DURANTE el turno (después de _turn_start_ts)."""
+    import time
+
     from orchestration.session import Session
 
-    repo = _init_repo(tmp_path)  # commit init = reciente (ahora mismo)
+    repo = _init_repo(tmp_path)
     s = Session(llm=None, repo_path=str(repo))
+    s._turn_start_ts = time.time()
+    # Trabajo del turno commiteado durante el turno:
+    (repo / "work.txt").write_text("hecho\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "turno")
     s._called_tools = {"changed_files"}
     assert s._nothing_pending_to_write() is True
 
@@ -876,3 +885,41 @@ def test_readonly_evidence_turn_acepta_nombre_pelado(tmp_path):
         "T016 ya está implementada. No se requiere ningún cambio."
     )
     assert s._readonly_evidence_turn(text) is True
+
+
+def test_commit_setup_previo_no_cuenta_como_trabajo(tmp_path):
+    """Pilot P01: repo con 'init tests' commiteado ANTES del turno + 0 writes +
+    árbol limpio. El cierre NO debe declarar 'nada pendiente' (no se hizo
+    nada): el escape vago SÍ debe reintentar escritura."""
+    import subprocess
+    import time
+
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)  # setup commit previo al turno
+    s = Session(llm=None, repo_path=str(repo))
+    # Turno que arranca estrictamente DESPUÉS del setup (git da segundos):
+    out = subprocess.run(["git", "log", "-1", "--format=%ct"], cwd=str(repo),
+                         capture_output=True, text=True, check=True)
+    s._turn_start_ts = float(out.stdout.strip()) + 10
+    _ = time.time()
+    s._called_tools = {"read_file"}
+    assert s._commit_during_turn() is False
+    assert s._nothing_pending_to_write() is False
+
+
+def test_commit_durante_turno_si_cuenta(tmp_path):
+    """Commit hecho después de _turn_start_ts = trabajo del turno: cerrar."""
+    import time
+
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    s._turn_start_ts = time.time()
+    (repo / "hecho.txt").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "turno")
+    s._called_tools = {"read_file"}
+    assert s._commit_during_turn() is True
+    assert s._nothing_pending_to_write() is True

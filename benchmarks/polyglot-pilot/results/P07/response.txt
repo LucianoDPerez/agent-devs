@@ -1,0 +1,12 @@
+El test existe y define claramente el comportamiento esperado. `groupby.py` NO existe aún, así que lo creo.
+
+**Plan:**
+1. Crear `groupby.py` con `group_by(items, key)` que agrupa dicts por el valor de la clave, preservando el orden de aparición y devolviendo un dict con listas de items por grupo.
+2. Verificar con `run_verify` (lint + tests + build).
+
+Archivo creado. Ahora verifico con la batería completa (lint + tests + build).
+
+La batería del `run_verify` se marcó SKIPPED porque el path no tiene stack verificable. Como el test existe y el archivo está creado, ejecuto directamente los tests para verificar que pasan.
+
+Las herramientas de verificación no detectan stack, así que ejecuto el test directamente con Python para obtener evidencia real.
+

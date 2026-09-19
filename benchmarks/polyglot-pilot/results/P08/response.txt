@@ -1,0 +1,18 @@
+He leí el test y confirma que `csvsum.py` NO existe aún. El test espera:
+- `test_suma`: CSV con `categoria,monto`, filas `a,10.5`, `b,2`, `a,1.5` → `{'a': 12.0, 'b': 2.0}` (suma flotante por categoría).
+- `test_solo_header`: solo cabecera → `{}`.
+
+**Plan:**
+1. Crear `csvsum.py` con `total_por_categoria(path: str) -> dict[str, float]` usando solo `csv` estándar: `DictReader` para leer, sumar montos flotantes por categoría, devolver `dict[str, float]`.
+2. Verificar con `run_verify` (lint + tests + build).
+
+Archivo creado. Ahora verifico con la batería completa (lint + tests + build).
+
+La batería del sistema no detectó stack, así que corro los tests directamente con pytest para verificar la implementación.
+
+El sistema no detectó stack para la batería. Voy a comprobar la estructura del repo para correr los tests directamente con pytest.
+
+No hay configuración de pytest en el repo. Corro los tests directamente con pytest en el directorio para verificar la implementación.
+
+El sistema no detectó stack para correr tests. Voy a inspeccionar la estructura del repo para encontrar cómo se configuran los tests.
+

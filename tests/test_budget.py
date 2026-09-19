@@ -611,7 +611,7 @@ class TestStatusFlipPassthrough:
             ToolCallDedupe,
             wrap_tools_with_dedupe,
         )
-        from tools.filesystem import edit_file
+        from tools.filesystem import edit_file, read_file
 
         p = tmp_path / ".agent" / "tasks.json"
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -619,6 +619,7 @@ class TestStatusFlipPassthrough:
             {"tasks": [{"id": "T006", "status": "pending", "file": "a.ts"}]},
             indent=2,
         ))
+        read_file.invoke({"path": str(p)})
         dd = ToolCallDedupe(max_repeats=9)
         w = wrap_tools_with_dedupe([edit_file], dd, ExploreBudget(),
                                    repo_path=str(tmp_path))[0]
@@ -665,7 +666,7 @@ class TestApplyPatchStatusFlip:
     def test_flip_por_patch_permite(self, tmp_path):
         import json
 
-        from tools.filesystem import apply_patch
+        from tools.filesystem import apply_patch, read_file
 
         p = tmp_path / ".agent" / "tasks.json"
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -673,6 +674,7 @@ class TestApplyPatchStatusFlip:
             {"tasks": [{"id": "T013", "title": "x", "status": "pending", "file": "a.ts"}]},
             indent=2,
         ))
+        read_file.invoke({"path": str(p)})
         edits = json.dumps([{
             "old_string": '"status": "pending",\n      "file": "a.ts"',
             "new_string": '"status": "DONE",\n      "file": "a.ts"',
@@ -722,10 +724,11 @@ def test_write_bloqueado_no_cuenta_como_escrito(tmp_path):
         ToolCallDedupe,
         wrap_tools_with_dedupe,
     )
-    from tools.filesystem import edit_file
+    from tools.filesystem import edit_file, read_file
 
     p = tmp_path / "a.ts"
     p.write_text("x = 1\n", encoding="utf-8")
+    read_file.invoke({"path": str(p)})
     dd = ToolCallDedupe(max_repeats=9)
     logged = _ToolCallLog()
     w = wrap_tools_with_dedupe([edit_file], dd, None, repo_path=str(tmp_path),

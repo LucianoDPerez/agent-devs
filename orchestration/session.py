@@ -1241,6 +1241,12 @@ class Session:
         # Snapshot del dirty tree al inicio del turno (cierre honesto).
         # None = snapshot fallido (sin claim de atribución).
         self._turn_start_dirty: frozenset[str] | None = frozenset()
+        # Timestamp (epoch) de inicio del turno: distingue un commit hecho
+        # DURANTE el turno de un commit previo (setup/benchmark). Sin esto el
+        # cierre confunde "setup commiteado hace segundos" con "trabajo hecho"
+        # (pilot P01: repo con 'init tests' commiteado → cierre prematuro).
+        # Se refresca en start()/reset()/cada turno (ver snapshot del turno).
+        self._turn_start_ts: float = time.time()
         # Tarea bulk detectada (≥ EXECUTE_BULK_MIN_FILES archivos): escala
         # budgets de EXECUTE y permite lecturas en el retry (0) para releer
         # los archivos que faltan.
@@ -1305,6 +1311,16 @@ class Session:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
+            # Sesión nueva: el tracker read-before-edit arranca vacío (leer en
+            # la sesión anterior no habilita editar en esta). El timestamp de
+            # turno también: commits previos a la sesión son setup, no trabajo.
+            try:
+                from tools.filesystem import clear_read_tracker
+
+                clear_read_tracker()
+            except Exception:
+                pass
+            self._turn_start_ts = time.time()
             self._tools, self._mcp_available = loop.run_until_complete(init_mcp())
             # n_ctx REAL del server (GET /props): el config hardcodeado quedaba
             # viejo y el summary automático no alcanzaba a disparar.
@@ -1411,6 +1427,13 @@ class Session:
         self._session_touched_files = set()
         self._pending_commit_pick = None
         self.current_role = Role.ANALYZE
+        try:
+            from tools.filesystem import clear_read_tracker
+
+            clear_read_tracker()
+        except Exception:
+            pass
+        self._turn_start_ts = time.time()
         self._load_previous_sessions()
         self._rebuild_agent(Role.ANALYZE)
 
@@ -2010,16 +2033,38 @@ class Session:
         except Exception:
             return False
 
+    def _commit_during_turn(self) -> bool:
+        """True si el commit más reciente se hizo DESPUÉS de iniciar el turno.
+
+        `_repo_has_recent_commit()` (últimos 5 min) no distingue un commit de
+        setup/benchmark previo al turno del trabajo real del turno (pilot P01:
+        'init tests' commiteado antes → el cierre declaró 'nada pendiente' sin
+        haber escrito nada). Mismo reloj (git y python, misma máquina): sin
+        gracia, comparación estricta.
+        """
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["git", "log", "-1", "--format=%ct"],
+                cwd=self.repo_path, capture_output=True, text=True, timeout=5,
+            )
+            ts = result.stdout.strip()
+            if not ts.isdigit():
+                return False
+            start = getattr(self, "_turn_start_ts", 0.0) or 0.0
+            return int(ts) >= int(start)
+        except Exception:
+            return False
+
     def _nothing_pending_to_write(self) -> bool:
         """True si exigir escritura al modelo sería dañino: árbol limpio y el
-        trabajo ya está commiteado (commit reciente) o verificado (verify
-        tools corridas). En ese caso el cierre honesto es reportar, no
-        reintentar con foco en escritura (el retry inventa no-ops sobre
-        archivos ya commiteados). Con cambios pendientes o sin evidencia de
-        trabajo, devuelve False (el escape vago SÍ debe reintentar)."""
+        trabajo ya está commiteado DURANTE este turno o verificado (verify
+        tools corridas). Un commit previo al turno (setup/benchmark) NO cuenta:
+        con cambios pendientes o sin evidencia de trabajo del turno, devuelve
+        False (el escape vago SÍ debe reintentar)."""
         if self._changed_files():
             return False
-        return bool(self._repo_has_recent_commit() or self._verify_tools_called())
+        return bool(self._commit_during_turn() or self._verify_tools_called())
 
     def _readonly_evidence_turn(self, text: str) -> bool:
         """True si el turno fue SOLO lectura/verify con evidencia citada.
@@ -2529,7 +2574,7 @@ class Session:
                 "CORRIÓ en este turno (lint/tests/build ✅). Revisá el diff "
                 "antes de commitear — no se ofrece commit automático.[/dim]"
             )
-        if not self._changed_files() and self._repo_has_recent_commit():
+        if not self._changed_files() and self._commit_during_turn():
             return (
                 "\n[dim]✅ Turno completado (cambios ya commiteados — el cierre "
                 "final no tenía nada que verificar).[/dim]"
@@ -3443,6 +3488,7 @@ class Session:
             None if _snap_lines is None
             else set(_porcelain_paths(_snap_lines))
         )
+        self._turn_start_ts = time.time()
 
         reset_turn_usage()
         start = time.monotonic()
