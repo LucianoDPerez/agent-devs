@@ -144,9 +144,9 @@ The context limit is **detected from the server** (`/props` of llama.cpp): when 
 | llama.cpp (`llama-server`) | recent build (b5000+; b6200+ for MTP/spec-draft) listening on `:8080` | detects and guides per OS |
 | codebase-memory-mcp | 0.8+ | yes (macOS/Linux); Windows: manual |
 
-> **Windows note**: `install.ps1` is provided and reviewed (execution policy,
-> spaced paths, UTF-8), but not tested on real Windows hardware. If you hit a
-> problem, open an issue.
+> **Windows note**: `install.ps1` is provided and tested on real Windows
+> hardware (execution policy, spaced paths, UTF-8). If you hit a problem,
+> open an issue.
 
 ## Known limitations (read before using)
 
