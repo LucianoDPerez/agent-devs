@@ -1105,6 +1105,9 @@ class Session:
         self.llm = llm
         self.repo_path = repo_path
         self.cached_analysis = cached_analysis
+        # Profile del modelo cargado (core/model_profiles): se resuelve en
+        # start() contra /v1/models; default conservador si no hay match.
+        self._model_profile: dict = {}
 
         # Lógica de negocio: reglas concretas (campos requeridos, validaciones)
         # que el 4B ignora cuando solo ve la estructura general. Se inyecta en
@@ -1343,6 +1346,20 @@ class Session:
             detected_ctx = detect_context_limit(LLM_BASE_URL)
             if detected_ctx:
                 self._ctx_limit = detected_ctx
+            # Profile del SLM cargado (adaptación, no duplicación del server):
+            # qué familia es + sus presupuestos propios. Visible en el header.
+            try:
+                from core.model_profiles import match_profile
+                from llm_wrapper import detect_server_model
+                _mid = detect_server_model(LLM_BASE_URL) or ""
+                self._model_profile = match_profile(_mid)
+                console.print(
+                    f"[dim]🎛️  Profile: {self._model_profile.get('family', '?')} "
+                    f"({_mid or 'desconocido'}) — "
+                    f"{self._model_profile.get('notes', '')}[/dim]"
+                )
+            except Exception:
+                pass
             # Resolver UNA vez la key del knowledge graph del repo actual:
             # el 4B la inventa (trace_component fallaba y repetía la llamada).
             self._graph_project = ""
@@ -1400,6 +1417,7 @@ class Session:
                     tool_call_results=self._verify_results,
                     evidence_sink=self._evidence,
                     failure_sink=self._turn_failures,
+                    temp_overrides=self._profile_temps(),
                     graph_project=self._graph_project,
                 )
             )
@@ -1456,6 +1474,24 @@ class Session:
         self._load_previous_sessions()
         self._rebuild_agent(Role.ANALYZE)
 
+    def _profile_temps(self) -> dict:
+        """Override de temperatura EXECUTE según el profile del modelo."""
+        try:
+            return {Role.EXECUTE: float(self._model_profile.get("temp_execute", 0.2))}
+        except Exception:
+            return {}
+
+    def _profile_thinking(self, role: Role) -> int:
+        """Presupuesto de thinking por bloque según profile (fallback config)."""
+        try:
+            if role == Role.EXECUTE:
+                return int(self._model_profile.get(
+                    "thinking_chars_exec", EXECUTE_MAX_REASONING_CHARS))
+            return int(self._model_profile.get(
+                "thinking_chars_other", MAX_REASONING_CHARS))
+        except Exception:
+            return EXECUTE_MAX_REASONING_CHARS if role == Role.EXECUTE else MAX_REASONING_CHARS
+
     def _rebuild_agent(self, role: Role, no_explore: bool = False,
                        tools_override: list | None = None) -> bool:
         # no_explore=True construye un agente SIN tools: reutilizarlo para una
@@ -1486,6 +1522,7 @@ class Session:
                     tool_call_results=self._verify_results,
                     evidence_sink=self._evidence,
                     failure_sink=self._turn_failures,
+                    temp_overrides=self._profile_temps(),
                     graph_project=self._graph_project,
                     confirm_callback=(
                         self._confirm_write_cb
@@ -1542,6 +1579,7 @@ class Session:
                     evidence_sink=self._evidence,
                     failure_sink=self._turn_failures,
                     allow_overwrite_escalation=False,
+                    temp_overrides=self._profile_temps(),
                     confirm_callback=(
                         self._confirm_write_cb if EXECUTE_CONFIRM_WRITES else None
                     ),
@@ -1621,6 +1659,7 @@ class Session:
                         self._confirm_write_cb if EXECUTE_CONFIRM_WRITES else None
                     ),
                     confirm_imminent_cb=self._mark_confirm_imminent,
+                    temp_overrides=self._profile_temps(),
                 )
             )
         finally:
@@ -3648,11 +3687,7 @@ class Session:
                     ),
                     max_reasoning_chars=(
                         None if self._readonly_retry
-                        else (
-                            EXECUTE_MAX_REASONING_CHARS
-                            if new_role == Role.EXECUTE
-                            else MAX_REASONING_CHARS
-                        )
+                        else self._profile_thinking(new_role)
                     ),
                     max_tool_calls=(
                         _bulk_budget(self._bulk_scope)["tool_calls_per_turn"]

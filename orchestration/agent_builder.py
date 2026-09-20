@@ -125,6 +125,7 @@ async def build_agent(
     evidence_sink: list | None = None,
     failure_sink: dict | None = None,
     confirm_imminent_cb=None,
+    temp_overrides: dict | None = None,
 ) -> tuple:
     """Construye un agente LangChain con tools y prompt del rol indicado.
 
@@ -279,7 +280,9 @@ async def build_agent(
 
     role_llm = llm
     update_kwargs = {}
-    target_temp = _ROLE_TEMPERATURE.get(role)
+    # Per-model profile (temp por request, no pisa el --temp del server como
+    # default): si el profile trae override para el rol, gana a la tabla.
+    target_temp = (temp_overrides or {}).get(role, _ROLE_TEMPERATURE.get(role))
     if target_temp is not None and getattr(llm, "temperature", None) != target_temp:
         update_kwargs["temperature"] = target_temp
     if role == Role.EXECUTE:
