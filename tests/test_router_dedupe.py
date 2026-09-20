@@ -536,3 +536,72 @@ def test_verify_cacheado_no_reejecuta(tmp_path):
     out2 = tool.invoke({"path": str(tmp_path)})
     assert "ya verificado" in out2
     assert calls == [str(tmp_path)]  # una sola ejecución real
+
+
+class TestGuideOnFailure:
+    """Intervención dinámica: el wrapper agrega guía accionable ante fallos."""
+
+    def test_read_inexistente_guia_search(self, tmp_path):
+        (tool,) = wrap_tools_with_dedupe([read_file], ToolCallDedupe())
+        r = tool.invoke({"path": str(tmp_path / "nope.ts")})
+        assert "does not exist" in r
+        assert "search_code" in r  # guía agregada por el wrapper
+
+    def test_segundo_fallo_escala(self, tmp_path):
+        (tool,) = wrap_tools_with_dedupe([read_file], ToolCallDedupe())
+        r1 = tool.invoke({"path": str(tmp_path / "nope.ts")})
+        assert "PARÁ" not in r1
+        r2 = tool.invoke({"path": str(tmp_path / "otro.ts")})
+        assert "PARÁ" not in r2  # path distinto: contador separado
+        # Mismo path otra vez (args distintos para esquivar el dedupe):
+        r3 = tool.invoke({"path": str(tmp_path / "nope.ts"), "start_line": 5})
+        assert "PARÁ" in r3  # 2º fallo mismo path → escala
+
+    def test_read_directorio_guia_list(self, tmp_path):
+        (tool,) = wrap_tools_with_dedupe([read_file], ToolCallDedupe())
+        r = tool.invoke({"path": str(tmp_path)})
+        assert "directory" in r
+        assert "list_files" in r
+
+    def test_edit_old_str_guia_relectura(self, tmp_path):
+        from tools.filesystem import edit_file
+        from tools.filesystem import read_file as _rf
+
+        p = tmp_path / "a.py"
+        p.write_text("x = 1\n", encoding="utf-8")
+        (tool,) = wrap_tools_with_dedupe([edit_file], ToolCallDedupe())
+        # Sin read previo el invariante rechaza (su propio mensaje ya guía):
+        r0 = tool.invoke({"path": str(p), "old_str": "zzz", "new_str": "y"})
+        assert "read-before-edit" in r0
+        _rf.invoke({"path": str(p)})
+        r = tool.invoke({"path": str(p), "old_str": "zzz-nope", "new_str": "y"})
+        assert "old_str not found" in r
+        assert "read_file" in r  # guía agregada
+
+    def test_exito_no_agrega_guia(self, tmp_path):
+        f = tmp_path / "ok.txt"
+        f.write_text("hola", encoding="utf-8")
+        (tool,) = wrap_tools_with_dedupe([read_file], ToolCallDedupe())
+        r = tool.invoke({"path": str(f)})
+        assert "💡" not in r
+
+
+class TestEvidenceSink:
+    """El wrapper journaliza cada ejecución real sin nuevas tools."""
+
+    def test_registra_ok_y_fallo(self, tmp_path):
+        from tools.filesystem import read_file as _rf
+
+        f = tmp_path / "a.txt"
+        f.write_text("hola", encoding="utf-8")
+        sink: list = []
+        (tool,) = wrap_tools_with_dedupe([_rf], ToolCallDedupe(), evidence_sink=sink)
+        tool.invoke({"path": str(f)})
+        tool.invoke({"path": str(tmp_path / "nope.txt")})
+        assert sink[0] == {"tool": "read_file", "path": str(f), "ok": True}
+        assert sink[1]["tool"] == "read_file" and sink[1]["ok"] is False
+
+    def test_sin_sink_no_falla(self, tmp_path):
+        (tool,) = wrap_tools_with_dedupe([read_file], ToolCallDedupe())
+        r = tool.invoke({"path": str(tmp_path / "x.txt")})
+        assert "does not exist" in r

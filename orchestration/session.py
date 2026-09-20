@@ -1133,6 +1133,11 @@ class Session:
         # _ToolCallLog: set + contador de llamadas (T006: 2 read_file = turno
         # de verificación legítimo; contar por nombre daba 1 y forzaba retry).
         self._called_tools = _ToolCallLog()
+        # Journal de evidencia harness-side (P1): el wrapper agrega
+        # {"tool","path","ok"} por ejecución real; se persiste en SQLite al
+        # cerrar el turno y se inyecta en retry/summary (sobrevive compact).
+        self._evidence: list = []
+        self._evidence_flushed = 0
         # Resultado ([PASSED]/[FAILED]) de cada verify tool del turno. Sin esto
         # el cierre decía "build ✅" con solo haber LLAMADO la tool (E2E real:
         # run_build en raíz rota contó como verificado). Solo `[PASSED]`
@@ -1385,6 +1390,7 @@ class Session:
                     self._explore_budget, self._analyze_budget,
                     tool_call_logger=self._called_tools,
                     tool_call_results=self._verify_results,
+                    evidence_sink=self._evidence,
                     graph_project=self._graph_project,
                 )
             )
@@ -1429,6 +1435,8 @@ class Session:
         self._session_touched_files = set()
         self._pending_commit_pick = None
         self.current_role = Role.ANALYZE
+        self._evidence = []
+        self._evidence_flushed = 0
         try:
             from tools.filesystem import clear_read_tracker
 
@@ -1467,6 +1475,7 @@ class Session:
                     tools_override=tools_override,
                     tool_call_logger=self._called_tools,
                     tool_call_results=self._verify_results,
+                    evidence_sink=self._evidence,
                     graph_project=self._graph_project,
                     confirm_callback=(
                         self._confirm_write_cb
@@ -1519,6 +1528,7 @@ class Session:
                     read_cache=self._read_cache,
                     tool_call_logger=self._called_tools,
                     tool_call_results=self._verify_results,
+                    evidence_sink=self._evidence,
                     allow_overwrite_escalation=False,
                     confirm_callback=(
                         self._confirm_write_cb if EXECUTE_CONFIRM_WRITES else None
@@ -1576,6 +1586,7 @@ class Session:
                     force_tool_calls=True,
                     tool_call_logger=self._called_tools,
                     tool_call_results=self._verify_results,
+                    evidence_sink=self._evidence,
                     confirm_callback=(
                         self._confirm_write_cb if EXECUTE_CONFIRM_WRITES else None
                     ),
@@ -1611,7 +1622,7 @@ class Session:
             console.print("[yellow]⚠️ No se pudo generar resumen (LLM no disponible) — historial intacto.[/yellow]")
             return
         self._messages = [
-            SystemMessage(f"Resumen de la conversación previa:\n{summary}"),
+            SystemMessage(f"Resumen de la conversación previa:\n{summary}\n{self._evidence_block()}"),
             *recent,
         ]
 
@@ -1643,6 +1654,33 @@ class Session:
             "\n\nHALLAZGOS DE TU ANÁLISIS EN CURSO (continuá EXACTAMENTE desde "
             "acá — NO reinicies el diagnóstico ni cambies de hipótesis):\n"
             + tail + "\n"
+        )
+
+    def _flush_evidence(self) -> None:
+        """Persiste en SQLite las entradas del journal aún no guardadas."""
+        try:
+            from cache import record_evidence
+            for entry in self._evidence[self._evidence_flushed:]:
+                record_evidence(
+                    self.session_id, self.repo_path,
+                    entry.get("tool", ""), entry.get("path", ""),
+                    entry.get("ok", True),
+                )
+            self._evidence_flushed = len(self._evidence)
+        except Exception:
+            pass
+
+    def _evidence_block(self) -> str:
+        """Hechos del turno para retry/summary (1 línea por tool call)."""
+        lines = []
+        for e in self._evidence[-12:]:
+            mark = "✅" if e.get("ok", True) else "❌"
+            lines.append(f"{mark} {e.get('tool', '')} {e.get('path', '')}")
+        if not lines:
+            return ""
+        return (
+            "\n\nEVIDENCIA DEL TURNO (hechos ya ocurridos — no los repitas, "
+            "partí de acá):\n" + "\n".join(lines) + "\n"
         )
 
     def _retry_with_read_anchor(self) -> str:
@@ -1693,7 +1731,7 @@ class Session:
                 "la verificación la inyecta el sistema. "
                 "NO hagas write_file de archivos que ya modificaste." + anchor
             )
-        return _EXECUTE_FORCE_WRITE_MSG + self._findings_block() + anchor
+        return _EXECUTE_FORCE_WRITE_MSG + self._findings_block() + anchor + self._evidence_block()
 
     def _trim_for_retry(self) -> None:
         """Recorta historial para retry preservando el SystemMessage summary.
@@ -3045,6 +3083,7 @@ class Session:
         # a planificación protegida y edits no-op. Solo la sesión limpia.
         self._dedupe.protected_rejects = {}
         self._dedupe.noop_rejects = {}
+        self._dedupe.fail_guides = {}
         self._runtime_healthy = None
         self._runtime_report = None
 
@@ -4193,6 +4232,7 @@ class Session:
                 assistant_message=self._last_response or "",
                 tokens_used=turn_tokens,
             )
+        self._flush_evidence()
 
         # Summary del turno: en modo --tui (full-screen) se omite — el panel
         # queda limpio solo con "vos ›" + respuesta del LLM; el summary era
@@ -4678,6 +4718,7 @@ class Session:
             )
         except Exception:
             pass
+        self._flush_evidence()
         return True
 
     def _confirm_write_cb(

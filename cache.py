@@ -74,6 +74,22 @@ CREATE TABLE IF NOT EXISTS test_baseline (
     snapshot_hash TEXT,
     updated_at TEXT
 );
+
+-- Journal de evidencia por sesión: qué hizo cada tool call (tool, path,
+-- ok/fallo). Sin esto el summary al 90% pierde hechos críticos (foo.ts
+-- depende de Y bajo condición Z) y el retry/reanudación arranca ciego.
+-- 1 fila por ejecución real (no policy-returns). Tope por sesión en lectura.
+CREATE TABLE IF NOT EXISTS evidence (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    repo_path TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    path TEXT NOT NULL DEFAULT '',
+    ok INTEGER NOT NULL DEFAULT 1,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_sid ON evidence(session_id);
 """
 
 
@@ -328,6 +344,65 @@ def load_session_turns(session_id: str) -> list[dict]:
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ── Evidence journal (qué hizo cada tool call en la sesión) ──────────────────
+
+EVIDENCE_LIMIT = 200  # tope de filas por sesión (lectura y escritura)
+
+
+def record_evidence(session_id: str, repo_path: str, tool: str, path: str = "",
+                    ok: bool = True, note: str = "") -> None:
+    """Guarda 1 fila por ejecución real de tool. Fail-open (nunca rompe turno)."""
+    try:
+        conn = _connect()
+        n = conn.execute(
+            "SELECT COUNT(*) AS c FROM evidence WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()["c"]
+        if n >= EVIDENCE_LIMIT:
+            conn.execute(
+                "DELETE FROM evidence WHERE id IN "
+                "(SELECT id FROM evidence WHERE session_id = ? ORDER BY id ASC LIMIT 1)",
+                (session_id,),
+            )
+        conn.execute(
+            """INSERT INTO evidence
+               (session_id, repo_path, tool, path, ok, note, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (session_id, normalize_path(repo_path), tool, path[:300],
+             1 if ok else 0, note[:300], _now()),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def recent_evidence(session_id: str, limit: int = 12) -> list[dict]:
+    """Últimas N evidencias de la sesión (orden cronológico)."""
+    conn = _connect()
+    rows = conn.execute(
+        """SELECT tool, path, ok, note, created_at FROM evidence
+           WHERE session_id = ? ORDER BY id DESC LIMIT ?""",
+        (session_id, limit),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in reversed(rows)]
+
+
+def evidence_block(session_id: str, limit: int = 12, max_chars: int = 1000) -> str:
+    """Bloque compacto para inyectar en retry/summary (1 línea por hecho)."""
+    rows = recent_evidence(session_id, limit)
+    if not rows:
+        return ""
+    lines = []
+    for r in rows:
+        mark = "✅" if r["ok"] else "❌"
+        tail = f" — {r['note']}" if r["note"] else ""
+        lines.append(f"{mark} {r['tool']} {r['path']}{tail}")
+    block = "EVIDENCIA DE LA SESIÓN (hechos, no perder al compactar):\n" + "\n".join(lines)
+    return block[:max_chars]
 
 
 # ── Bulk subtasks (cola de batches para tareas de N archivos) ───────────────

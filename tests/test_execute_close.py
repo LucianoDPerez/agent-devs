@@ -923,3 +923,19 @@ def test_commit_durante_turno_si_cuenta(tmp_path):
     s._called_tools = {"read_file"}
     assert s._commit_during_turn() is True
     assert s._nothing_pending_to_write() is True
+
+
+def test_evidence_block_resume_retry(tmp_path):
+    """El journal del turno se formatea para retry/summary (no se pierde)."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    assert s._evidence_block() == ""
+    s._evidence = [
+        {"tool": "read_file", "path": "/r/a.py", "ok": True},
+        {"tool": "edit_file", "path": "/r/a.py", "ok": False},
+    ]
+    block = s._evidence_block()
+    assert "✅ read_file /r/a.py" in block
+    assert "❌ edit_file /r/a.py" in block

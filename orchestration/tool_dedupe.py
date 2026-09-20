@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 from pathlib import Path
@@ -152,6 +153,10 @@ class ToolCallDedupe:
         # La sesión los limpia por TURNO (run_turn), no reset().
         self.protected_rejects: dict[str, int] = {}
         self.noop_rejects: dict[str, int] = {}
+        # Guía dinámica ante fallos POR (tool, path): vive en el dedupe por
+        # la misma razón (los retries reconstruyen el closure). La sesión lo
+        # limpia por turno (run_turn), no reset().
+        self.fail_guides: dict[str, int] = {}
 
     def reset(self) -> None:
         self._counts.clear()
@@ -679,6 +684,7 @@ def wrap_tools_with_dedupe(
     tool_call_results: dict | None = None,
     allow_overwrite_escalation: bool = True,
     confirm_callback=None,
+    evidence_sink: list | None = None,
 ) -> list:
     """Envuelve tools: dedupe idéntico + (opcional) explore/write guard.
 
@@ -705,6 +711,11 @@ def wrap_tools_with_dedupe(
     para archivos existentes). Lo usa el retry write-only: sin read_file el
     modelo escribiría de memoria y destruiría el archivo (E2E real:
     __init__.py de 1851 líneas truncado a 78).
+
+    ``evidence_sink`` (list): si se provee, cada EJECUCIÓN real agrega
+    {"tool", "path", "ok"}. La sesión lo persiste (cache.record_evidence) y
+    lo inyecta en retry/summary. Journal harness-side: cero tools nuevas para
+    el modelo (un 4B no necesita más schemas).
     """
     # Rechazos del guard quirúrgico de edit_file por path: al llegar al tope,
     # se habilita write_file completo para ese archivo (escalamiento de
@@ -722,7 +733,7 @@ def wrap_tools_with_dedupe(
             _wrap_one(
                 t, dedupe, explore_budget, read_cache, repo_path,
                 tool_call_logger, edit_rejections, allow_overwrite_escalation,
-                confirm_callback, tool_call_results,
+                confirm_callback, tool_call_results, evidence_sink,
             )
         )
     return wrapped
@@ -790,7 +801,78 @@ def _write_succeeded(result: Any) -> bool:
     return isinstance(result, str) and result.strip().startswith("✅")
 
 
+def _guide_on_failure(name: str, kwargs: dict[str, Any], result: Any,
+                      dedupe: ToolCallDedupe | None) -> Any:
+    """Intervención dinámica: ante un resultado FALLIDO, agrega una línea de
+    guía accionable (qué hacer en vez de reintentar lo mismo). Nativo a la
+    arquitectura (sin skills ni otra LLM): el wrapper ya ve nombre, args y
+    resultado de cada llamada.
+
+    Al 2º fallo sobre el mismo (tool, path) escala: pide parar y reportar en
+    texto. Contador en el dedupe compartido (sobrevive rebuilds, como
+    protected_rejects/noop_rejects). Solo toca strings no-exitosos; los ✅ y
+    los mensajes que YA guían (⛔ con instrucción) pasan intactos.
+    """
+    if not isinstance(result, str) or result.strip().startswith("✅"):
+        return result
+    path = str((kwargs or {}).get("path", ""))
+    hint = ""
+    if name == "read_file" and "is a directory" in result:
+        hint = "💡 Eso es un directorio: exploralo con list_files (read_file es para archivos)."
+    elif "File does not exist" in result or "does not exist" in result[:80]:
+        hint = (
+            "💡 El path no existe: ubicá el real con search_code (por símbolo) "
+            "o list_files (por directorio). No adivines variantes del nombre."
+        )
+    elif name in ("edit_file", "apply_patch") and "old_str not found" in result:
+        hint = (
+            "💡 El bloque no matchea: releé con read_file y copiá el old_str "
+            "LITERAL del archivo (2-5 líneas de contexto)."
+        )
+    if not hint:
+        return result
+    key = f"{name}::{path}"
+    guides = getattr(dedupe, "fail_guides", None)
+    if guides is not None:
+        n = guides.get(key, 0) + 1
+        guides[key] = n
+        if n >= 2:
+            hint += (
+                f" Ya fallaste {n} veces sobre este path: PARÁ de reintentar "
+                "la misma vía, explicá en texto qué necesitás y esperá."
+            )
+    return result + "\n" + hint
+
+
 _SKIPPED_MARKER_RE = re.compile(r"^\.\.\. \(lines \d+ to \d+ skipped\) \.\.\.$")
+
+
+def _result_ok(name: str, result: Any) -> bool:
+    """True si la tool se ejecutó con éxito (para el journal de evidencia)."""
+    if not isinstance(result, str):
+        return True
+    head = result[:120]
+    for marker in ("⛔", "File does not exist", "does not exist", "old_str not found",
+                   "is a directory", "not found in", "RECHAZADO", "BLOQUEADO",
+                   "NO-OP", "no se pudo", "Failed to"):
+        if marker in head or marker in result[:200]:
+            return False
+    return True
+
+
+def _note_evidence(evidence_sink: list | None, name: str,
+                   kwargs: dict[str, Any], result: Any) -> None:
+    """Journal harness-side (sin tools nuevas para el modelo): 1 entrada por
+    ejecución real. La sesión lo persiste en SQLite y lo inyecta en retry y
+    summary para que sobreviva al compact."""
+    if evidence_sink is None:
+        return
+    with contextlib.suppress(Exception):
+        evidence_sink.append({
+            "tool": name,
+            "path": str((kwargs or {}).get("path", ""))[:300],
+            "ok": _result_ok(name, result),
+        })
 
 
 def _strip_read_artifacts(content: str) -> str:
@@ -864,6 +946,7 @@ def _wrap_one(
     allow_overwrite_escalation: bool = True,
     confirm_callback=None,
     tool_call_results: dict | None = None,
+    evidence_sink: list | None = None,
 ) -> BaseTool:
     name = tool.name
 
@@ -1236,6 +1319,8 @@ def _wrap_one(
             tool_call_logger.discard(name)
         if name == "edit_file":
             result = _escalate_edit_rejections(kwargs.get("path", ""), result, allow_overwrite_escalation)
+        result = _guide_on_failure(name, kwargs, result, dedupe)
+        _note_evidence(evidence_sink, name, kwargs, result)
         _cache_read(kwargs, result)
         return result
 
@@ -1358,6 +1443,8 @@ def _wrap_one(
             tool_call_logger.discard(name)
         if name == "edit_file":
             result = _escalate_edit_rejections(kwargs.get("path", ""), result, allow_overwrite_escalation)
+        result = _guide_on_failure(name, kwargs, result, dedupe)
+        _note_evidence(evidence_sink, name, kwargs, result)
         _cache_read(kwargs, result)
         return result
 

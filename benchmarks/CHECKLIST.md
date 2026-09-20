@@ -12,9 +12,10 @@
   chars, retry ya corría sin thinking), AGENTS.md (tope 4000, todos los
   roles). Verificado: suite 711, e2e AGENTS.md (hints=True), P04 PASS.
   Ver `FASE2.md`.
-- [ ] **P1 — Dynamic intervention** — inyectar hint ante error repetido
-  (path inválido → sugerir `search_code`; re-lectura → exigir edit o verify).
-  Equivalente nativo a skill-inject, sin otra LLM.
+- [x] **P1 — Dynamic intervention + evidence journal** — hints ante fallo
+  (escala al 2º sobre mismo path) + journal SQLite inyectado en retry/summary,
+  cero tools nuevas. Verificado: suite 722, e2e journal 3/3 en SQLite.
+  Ver `P1.md`.
 - [ ] **P2 — Evidence store** — `evidence_add/get/list` (snippets ≤1KB) que
   sobreviva compact/retry/role-switch. Hoy solo summary al 90%.
 - [ ] **P2 — Per-model profiles** — contexto/thinking/temperatura por modelo

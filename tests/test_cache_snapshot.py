@@ -213,3 +213,34 @@ class TestBaseline:
     def test_sin_fila_da_vacio(self, tmp_path, monkeypatch):
         monkeypatch.setattr(cache_mod, "CACHE_DB", str(tmp_path / "t.db"))
         assert cache_mod.load_test_baseline(str(tmp_path / "nada")) == {}
+
+
+class TestEvidenceJournal:
+    """Journal de evidencia: hechos por tool call que sobreviven al compact."""
+
+    def test_roundtrip_y_bloque(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cache_mod, "CACHE_DB", str(tmp_path / "e.db"))
+        sid = "sess-test-1"
+        cache_mod.record_evidence(sid, "/repo", "read_file", "/repo/a.py", True)
+        cache_mod.record_evidence(sid, "/repo", "edit_file", "/repo/a.py", False, "old_str not found")
+        rows = cache_mod.recent_evidence(sid)
+        assert len(rows) == 2
+        assert rows[0]["tool"] == "read_file" and rows[0]["ok"] == 1
+        assert rows[1]["ok"] == 0
+        block = cache_mod.evidence_block(sid)
+        assert "✅ read_file /repo/a.py" in block
+        assert "❌ edit_file /repo/a.py" in block
+
+    def test_sesion_vacia_da_bloque_vacio(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cache_mod, "CACHE_DB", str(tmp_path / "e.db"))
+        assert cache_mod.evidence_block("nadie") == ""
+
+    def test_tope_por_sesion(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cache_mod, "CACHE_DB", str(tmp_path / "e.db"))
+        monkeypatch.setattr(cache_mod, "EVIDENCE_LIMIT", 3)
+        sid = "sess-test-top"
+        for i in range(5):
+            cache_mod.record_evidence(sid, "/repo", "read_file", f"/f{i}.py", True)
+        rows = cache_mod.recent_evidence(sid, limit=10)
+        assert len(rows) == 3
+        assert rows[-1]["path"] == "/f4.py"  # lo viejo se evicta
