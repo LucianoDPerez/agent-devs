@@ -22,6 +22,14 @@ AgentDevs is a development agent that **analyzes, plans, implements, and reviews
 - **Large tasks in batches**: asking it to touch 14 files splits the work into persisted batches that survive interruptions and session rotation.
 - **Full-screen TUI**: scroll, click-to-edit, selection/copy, and markdown-rendered responses (tables, code, headers).
 
+## Benchmarks (measured, reproducible)
+
+- In-house pilot (12 Python tasks, local 4B): **12/12**.
+- Aider Polyglot first 25 (5×5 python/js/go/java/cpp), same harness and pins:
+  local 4B **2/25 (8%)**, Qwen3.6-35B **19/25 (76%)** — py 5/5, js 4/5,
+  go 3/5, java 4/5, cpp 3/5.
+- Full per-task logs (records + verify outputs) in `benchmarks/polyglot-225/`.
+
 ## Installation
 
 ### One-liner (macOS / Linux)
