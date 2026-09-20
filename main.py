@@ -466,23 +466,27 @@ _CMCP_INSTALL_CMD = (
 )
 
 # Recomendación de modelo por RAM (verificado: los repos existen en HF y
-# las familias pasaron por el banco del harness — Qwen3 base NO: sin tool
-# calling probado acá, no se recomienda). El doctor nunca descarga solo.
+# las familias pasaron por el banco del harness con tool calling real).
+# Qwen3.6-35B-A3B es el mejor medido acá (7/7 + 19/25 Polyglot): en 32GB
+# entra el Q4_K_M (22GB); en 24GB solo quants chicos (~13-17GB). El doctor
+# nunca descarga solo.
 _MODEL_TIERS = (
     # (ram_min_gb, etiqueta, comando -hf, peso aprox, nota)
     (48, "64GB o más",
-     "unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M", "~17GB",
-     "lo mejor actual en benchmarks externos; acá probado al 100%: "
-     "Qwen3.6-35B-A3B (7/7 en nuestro banco)"),
+     "unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q5_K_XL", "~27GB",
+     "misma familia del mejor medido, quant mayor; alt liviano: "
+     "Qwen3.8-27B Q4_K_M (~17GB)"),
     (28, "32GB",
-     "unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL", "~7GB",
-     "probado en el banco small-llm"),
+     "unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_M", "~22GB",
+     "lo mejor medido acá: 7/7 + 19/25 Polyglot; Terminal-Bench 2.0 "
+     "oficial 51.5 (vs 41.6 del 27B)"),
     (20, "24GB",
-     "unsloth/Qwen3.5-9B-GGUF:Q4_K_M", "~5.5GB",
-     "5/5 análisis + 1/2 ejecución en nuestro banco"),
+     "unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q3_K_XL", "~17GB",
+     "medido acá (Q3_XXS): 19/25 Polyglot; el Q4_K_M (22GB) no entra "
+     "con margen de KV — usar quants chicos"),
     (0, "16GB",
      "bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M", "~2.5GB",
-     "probado en el banco (tiende a loopear; el harness lo contiene). "
+     "probado en el banco 6/7 (tiende a loopear; el harness lo contiene). "
      "Alt: Spark-X2.5-4B (mejor agentic, pero exige el fork XHToken/llama.cpp)"),
 )
 

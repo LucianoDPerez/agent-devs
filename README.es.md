@@ -78,14 +78,14 @@ También podés re-correr el one-liner de instalación: detecta la instalación 
 llama-server -hf unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M --port 8080
 ```
 
-El doctor (`agent-devs --doctor`) detecta tu RAM y te marca tu liga. Resumen (siempre Q4_K_M, siempre `--port 8080`):
+El doctor (`agent-devs --doctor`) detecta tu RAM y te marca tu liga. Resumen (siempre `--port 8080`):
 
 | Tu RAM | Comando | Pesa | Nota |
 |---|---|---|---|
-| 16GB | `llama-server -hf bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M` | ~2.5GB | probado en el banco; alt. Spark-X2.5-4B (mejor agentic, pero exige el fork `XHToken/llama.cpp`) |
-| 24GB | `llama-server -hf unsloth/Qwen3.5-9B-GGUF:Q4_K_M` | ~5.5GB | 5/5 análisis + 1/2 ejecución en el banco |
-| 32GB | `llama-server -hf unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL` | ~7GB | probado en el banco small-llm |
-| 64GB+ | `llama-server -hf unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M` | ~17GB | lo mejor actual en benchmarks externos; acá probado al 100%: Qwen3.6-35B-A3B (7/7) |
+| 16GB | `llama-server -hf bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M` | ~2.5GB | probado en el banco 6/7; alt. Spark-X2.5-4B (mejor agentic, pero exige el fork `XHToken/llama.cpp`) |
+| 24GB | `llama-server -hf unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q3_K_XL` | ~17GB | medido acá (Q3_XXS): 19/25 Polyglot — el Q4_K_M (22GB) no entra en 24GB con margen de KV, usar quants chicos |
+| 32GB | `llama-server -hf unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_M` | ~22GB | lo mejor medido: 7/7 + 19/25 Polyglot; Terminal-Bench 2.0 oficial: 51.5 (vs 41.6 del 27B) |
+| 64GB+ | `llama-server -hf unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q5_K_XL` | ~27GB | misma familia, quant mayor; o Qwen3.8-27B Q4_K_M (~17GB) como alt liviano |
 
 > Solo recomendamos familias que pasaron por el banco con tool calling real. Qwen3 base no está probado acá — no lo recomendamos.
 > Flujo que rinde: planificá con un modelo frontera, ejecutá en local, y juzgá con otro modelo distinto al executor.

@@ -78,14 +78,14 @@ Or re-run the install one-liner: it detects the existing install and updates ins
 llama-server -hf bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M --port 8080
 ```
 
-The doctor (`agent-devs --doctor`) detects your RAM and highlights your tier. Summary (always Q4_K_M, always `--port 8080`):
+The doctor (`agent-devs --doctor`) detects your RAM and highlights your tier. Summary (always `--port 8080`):
 
 | Your RAM | Command | Size | Notes |
 |---|---|---|---|
-| 16GB | `llama-server -hf bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M` | ~2.5GB | bench-tested; alt. Spark-X2.5-4B (better agentic, but requires the `XHToken/llama.cpp` fork) |
-| 24GB | `llama-server -hf unsloth/Qwen3.5-9B-GGUF:Q4_K_M` | ~5.5GB | 5/5 analysis + 1/2 execution on our bench |
-| 32GB | `llama-server -hf unsloth/gemma-4-12B-it-qat-GGUF:UD-Q4_K_XL` | ~7GB | tested on the small-llm bench |
-| 64GB+ | `llama-server -hf unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M` | ~17GB | current best on external benchmarks; fully tested here: Qwen3.6-35B-A3B (7/7) |
+| 16GB | `llama-server -hf bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M` | ~2.5GB | bench-tested 6/7; alt. Spark-X2.5-4B (better agentic, but requires the `XHToken/llama.cpp` fork) |
+| 24GB | `llama-server -hf unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q3_K_XL` | ~17GB | measured here (Q3_XXS): 19/25 Polyglot — the Q4_K_M (22GB) doesn't fit 24GB with KV room, use small quants |
+| 32GB | `llama-server -hf unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q4_K_M` | ~22GB | best measured: 7/7 + 19/25 Polyglot; official Terminal-Bench 2.0: 51.5 (vs 41.6 for the 27B) |
+| 64GB+ | `llama-server -hf unsloth/Qwen3.6-35B-A3B-GGUF:UD-Q5_K_XL` | ~27GB | same family, larger quant; or Qwen3.8-27B Q4_K_M (~17GB) as lighter alt |
 
 > We only recommend families that passed our bench with real tool calling. Base Qwen3 is untested here — not recommended.
 > Workflow that pays off: plan with a frontier model, execute locally, and judge with a different model than the executor.
