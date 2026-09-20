@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os as _os
 import shutil
 import subprocess
 import sys
@@ -25,10 +26,13 @@ BANK = Path(__file__).resolve().parent
 TASKS_FILE = BANK / "tasks25.json"
 RESULTS = BANK / "results"
 SUMMARY = RESULTS / "summary.jsonl"
-DATASET = Path("/tmp/polyglot-benchmark")
 
-MODEL = "spark2.5-4B"
-BASE_URL = "http://localhost:8080/v1"
+# Parametrizable por CLI (ver main) o env — para correr en otra máquina con
+# otro modelo/server sin tocar código. Defaults = bench box original.
+MODEL = _os.environ.get("POLY225_MODEL", "spark2.5-4B")
+BASE_URL = _os.environ.get("POLY225_BASE_URL", "http://localhost:8080/v1")
+DATASET = Path(_os.environ.get("POLY225_DATASET", "/tmp/polyglot-benchmark"))
+WORKDIR = Path(_os.environ.get("POLY225_WORKDIR", "/tmp/poly225"))
 LANG_DIR = {"python": "python", "javascript": "javascript", "go": "go",
             "java": "java", "cpp": "cpp"}
 
@@ -56,7 +60,7 @@ def setup_repo(task: dict) -> tuple[Path, Path, str]:
     Git init en el repo; setup y verify corren dentro del subdir."""
     src = DATASET / LANG_DIR[task["lang"]] / "exercises" / "practice" / task["exercise"]
     assert src.is_dir(), f"dataset ausente: {src}"
-    repo = Path(f"/tmp/poly225/{task['id']}")
+    repo = WORKDIR / task["id"]
     exdir = repo / task["exercise"]
     shutil.rmtree(repo, ignore_errors=True)
     shutil.copytree(src, exdir, ignore=shutil.ignore_patterns(".git"))
@@ -87,7 +91,7 @@ def run_task(task: dict) -> dict:
     tid = task["id"]
     stubs = ", ".join(f"{task['exercise']}/{s}" for s in task["stub"])
     prompt = (
-        f"implementar ({task['lang']}): en /tmp/poly225/{tid}/{task['exercise']}/ "
+        f"implementar ({task['lang']}): en {exdir} "
         f"leé .docs/instructions.md y los tests; completá el stub ({stubs}) para "
         f"que `{task['test_cmd']}` (corrido dentro de {task['exercise']}/) pase "
         f"en verde. Verificá con las tools de verificación al final.\n\n"
@@ -128,7 +132,23 @@ def main() -> None:
     ap.add_argument("task_id", nargs="?", default=None)
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--model", default=None,
+                    help="Override del modelo (default: env POLY225_MODEL o spark2.5-4B)")
+    ap.add_argument("--base-url", default=None,
+                    help="Override del server (default: env POLY225_BASE_URL o :8080)")
+    ap.add_argument("--dataset", default=None)
+    ap.add_argument("--workdir", default=None)
     args = ap.parse_args()
+    global MODEL, BASE_URL, DATASET, WORKDIR
+    if args.model:
+        MODEL = args.model
+    if args.base_url:
+        BASE_URL = args.base_url
+    if args.dataset:
+        DATASET = Path(args.dataset)
+    if args.workdir:
+        WORKDIR = Path(args.workdir)
+    print(f"model={MODEL} base={BASE_URL} dataset={DATASET} workdir={WORKDIR}", flush=True)
     tasks = load_tasks()
     if args.list:
         for t in tasks:
