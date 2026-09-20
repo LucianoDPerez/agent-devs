@@ -605,3 +605,62 @@ class TestEvidenceSink:
         (tool,) = wrap_tools_with_dedupe([read_file], ToolCallDedupe())
         r = tool.invoke({"path": str(tmp_path / "x.txt")})
         assert "does not exist" in r
+
+
+class TestFirstFailure:
+    """Trampa del primer fallo: excerpt enfocado para el gate-retry."""
+
+    def test_pytest_primer_fallo(self):
+        from orchestration.tool_dedupe import _first_failure_excerpt
+
+        out = (
+            "....F..\n"
+            "FAILED test_x.py::Test::test_a - AssertionError: 1 != 2\n"
+            "assert 1 == 2\n"
+            "FAILED test_x.py::Test::test_b - AssertionError\n"
+        )
+        ex = _first_failure_excerpt(out)
+        assert "test_a" in ex
+        assert "test_b" not in ex
+
+    def test_jest_y_go(self):
+        from orchestration.tool_dedupe import _first_failure_excerpt
+
+        assert "●" in _first_failure_excerpt("PASS ok\n● Suite › caso\nExpected 1")
+        assert "FAIL:" in _first_failure_excerpt("ok\n--- FAIL: TestSolve (0.1s)")
+
+    def test_sin_fallo_vacio(self):
+        from orchestration.tool_dedupe import _first_failure_excerpt
+
+        assert _first_failure_excerpt("[PASSED] exit=0") == ""
+        assert _first_failure_excerpt("") == ""
+
+    def test_sink_guarda_primero_no_pisa(self, tmp_path):
+        from tools.verify import run_tests
+
+        sink: dict = {}
+        (tool,) = wrap_tools_with_dedupe(
+            [run_tests], ToolCallDedupe(), failure_sink=sink,
+        )
+        r = tool.invoke({"path": str(tmp_path)})
+        assert isinstance(r, str)
+        # Repo vacío sin stack: SKIPPED o validación → sin trampa.
+        assert sink == {} or all(isinstance(v, str) for v in sink.values())
+
+    def test_sink_solo_failed(self):
+        from orchestration.tool_dedupe import _trap_failure
+
+        sink: dict = {}
+        _trap_failure("run_tests", "[PASSED] exit=0", {"path": "/r"}, sink)
+        assert sink == {}
+        _trap_failure(
+            "run_tests",
+            "[FAILED] exit=1\nFAILED t.py::T::t1 - AssertionError",
+            {"path": "/r"}, sink,
+        )
+        assert "t1" in sink["run_tests"]
+        _trap_failure(
+            "run_tests", "[FAILED] exit=1\nFAILED t.py::T::t2 - Error",
+            {"path": "/r"}, sink,
+        )
+        assert "t2" not in sink["run_tests"]  # el primero manda

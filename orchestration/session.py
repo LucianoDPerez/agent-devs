@@ -1138,6 +1138,9 @@ class Session:
         # cerrar el turno y se inyecta en retry/summary (sobrevive compact).
         self._evidence: list = []
         self._evidence_flushed = 0
+        # Primer fallo de verify por nombre canónico (trampa del wrapper):
+        # el gate-retry lo inyecta para que el modelo arregle UN punto.
+        self._turn_failures: dict = {}
         # Resultado ([PASSED]/[FAILED]) de cada verify tool del turno. Sin esto
         # el cierre decía "build ✅" con solo haber LLAMADO la tool (E2E real:
         # run_build en raíz rota contó como verificado). Solo `[PASSED]`
@@ -1391,6 +1394,7 @@ class Session:
                     tool_call_logger=self._called_tools,
                     tool_call_results=self._verify_results,
                     evidence_sink=self._evidence,
+                    failure_sink=self._turn_failures,
                     graph_project=self._graph_project,
                 )
             )
@@ -1476,6 +1480,7 @@ class Session:
                     tool_call_logger=self._called_tools,
                     tool_call_results=self._verify_results,
                     evidence_sink=self._evidence,
+                    failure_sink=self._turn_failures,
                     graph_project=self._graph_project,
                     confirm_callback=(
                         self._confirm_write_cb
@@ -1529,6 +1534,7 @@ class Session:
                     tool_call_logger=self._called_tools,
                     tool_call_results=self._verify_results,
                     evidence_sink=self._evidence,
+                    failure_sink=self._turn_failures,
                     allow_overwrite_escalation=False,
                     confirm_callback=(
                         self._confirm_write_cb if EXECUTE_CONFIRM_WRITES else None
@@ -1537,6 +1543,22 @@ class Session:
             )
         finally:
             loop.close()
+
+    def _first_failure_block(self) -> str:
+        """Primer fallo de verify del turno para enfocar el fix (1 punto).
+
+        El 4B ante 200 líneas de output reescribe a ciegas; con el primer
+        fallo aislado puede corregir UN lugar y re-verificar.
+        """
+        if not self._turn_failures:
+            return ""
+        parts = []
+        for name, excerpt in self._turn_failures.items():
+            parts.append(f"--- {name} ---\n{excerpt}")
+        return (
+            "\n\nPRIMER FALLO DETECTADO (arreglá SOLO esto, no reescribas "
+            "todo — un fix chico, después re-verificá):\n" + "\n".join(parts) + "\n"
+        )
 
     def _inject_verify_gate(self) -> None:
         """Inyecta la compuerta de verificación (obliga a correr run_verify
@@ -1547,7 +1569,7 @@ class Session:
             "en UNA sola llamada (no 3 separadas):\n"
             f"  run_verify(path=\"{self.repo_path}\")\n"
             "\nSi algo falla, CORREGÍ el error y volvé a ejecutar "
-            "run_verify hasta que pase."
+            "run_verify hasta que pase." + self._first_failure_block()
         ))
         self._explore_budget.max_calls = 3
         self._explore_budget.max_reads_after_explore = 4
@@ -1587,6 +1609,7 @@ class Session:
                     tool_call_logger=self._called_tools,
                     tool_call_results=self._verify_results,
                     evidence_sink=self._evidence,
+                    failure_sink=self._turn_failures,
                     confirm_callback=(
                         self._confirm_write_cb if EXECUTE_CONFIRM_WRITES else None
                     ),
@@ -3084,6 +3107,9 @@ class Session:
         self._dedupe.protected_rejects = {}
         self._dedupe.noop_rejects = {}
         self._dedupe.fail_guides = {}
+        # Primer fallo de verify del turno (lo llena el wrapper): el gate lo
+        # usa para enfocar el fix. Se limpia por turno, no por retry.
+        self._turn_failures = {}
         self._runtime_healthy = None
         self._runtime_report = None
 

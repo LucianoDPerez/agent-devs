@@ -16,8 +16,17 @@
   (escala al 2º sobre mismo path) + journal SQLite inyectado en retry/summary,
   cero tools nuevas. Verificado: suite 722, e2e journal 3/3 en SQLite.
   Ver `P1.md`.
-- [ ] **P2 — Evidence store** — `evidence_add/get/list` (snippets ≤1KB) que
-  sobreviva compact/retry/role-switch. Hoy solo summary al 90%.
+- [x] **Foco primer fallo** — trampa del primer FAILED por tool canónica +
+  bloque "arreglá SOLO esto" en el gate-retry. Suite 727. E2E PY02: el gate
+  no disparó (el modelo verificaba por su cuenta), 3/8 tests (antes 0/8),
+  sigue FAIL — foco sin efecto en vivo, queda unit-verificado.
+- [ ] **P2 — Per-model profiles** — contexto/thinking/temperatura por modelo
+  (hoy tiers RAM estáticos).
+- [ ] **P2 — Plan-mode con sub-coders** — solo si PLAN con tools directas
+  no alcanza.
+- [ ] **Polyglot-225 completo** — 200 restantes (con 35B, no con 4B).
+- [ ] **Por release — Terminal-Bench 2.0** (leaderboard oficial).
+- [ ] **Cuando 12B >40% Polyglot — SWE-bench Lite/Verified**.
 - [ ] **P2 — Per-model profiles** — contexto/thinking/temperatura por modelo
   (hoy tiers RAM estáticos).
 - [ ] **P2 — Plan-mode con sub-coders** — solo si el pilot muestra que PLAN con

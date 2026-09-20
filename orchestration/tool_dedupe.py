@@ -674,6 +674,59 @@ def _record_verify_result(
         tool_call_results[eff] = None
 
 
+_FAIL_LINE_RE = re.compile(
+    r"(FAILED|AssertionError|Error:|error:|FAIL:|✕|●.*›|panic:)",
+)
+
+
+def _first_failure_excerpt(result: str, max_chars: int = 800) -> str:
+    """Extrae el PRIMER fallo de una salida de verify (language-agnostic).
+
+    pytest/jest/go-test/gradle/catch imprimen líneas FAILED/Error. El modelo
+    chico se ahoga en 200 líneas de output y reescribe a ciegas; con el primer
+    fallo aislado puede arreglar UN punto. Cap para no comerse el contexto.
+    """
+    if not isinstance(result, str):
+        return ""
+    lines = result.splitlines()
+    start = -1
+    for i, ln in enumerate(lines):
+        if ln.strip().startswith(("[FAILED]", "[PASSED]", "[SKIPPED]")):
+            continue  # encabezado de veredicto, no el fallo en sí
+        if _FAIL_LINE_RE.search(ln):
+            start = i
+            break
+    if start < 0:
+        return ""
+    # Contexto: 2 líneas previas (qué test) + el fallo + siguientes, cortando
+    # ante el PRÓXIMO fallo (un solo punto, no toda la lista).
+    lo = max(0, start - 2)
+    window = lines[lo:start + 7]
+    cut = [window[0]]
+    for ln in window[1:]:
+        if _FAIL_LINE_RE.search(ln) and ln.strip() != lines[start].strip():
+            break
+        cut.append(ln)
+    excerpt = "\n".join(cut).strip()
+    return excerpt[:max_chars]
+
+
+def _trap_failure(name: str, result: Any, kwargs: dict[str, Any] | None,
+                  failure_sink: dict | None) -> None:
+    """Guarda el primer fallo de verify por nombre canónico (no pisa un fallo
+    previo del turno: el primero es el que hay que arreglar)."""
+    if failure_sink is None or not isinstance(result, str):
+        return
+    if not result.startswith("[FAILED]"):
+        return
+    eff = _effective_verify_name(name, kwargs)
+    if eff is None or eff in failure_sink:
+        return
+    excerpt = _first_failure_excerpt(result)
+    if excerpt:
+        failure_sink[eff] = excerpt
+
+
 def wrap_tools_with_dedupe(
     tools: list,
     dedupe: ToolCallDedupe,
@@ -685,6 +738,7 @@ def wrap_tools_with_dedupe(
     allow_overwrite_escalation: bool = True,
     confirm_callback=None,
     evidence_sink: list | None = None,
+    failure_sink: dict | None = None,
 ) -> list:
     """Envuelve tools: dedupe idéntico + (opcional) explore/write guard.
 
@@ -716,6 +770,11 @@ def wrap_tools_with_dedupe(
     {"tool", "path", "ok"}. La sesión lo persiste (cache.record_evidence) y
     lo inyecta en retry/summary. Journal harness-side: cero tools nuevas para
     el modelo (un 4B no necesita más schemas).
+
+    ``failure_sink`` (dict): si se provee, el PRIMER fallo de verify por
+    nombre canónico guarda su excerpt (primer FAILED). La sesión lo inyecta
+    en el gate-retry para que el modelo arregle UN punto en vez de reescribir
+    a ciegas.
     """
     # Rechazos del guard quirúrgico de edit_file por path: al llegar al tope,
     # se habilita write_file completo para ese archivo (escalamiento de
@@ -734,6 +793,7 @@ def wrap_tools_with_dedupe(
                 t, dedupe, explore_budget, read_cache, repo_path,
                 tool_call_logger, edit_rejections, allow_overwrite_escalation,
                 confirm_callback, tool_call_results, evidence_sink,
+                failure_sink,
             )
         )
     return wrapped
@@ -947,6 +1007,7 @@ def _wrap_one(
     confirm_callback=None,
     tool_call_results: dict | None = None,
     evidence_sink: list | None = None,
+    failure_sink: dict | None = None,
 ) -> BaseTool:
     name = tool.name
 
@@ -1303,6 +1364,7 @@ def _wrap_one(
             if _eff_bad and _eff_bad != name:
                 tool_call_logger.discard(_eff_bad)
         _record_verify_result(name, result, tool_call_results, kwargs)
+        _trap_failure(name, result, kwargs, failure_sink)
         if explore_budget is not None:
             explore_budget.note_verify(name, kwargs, result)
         if explore_budget is not None and name in WRITE_TOOL_NAMES:
@@ -1431,6 +1493,7 @@ def _wrap_one(
             if _eff_bad_a and _eff_bad_a != name:
                 tool_call_logger.discard(_eff_bad_a)
         _record_verify_result(name, result, tool_call_results, kwargs)
+        _trap_failure(name, result, kwargs, failure_sink)
         if explore_budget is not None:
             explore_budget.note_verify(name, kwargs, result)
         if explore_budget is not None and name in WRITE_TOOL_NAMES:
