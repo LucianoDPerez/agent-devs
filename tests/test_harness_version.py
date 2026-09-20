@@ -18,9 +18,9 @@ def _harness_repo() -> Path:
 
 def test_harness_head_coincide_con_git():
     h = console_mod.harness_head()
-    assert re.fullmatch(r"[0-9a-f]+[*]?", h), h
+    assert re.fullmatch(r"(v\d+\.\d+\.\d+(-\d+-g[0-9a-f]+)?|[0-9a-f]+)[*]?", h), h
     exp = subprocess.run(
-        ["git", "-C", str(_harness_repo()), "rev-parse", "--short", "HEAD"],
+        ["git", "-C", str(_harness_repo()), "describe", "--tags", "--always"],
         capture_output=True, text=True,
     ).stdout.strip()
     assert h.rstrip("*") == exp

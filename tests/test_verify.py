@@ -114,6 +114,8 @@ class TestResolveCommand:
             assert cmd == ["pytest", "-q"]
 
     def test_python_build_with_build_system(self):
+        import shutil
+
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _write(
@@ -121,7 +123,8 @@ class TestResolveCommand:
                 "[build-system]\nrequires = ['setuptools']\n",
             )
             cmd = _resolve_command(root, "build")
-            assert cmd == ["python", "-m", "build"]
+            assert isinstance(cmd, list) and cmd[1:] == ["-m", "build"]
+            assert shutil.which(cmd[0]) is not None
 
     def test_python_uv_detection(self):
         """Proyecto con uv.lock → comandos con `uv run`."""

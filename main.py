@@ -410,6 +410,9 @@ def run_fullscreen(session) -> None:
         elif payload[0] == "/commit":
             session.slash_commit(payload[1])
             return
+        elif payload[0] == "/tasks-pool":
+            session.slash_task_pool(payload[1])
+            return
         elif payload[0] == "/push":
             session.slash_push(payload[1])
             return
@@ -989,6 +992,9 @@ def main():
                 continue
             if kind == "run" and payload[0] == "/commit":
                 session.slash_commit(payload[1])
+                continue
+            if kind == "run" and payload[0] == "/tasks-pool":
+                session.slash_task_pool(payload[1])
                 continue
             if kind == "run" and payload[0] == "/push":
                 session.slash_push(payload[1])

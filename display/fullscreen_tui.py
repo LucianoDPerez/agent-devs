@@ -229,6 +229,10 @@ class FullscreenTUI(App):
         # Tab completa el comando sugerido (solo con la tira visible; si no,
         # indenta como siempre — no cambia la conducta normal).
         Binding("tab", "slash_complete", priority=True),
+        # Flechas navegan la tira de slash commands (solo visible; si no,
+        # check_action las deshabilita y el cursor se mueve normal).
+        Binding("up", "slash_up", priority=True),
+        Binding("down", "slash_down", priority=True),
         Binding("ctrl+c", "copy_or_quit", priority=True),
         Binding("alt+enter", "input_newline"),
         Binding("ctrl+shift+c", "copy_selection"),
@@ -491,9 +495,54 @@ class FullscreenTUI(App):
         with self._busy_lock:
             self._busy_count = max(0, self._busy_count - 1)
 
+    def check_action(self, action: str, parameters: tuple) -> bool | None:
+        """Flechas ↑/↓ solo navegan con la tira visible (si no, cursor normal
+        del TextArea). El resto de acciones siempre habilitado."""
+        if action in ("slash_up", "slash_down"):
+            try:
+                return bool(self._slash_visible and self._slash_matches)
+            except Exception:
+                return False
+        return True
+
+    def action_slash_up(self) -> None:
+        """↑: sugerencia anterior (wrap-around)."""
+        if not self._slash_matches:
+            return
+        self._slash_index = (self._slash_index - 1) % len(self._slash_matches)
+        self._render_slash_hint()
+
+    def action_slash_down(self) -> None:
+        """↓: sugerencia siguiente (wrap-around)."""
+        if not self._slash_matches:
+            return
+        self._slash_index = (self._slash_index + 1) % len(self._slash_matches)
+        self._render_slash_hint()
+
     def action_submit(self) -> None:
         ta = self.query_one("#input", TextArea)
-        text = ta.text
+        # Tira visible: Enter ejecuta la sugerencia SELECCIONADA (↑/↓).
+        # Con argumentos → la completa y espera que los escribas; sin
+        # argumentos → se ejecuta directo.
+        if self._slash_visible and self._slash_matches:
+            from display.commands import takes_args
+
+            sel = self._slash_matches[self._slash_index][0]
+            if takes_args(sel):
+                ta.load_text(sel + " ")
+                try:
+                    doc = ta.document
+                    last = doc.line_count - 1
+                    ta.move_cursor((last, len(doc.get_line(last))))
+                except Exception:
+                    pass
+                self._hide_slash_hint()
+                return
+            ta.load_text(sel)
+            self._hide_slash_hint()
+            text = sel
+        else:
+            text = ta.text
         if not text.strip():
             return
         if self._busy and not text.strip().startswith("/"):
@@ -596,8 +645,8 @@ class FullscreenTUI(App):
 
     # ── sugerencias de slash commands (estilo opencode) ──────────────
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
-        """Tira de sugerencias al tipear '/' (navegar: seguir tipeando para
-        filtrar; Tab completa; Esc la cierra; Enter ejecuta)."""
+        """Tira de sugerencias al tipear '/' (↑/↓ navegar, Enter ejecuta,
+        Tab completa, Esc cierra)."""
         try:
             if event.control.id != "input":
                 return
@@ -645,7 +694,7 @@ class FullscreenTUI(App):
         for i, (name, desc) in enumerate(self._slash_matches):
             mark = "›" if i == self._slash_index else " "
             lines.append(f"{mark} {name:<9} {desc}")
-        lines.append("  [tab completa · esc cierra]")
+        lines.append("  [↑↓ navegar · enter ejecuta · tab completa · esc cierra]")
         widget.update("\n".join(lines))
         widget.display = True
         self._slash_visible = True

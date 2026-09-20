@@ -939,3 +939,51 @@ def test_evidence_block_resume_retry(tmp_path):
     block = s._evidence_block()
     assert "✅ read_file /r/a.py" in block
     assert "❌ edit_file /r/a.py" in block
+
+
+def test_turn_files_delta_solo_nuevos(tmp_path):
+    """El pool stagea archivos del turno (tracked+untracked), no previos."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    (repo / "viejo.txt").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=str(repo), check=True,
+                   capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-qm", "viejo", "--allow-empty-message"],
+                   cwd=str(repo), capture_output=True, text=True, check=True)
+    s = Session(llm=None, repo_path=str(repo))
+    before = set(s._session_touched_files)
+    # Untracked nuevo (tocado en el turno)
+    (repo / "nuevo.txt").write_text("y", encoding="utf-8")
+    s._session_touched_files |= {"nuevo.txt"}
+    got = s._turn_files_delta(before)
+    assert got == {"nuevo.txt"}
+    # Previos no entran:
+    assert s._turn_files_delta(set(s._session_touched_files)) == set()
+
+
+def test_fresh_pool_turn_aisla_historial(tmp_path):
+    """El pool trunca Human/AI entre tareas pero conserva system + análisis."""
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    s._messages = [
+        SystemMessage("sys"),
+        HumanMessage("tarea 1"),
+        AIMessage("listo 1"),
+    ]
+    s.cached_analysis = "ANALISIS"
+    s._fresh_pool_turn()
+    assert all(isinstance(m, SystemMessage) for m in s._messages)
+    assert s.cached_analysis == "ANALISIS"
+
+
+def test_slash_task_pool_sin_numeros_muestra_uso(tmp_path):
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    assert s.slash_task_pool("hola") is None

@@ -103,6 +103,34 @@ def detect_bulk_file_count(task_text: str) -> int:
     return n
 
 
+# Rango "T001-T010" / "T1-T10" / "tareas 1 al 10" / "T001 hasta T010".
+_TASK_RANGE_RE = re.compile(
+    r"\bT?(\d{1,4})\s*(?:-|hasta|al|al\s+T?)\s*T?(\d{1,4})\b",
+    re.IGNORECASE,
+)
+
+
+def extract_task_range(user_input: str) -> tuple[int, int] | None:
+    """Rango de tareas (inicio, fin) o None. Cap 50 para no colgar la sesión."""
+    if not user_input:
+        return None
+    for match in _TASK_RANGE_RE.finditer(user_input):
+        a, b = int(match.group(1)), int(match.group(2))
+        # Evitar falsos positivos ("del 2024 al 2026", versiones "1.10-2.0"):
+        # requiere contexto de tareas o formato T-id en el mensaje.
+        ctx = user_input.lower()
+        if not (
+            "tarea" in ctx or re.search(r"\bT\d", user_input)
+            or "tasks-pool" in ctx or "taskspool" in ctx
+        ):
+            continue
+        if a < 1 or b < 1 or abs(b - a) > 50:
+            continue
+        lo, hi = (a, b) if a <= b else (b, a)
+        return (lo, hi)
+    return None
+
+
 def extract_requested_task_numbers(user_input: str) -> list[int]:
     """Números de tarea que el usuario pidió explícitamente (orden de aparición)."""
     seen: set[int] = set()

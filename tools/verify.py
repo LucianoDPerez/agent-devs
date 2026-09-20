@@ -264,7 +264,14 @@ def _resolve_command(root: Path, action: str) -> list[str] | str:
         return ["uv", "run", "pytest", "-q"] if uv_py else ["pytest", "-q"]
     if action == "build":
         if _python_has_build_system(root):
-            return ["uv", "build"] if uv_py else ["python", "-m", "build"]
+            if uv_py:
+                return ["uv", "build"]
+            # `python` no existe en macOS out-of-the-box (solo python3):
+            # resolver el intérprete en vez de asumirlo (E2E pool).
+            import shutil as _shutil
+
+            _py = _shutil.which("python") or _shutil.which("python3") or "python3"
+            return [_py, "-m", "build"]
         return "No [build-system] in pyproject.toml — build not configured"
     return f"Unknown action: {action}"
 

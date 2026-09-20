@@ -374,12 +374,12 @@ def print_role_switch(role_label: str, local_count: int, mcp_count: int):
 
 
 def harness_head() -> str:
-    """Short-hash + dirty-flag del checkout del harness (versión visible).
+    """Tag/commit + dirty-flag del checkout del harness (versión visible).
 
-    Va en CADA turno y en el header: si una máquina corre mezcla de versiones
-    o quedó atrás, se ve en el transcript sin preguntar (E2E: crash por
-    session.py nuevo + tool_dedupe viejo tras un update). Fail-open: "?"
-    sin git. Sin caché a propósito: refleja el disco en cada turno.
+    Prefiere `git describe --tags` (v0.1.0 exacto, o v0.1.0-3-gabc1234 si
+    avanzaste) y cae a short-hash si no hay tags. Va en CADA turno y en el
+    header: si una máquina corre mezcla de versiones o quedó atrás, se ve
+    en el transcript sin preguntar. Fail-open: "?" sin git.
     """
     import subprocess
     from pathlib import Path as _Path
@@ -388,6 +388,14 @@ def harness_head() -> str:
         repo = _Path(__file__).resolve().parent.parent
         if not (repo / ".git").exists():
             return "?"
+        desc = subprocess.run(
+            ["git", "-C", str(repo), "describe", "--tags", "--always", "--dirty=*"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        if desc:
+            # --always ya devuelve short-hash si no hay tags; --dirty agrega *.
+            # Normalizar: describe usa "-dirty", nosotros usamos "*".
+            return desc.replace("-dirty", "*")
         head = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
             capture_output=True, text=True, timeout=5,

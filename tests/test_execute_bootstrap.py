@@ -11,6 +11,7 @@ from orchestration.execute_bootstrap import (
     extract_requested_task_numbers,
     extract_review_findings,
     extract_scope_files,
+    extract_task_range,
     filter_json_task_sections,
     filter_task_sections,
     format_done_checklist,
@@ -66,6 +67,18 @@ class TestTaskFiltering:
         assert extract_requested_task_numbers(
             "implementar T002 desde /repo/.agent/tasks/ulab-1/tasks.json") == [2]
         assert extract_requested_task_numbers("implementar T002 y T003 dale") == [2, 3]
+
+    def test_extract_task_range(self):
+        assert extract_task_range("/tasks-pool T001-T010 plans/t.md") == (1, 10)
+        assert extract_task_range("pool T1-T3") == (1, 3)
+        assert extract_task_range("tareas 4 al 6") == (4, 6)
+        assert extract_task_range("T007 hasta T009 dale") == (7, 9)
+        assert extract_task_range("T010-T001") == (1, 10)  # invertido se ordena
+
+    def test_extract_task_range_rechaza_ruido(self):
+        assert extract_task_range("del 2024 al 2026") is None
+        assert extract_task_range("hola como estas") is None
+        assert extract_task_range("T001-T999") is None  # cap 50
 
     def test_filter_keeps_only_requested(self):
         filtered = filter_task_sections(_SAMPLE_TASKS, [1, 2])

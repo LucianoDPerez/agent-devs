@@ -1474,6 +1474,149 @@ class Session:
         self._load_previous_sessions()
         self._rebuild_agent(Role.ANALYZE)
 
+    def slash_task_pool(self, arg: str) -> dict | None:
+        """Comando /tasks-pool — pool autónomo de tareas con turno fresco c/u.
+
+        Sintaxis: /tasks-pool T001-T010 [archivo-tareas] [--commit]
+        Sin rango: usa los números citados (T003, tareas 1 y 2). Sin archivo:
+        el prompt cita solo el N y la maquinaria pinnada resuelve.
+        """
+        from orchestration.execute_bootstrap import (
+            extract_requested_task_numbers,
+            extract_task_range,
+        )
+
+        text = (arg or "").strip()
+        commit_each = "--commit" in text
+        text = text.replace("--commit", "").strip()
+        numbers: list[int] = []
+        tasks_file: str | None = None
+        rng = extract_task_range(text)
+        numbers = list(range(rng[0], rng[1] + 1)) if rng else extract_requested_task_numbers(text)
+        # Archivo de tareas: primer path .md/.txt/.json citado (o None).
+        import re as _re
+
+        m = _re.search(r"([\w./-]+\.(?:md|txt|json))", text)
+        if m:
+            tasks_file = m.group(1)
+        if not numbers:
+            console.print(
+                "[yellow]Uso: /tasks-pool T001-T010 [archivo] [--commit][/yellow]\n"
+                "[dim]Ej: /tasks-pool T001-T003 plans/tareas.md --commit[/dim]"
+            )
+            return None
+        console.print(
+            f"[bold cyan]Pool autónomo: {len(numbers)} tareas "
+            f"({numbers[0]:03d}→{numbers[-1]:03d})[/bold cyan]"
+            + (" + commit por tarea" if commit_each else "")
+            + "\n[dim]Un turno fresco por tarea (sin acumular contexto).[/dim]\n"
+        )
+        return self.run_task_pool(numbers, tasks_file, commit_each)
+
+    def _fresh_pool_turn(self) -> None:
+        """Aislamiento por tarea del pool: conserva SystemMessages (system
+        prompt + summaries) y descarta el ida y vuelta Human/AI del turno
+        anterior. Misma sesión (journal y caché siguen), contexto acotado."""
+        with contextlib.suppress(Exception):
+            self._messages = [m for m in self._messages if isinstance(m, SystemMessage)]
+
+    def _turn_files_delta(self, before: set[str]) -> set[str]:
+        """Archivos del turno (delta de _session_touched_files), normalizados
+        contra porcelain (tracked-modificados + untracked). Nada de caches.
+
+        Usa subprocess directo (sin .strip() del output): la primera línea
+        de " M path" pierde su espacio de status al strippear y ln[3:]
+        devuelve '.py' (bug latente del parseo)."""
+        try:
+            new_paths = [p for p in self._session_touched_files if p not in before]
+            if not new_paths:
+                return set()
+            proc = subprocess.run(
+                ["git", "status", "--porcelain", "--untracked-files=all"],
+                cwd=self.repo_path, capture_output=True, text=True, timeout=15,
+            )
+            repo = Path(self.repo_path)
+
+            def _abs(rel: str) -> str:
+                try:
+                    p = Path(rel)
+                    return str((repo / p).resolve() if not p.is_absolute() else p.resolve())
+                except OSError:
+                    return rel
+
+            abs_new = {_abs(p) for p in new_paths}
+            files: set[str] = set()
+            for ln in proc.stdout.splitlines():
+                if len(ln) < 4:
+                    continue
+                rel = ln[3:].strip()
+                if rel and _abs(rel) in abs_new:
+                    files.add(rel)
+            return files
+        except Exception:
+            return set()
+
+    def run_task_pool(self, numbers: list[int], tasks_file: str | None = None,
+                      commit_each: bool = False) -> dict:
+        """Ejecuta tareas T en secuencia autónoma, un turno fresco por tarea.
+
+        Cada tarea corre `run_turn("implementar Tarea N [de <file>]")` con la
+        maquinaria pinnada existente (scope, budgets) y el historial truncado
+        antes de arrancar. Si commit_each, commitea alcance sesion por tarea.
+        Un fallo no frena el pool: se registra y sigue. Retorna resumen.
+        """
+        results: list[dict] = []
+        for n in numbers:
+            self._fresh_pool_turn()
+            touched_before = set(self._session_touched_files)
+            prompt = f"implementar Tarea {n}"
+            if tasks_file:
+                prompt += f" de {tasks_file}"
+            status = "ok"
+            try:
+                self.run_turn(prompt)
+            except Exception as e:  # noqa: BLE001
+                status = f"error: {e}"
+            committed = ""
+            if commit_each and status == "ok":
+                try:
+                    # Stagear SOLO archivos tocados EN ESTE TURNO (untracked
+                    # nuevos + tracked modificados). El scope "sesion" usa
+                    # _session_touched_files de TODA la sesión: arrastraría
+                    # cambios de tareas anteriores (E2E: commit de T001
+                    # incluyó b.py/c.py de T2/T3 + __pycache__).
+                    turn_files = self._turn_files_delta(touched_before)
+                    if turn_files:
+                        self._git_cmd(["add", "--", *sorted(turn_files)], timeout=15)
+                    staged_code, staged = self._git_cmd(["diff", "--cached", "--name-only"])
+                    if staged_code == 0 and staged.strip():
+                        # Gate de seguridad: no commitear en rojo. Reusa los
+                        # resultados del turno (barato si ya verificó).
+                        passed, _report = run_commit_verification(
+                            self.repo_path, reuse=self._verify_results)
+                        if not passed:
+                            committed = "rojo, no commiteado"
+                        else:
+                            msg = self._ai_commit_message() or f"fix(pool): T{n:03d}"
+                            code, out = self._git_cmd(["commit", "-m", msg])
+                            committed = "sí" if code == 0 else f"falló: {out[-120:]}"
+                    else:
+                        committed = "nada stageable"
+                except Exception as e:  # noqa: BLE001
+                    committed = f"falló: {e}"
+            results.append({"tarea": n, "status": status, "commit": committed})
+        done = [r for r in results if r["status"] == "ok"]
+        summary = {
+            "total": len(results), "ok": len(done),
+            "fallidas": [r["tarea"] for r in results if r["status"] != "ok"],
+            "detalle": results,
+        }
+        console.print(
+            f"\n[bold]Pool: {summary['ok']}/{summary['total']} tareas OK[/bold]"
+            + (f" — fallidas: {summary['fallidas']}" if summary["fallidas"] else "")
+        )
+        return summary
+
     def _profile_temps(self) -> dict:
         """Override de temperatura EXECUTE según el profile del modelo."""
         try:
@@ -2811,6 +2954,22 @@ class Session:
                     if scope == "todo"
                     else f"chore: cambios de la sesión ({n} archivos)"
                 )
+            elif (low := message.strip().lower()) == "ai" or low == "ia" or low.startswith(("ai ", "ia ")):
+                # /commit todo ai [pista]: el LLM redacta el mensaje desde el
+                # diff stageado (convencional, 1 línea). Delegación explícita:
+                # se commitea directo con lo generado (se muestra antes).
+                hint = message.strip()[2:].strip()
+                ai_msg = self._ai_commit_message()
+                if ai_msg:
+                    message = f"{ai_msg} ({hint})" if hint else ai_msg
+                    console.print(f"[dim]✍️ Mensaje generado: {escape(message)}[/dim]")
+                else:
+                    n = len(staged.splitlines())
+                    message = (
+                        f"chore: cambios pendientes ({n} archivos)"
+                        if scope == "todo"
+                        else f"chore: cambios de la sesión ({n} archivos)"
+                    )
             code, out = self._git_cmd(["commit", "-m", message])
             if code == 0:
                 console.print(f"[green]✅ Commit creado: {escape(message)}[/green]")
@@ -2819,6 +2978,37 @@ class Session:
                 console.print(f"[red]⛔ git commit falló:\n{escape(out)}[/red]")
         except Exception as e:
             console.print(f"[red]⛔ git falló: {escape(str(e))}[/red]")
+
+    def _ai_commit_message(self) -> str:
+        """Redacta el mensaje de commit con el LLM desde el diff stageado.
+
+        Convencional, 1 línea ≤72 chars, mismo idioma del historial del repo.
+        Fail-open: "" si el LLM no responde (el caller usa fallback chore).
+        """
+        try:
+            code, stat = self._git_cmd(["diff", "--cached", "--stat"])
+            code2, diff = self._git_cmd(["diff", "--cached", "--", "."])
+            material = f"{stat}\n{diff}"[:4000]
+            if not material.strip():
+                return ""
+            prompt = (
+                "Generate ONE conventional commit message line (max 72 chars, "
+                "format type(scope): subject, no period, no body, no quotes) "
+                "for this staged diff. Match the repo's existing message "
+                f"language.\n\n{material}\n\nMessage:"
+            )
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = self.llm._generate([HumanMessage(prompt)])
+                raw = (result.generations[0].message.content or "").strip()
+                line = raw.splitlines()[0].strip() if raw else ""
+            finally:
+                loop.close()
+            line = line.strip("`\"' ")
+            return line[:72] if line else ""
+        except Exception:
+            return ""
 
     def try_commit_pick(self, text: str) -> str | None:
         """Consume la selección pendiente de untracked (/commit lista y el
