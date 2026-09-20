@@ -739,6 +739,7 @@ def wrap_tools_with_dedupe(
     confirm_callback=None,
     evidence_sink: list | None = None,
     failure_sink: dict | None = None,
+    confirm_imminent_cb=None,
 ) -> list:
     """Envuelve tools: dedupe idéntico + (opcional) explore/write guard.
 
@@ -793,7 +794,7 @@ def wrap_tools_with_dedupe(
                 t, dedupe, explore_budget, read_cache, repo_path,
                 tool_call_logger, edit_rejections, allow_overwrite_escalation,
                 confirm_callback, tool_call_results, evidence_sink,
-                failure_sink,
+                failure_sink, confirm_imminent_cb,
             )
         )
     return wrapped
@@ -935,6 +936,15 @@ def _note_evidence(evidence_sink: list | None, name: str,
         })
 
 
+def _confirm_with_imminent(confirm_callback, confirm_imminent_cb, name: str,
+                           kwargs: dict[str, Any]) -> bool:
+    """Sync: avisa inminencia y pide confirmación (carrera s/n)."""
+    if confirm_imminent_cb is not None:
+        with contextlib.suppress(Exception):
+            confirm_imminent_cb(name, kwargs)
+    return bool(confirm_callback(name, kwargs))
+
+
 def _strip_read_artifacts(content: str) -> str:
     """Quita del resultado de read_file los artefactos del harness (header
     '📄 path' y marcadores '(lines X to Y skipped)') ANTES de cachearlo.
@@ -1008,6 +1018,7 @@ def _wrap_one(
     tool_call_results: dict | None = None,
     evidence_sink: list | None = None,
     failure_sink: dict | None = None,
+    confirm_imminent_cb=None,
 ) -> BaseTool:
     name = tool.name
 
@@ -1240,6 +1251,9 @@ def _wrap_one(
 
     async def _confirm_async(kwargs: dict[str, Any]) -> bool:
         """Pide confirmación al usuario sin bloquear el event loop del grafo."""
+        if confirm_imminent_cb is not None:
+            with contextlib.suppress(Exception):
+                confirm_imminent_cb(name, kwargs)
         return await asyncio.to_thread(confirm_callback, name, kwargs)
 
     def _invoke(**kwargs):
@@ -1337,7 +1351,7 @@ def _wrap_one(
         if (
             confirm_callback is not None
             and name in CONFIRM_TOOL_NAMES
-            and not confirm_callback(name, kwargs)
+            and not _confirm_with_imminent(confirm_callback, confirm_imminent_cb, name, kwargs)
         ):
             return _rejected_message(kwargs)
         if tool_call_logger is not None:

@@ -192,6 +192,27 @@ class TestAutoApprove:
         assert s._confirm_write_cb("write_file", {"path": "/tmp/x"}) is True
         assert s._confirm_event is None  # ni siquiera crea el Event
 
+    def test_confirm_imminent_ventana_y_expira(self):
+        import time as _t
+
+        from orchestration.session import Session
+
+        s = Session(llm=None, repo_path="/tmp")
+        assert s.confirm_imminent() is False
+        s._mark_confirm_imminent()
+        assert s.confirm_imminent() is True
+        assert s.get_status()["confirm_imminent"] is True
+        s._confirm_imminent_until = _t.time() - 1
+        assert s.confirm_imminent() is False
+
+    def test_resolve_limpia_inminente(self):
+        from orchestration.session import Session
+
+        s = Session(llm=None, repo_path="/tmp")
+        s._mark_confirm_imminent()
+        s.resolve_confirm(True)  # sin evento: no rompe, limpia ventana
+        assert s.confirm_imminent() is False
+
     def test_interpret_rutea_autoapprove(self):
         from display.commands import interpret_slash
 

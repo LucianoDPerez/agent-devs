@@ -29,6 +29,13 @@ from textual.widgets import Static, TextArea
 
 from display.console import MD_BEGIN, MD_END, harness_head
 
+
+def _is_approval_text(text: str) -> bool:
+    """True si el texto parece respuesta sí/no a una confirmación pendiente."""
+    from core.textutil import normalize
+
+    return normalize(text) in ("s", "si", "y", "yes", "n", "no")
+
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _MAX_PANE_CHARS = 200_000   # tope de memoria del pane (trims desde el head)
 
@@ -493,16 +500,29 @@ class FullscreenTUI(App):
             # Turno en curso: no pisarlo (dos run_turn mezclan estado y el ESC
             # pierde al turno viejo). Se preserva el input. Slash y respuestas
             # a confirmaciones ("sí"/"no") pasan igual: on_submit los rutea sin
-            # abrir turno nuevo.
+            # abrir turno nuevo. El s/n también pasa si la confirmación está
+            # por llegar (flag inminente): sin esto el s/n se descartaba en la
+            # ventana donde el turno ya figura busy pero el evento aún no
+            # existe (carrera s/n).
             try:
-                confirming = bool((self.status_provider() or {}).get("confirm_pending"))
+                st = self.status_provider() or {}
             except Exception:
-                confirming = False
-            if not confirming:
-                self.notify(
-                    "Hay un turno en curso — esperá o cancelalo con ESC",
-                    severity="warning",
-                )
+                st = {}
+            confirming = bool(st.get("confirm_pending"))
+            imminent = bool(st.get("confirm_imminent"))
+            approval = _is_approval_text(text)
+            if not confirming and not (approval and imminent):
+                if approval:
+                    self.notify(
+                        "Todavía no hay pedido de confirmación — esperá el "
+                        "cartel ❓ y reintentá",
+                        severity="warning",
+                    )
+                else:
+                    self.notify(
+                        "Hay un turno en curso — esperá o cancelalo con ESC",
+                        severity="warning",
+                    )
                 return
         ta.clear()
         self._mark_busy()

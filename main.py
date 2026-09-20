@@ -304,6 +304,27 @@ def run_fullscreen(session) -> None:
             else:
                 session.resolve_confirm(False)
             return
+        # Carrera s/n: el pedido viene en camino pero el evento aún no existe.
+        # Esperar breve (hilo de fondo) a que se registre y resolverlo; si no
+        # aparece, avisar sin abrir un turno nuevo (el s/n nunca es un prompt).
+        if normalize(text) in ("s", "si", "y", "yes", "n", "no") and session.confirm_imminent():
+            import time as _time
+
+            for _ in range(20):
+                if session.confirm_pending():
+                    break
+                _time.sleep(0.1)
+            if session.confirm_pending():
+                if normalize(text) in ("s", "si", "y", "yes"):
+                    session.resolve_confirm(True)
+                else:
+                    session.resolve_confirm(False)
+            else:
+                console.print(
+                    "[yellow]Todavía no hay pedido de confirmación — esperá el "
+                    "cartel ❓ y reintentá.[/yellow]"
+                )
+            return
         # Selección pendiente de untracked (/commit lista + "1 3"/"todos"):
         # se resuelve acá sin abrir turno nuevo.
         pick_msg = session.try_commit_pick(text)

@@ -1279,6 +1279,11 @@ class Session:
         self._confirm_event: threading.Event | None = None
         self._confirm_answer: bool | None = None
         self._confirm_timeout: float = EXECUTE_CONFIRM_TIMEOUT
+        # Confirmación INMINENTE: el wrapper la marca justo antes de pedir
+        # aprobación. Cubre la ventana donde el turno ya figura busy pero el
+        # evento aún no existe (el s/n del usuario llegaba y se descartaba
+        # con "turno en curso"). Ventana corta: expira sola en segundos.
+        self._confirm_imminent_until: float = 0.0
         # Auto-aprobación (/autoapprove): con True, los writes se aprueban sin
         # preguntar (igual que en modo no-interactivo). Alcance: SOLO
         # aprobaciones de escritura/edición (incluido PATH FIX). El commit
@@ -1487,6 +1492,7 @@ class Session:
                         if EXECUTE_CONFIRM_WRITES and role == Role.EXECUTE
                         else None
                     ),
+                    confirm_imminent_cb=self._mark_confirm_imminent,
                 )
             )
             self._agent_no_explore = no_explore or tools_override is not None
@@ -1539,6 +1545,7 @@ class Session:
                     confirm_callback=(
                         self._confirm_write_cb if EXECUTE_CONFIRM_WRITES else None
                     ),
+                    confirm_imminent_cb=self._mark_confirm_imminent,
                 )
             )
         finally:
@@ -1613,6 +1620,7 @@ class Session:
                     confirm_callback=(
                         self._confirm_write_cb if EXECUTE_CONFIRM_WRITES else None
                     ),
+                    confirm_imminent_cb=self._mark_confirm_imminent,
                 )
             )
         finally:
@@ -4842,6 +4850,14 @@ class Session:
         """True si hay una confirmación de write esperando respuesta."""
         return self._confirm_event is not None and not self._confirm_event.is_set()
 
+    def _mark_confirm_imminent(self, name=None, kwargs=None) -> None:
+        """El wrapper va a pedir aprobación: ventana de 5s donde el s/n pasa."""
+        self._confirm_imminent_until = time.time() + 5.0
+
+    def confirm_imminent(self) -> bool:
+        """True si un pedido de confirmación está por llegar (carrera s/n)."""
+        return time.time() < self._confirm_imminent_until
+
     def resolve_confirm(self, answer: bool) -> None:
         """Resuelve la confirmación pendiente (lo llama la TUI desde su input).
 
@@ -4852,6 +4868,7 @@ class Session:
             if self._confirm_event is not None:
                 self._confirm_answer = bool(answer)
                 self._confirm_event.set()
+        self._confirm_imminent_until = 0.0
         if not answer:
             self._cancel_turn()
 
@@ -4870,6 +4887,7 @@ class Session:
             "tools": f"{self._local_count}+{self._mcp_count}",
             "session_id": self.session_id,
             "confirm_pending": self.confirm_pending(),
+            "confirm_imminent": self.confirm_imminent(),
             "auto_approve": self._auto_approve,
         }
 

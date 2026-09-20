@@ -49,3 +49,12 @@ def test_concurrente_thread_safe():
     for t in threads:
         t.join()
     assert app._busy is False
+
+
+def test_is_approval_text():
+    from display.fullscreen_tui import _is_approval_text
+
+    for good in ("s", "S", "sí", "SI", "n", "no", "y", "yes", "  s  "):
+        assert _is_approval_text(good) is True, good
+    for bad in ("hola", "continua", "dale", "/new", "", "1 3"):
+        assert _is_approval_text(bad) is False, bad

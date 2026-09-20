@@ -607,6 +607,33 @@ class TestEvidenceSink:
         assert "does not exist" in r
 
 
+class TestConfirmImminent:
+    """El wrapper avisa inminencia ANTES de pedir aprobación (carrera s/n)."""
+
+    def test_imminente_antes_que_confirm(self, tmp_path):
+        from tools.filesystem import write_file
+
+        order: list = []
+        (tool,) = wrap_tools_with_dedupe(
+            [write_file], ToolCallDedupe(),
+            confirm_callback=lambda n, k: order.append("confirm") or True,
+            confirm_imminent_cb=lambda n, k: order.append("imminent"),
+        )
+        r = tool.invoke({"path": str(tmp_path / "nuevo.txt"), "content": "hola"})
+        assert "✅" in r
+        assert order == ["imminent", "confirm"]
+
+    def test_sin_hook_no_falla(self, tmp_path):
+        from tools.filesystem import write_file
+
+        (tool,) = wrap_tools_with_dedupe(
+            [write_file], ToolCallDedupe(),
+            confirm_callback=lambda n, k: True,
+        )
+        r = tool.invoke({"path": str(tmp_path / "nuevo.txt"), "content": "hola"})
+        assert "✅" in r
+
+
 class TestFirstFailure:
     """Trampa del primer fallo: excerpt enfocado para el gate-retry."""
 

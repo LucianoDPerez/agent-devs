@@ -124,6 +124,7 @@ async def build_agent(
     confirm_callback=None,
     evidence_sink: list | None = None,
     failure_sink: dict | None = None,
+    confirm_imminent_cb=None,
 ) -> tuple:
     """Construye un agente LangChain con tools y prompt del rol indicado.
 
@@ -221,6 +222,7 @@ async def build_agent(
             confirm_callback=confirm_callback,
             evidence_sink=evidence_sink,
             failure_sink=failure_sink,
+            confirm_imminent_cb=confirm_imminent_cb,
         )
 
     prompt_template = load_prompt(role)
