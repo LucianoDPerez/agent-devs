@@ -1,0 +1,18 @@
+PASS ./binary.spec.js
+  binary
+    ✓ 0 is decimal 0
+    ✓ 1 is decimal 1
+    ✓ 10 is decimal 2
+    ✓ 11 is decimal 3
+    ✓ 100 is decimal 4
+    ✓ 1001 is decimal 9
+    ✓ 11010 is decimal 26
+    ✓ 10001101000 is decimal 1128
+    ✓ ignores leading zeros
+    ○ skipped invalid inputs are null
+
+Test Suites: 1 passed, 1 total
+Tests:       1 skipped, 9 passed, 10 total
+Snapshots:   0 total
+Time:        0.119 s, estimated 1 s
+Ran all test suites matching /.\//i.

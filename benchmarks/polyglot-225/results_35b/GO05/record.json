@@ -1,0 +1,16 @@
+{
+  "id": "GO05",
+  "lang": "go",
+  "exercise": "bowling",
+  "passed": false,
+  "finished": true,
+  "secs": 550.3,
+  "tools": [
+    "edit_file",
+    "read_file",
+    "run_lint",
+    "run_verify",
+    "search_code"
+  ],
+  "model": "qwen3.6-35b-a3b"
+}

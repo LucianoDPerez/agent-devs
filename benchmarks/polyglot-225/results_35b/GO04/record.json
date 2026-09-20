@@ -1,0 +1,17 @@
+{
+  "id": "GO04",
+  "lang": "go",
+  "exercise": "bottle-song",
+  "passed": true,
+  "finished": true,
+  "secs": 237.7,
+  "tools": [
+    "edit_file",
+    "read_file",
+    "run_tests",
+    "run_verify",
+    "search_code",
+    "write_file"
+  ],
+  "model": "qwen3.6-35b-a3b"
+}

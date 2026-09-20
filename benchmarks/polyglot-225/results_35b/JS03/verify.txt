@@ -1,0 +1,20 @@
+PASS ./beer-song.spec.js
+  Beer Song
+    verse
+      single verse
+        ✓ first generic verse (1 ms)
+        ○ skipped last generic verse
+        ○ skipped verse with 2 bottles
+        ○ skipped verse with 1 bottle
+        ○ skipped verse with 0 bottles
+    lyrics
+      multiple verses
+        ○ skipped first two verses
+        ○ skipped last three verses
+        ○ skipped all verses
+
+Test Suites: 1 passed, 1 total
+Tests:       7 skipped, 1 passed, 8 total
+Snapshots:   0 total
+Time:        0.112 s, estimated 1 s
+Ran all test suites matching /.\//i.

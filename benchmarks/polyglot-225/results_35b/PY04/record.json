@@ -1,0 +1,18 @@
+{
+  "id": "PY04",
+  "lang": "python",
+  "exercise": "bottle-song",
+  "passed": true,
+  "finished": true,
+  "secs": 386.9,
+  "tools": [
+    "edit_file",
+    "read_file",
+    "run_lint",
+    "run_npm_script",
+    "run_tests",
+    "run_verify",
+    "write_file"
+  ],
+  "model": "qwen3.6-35b-a3b"
+}

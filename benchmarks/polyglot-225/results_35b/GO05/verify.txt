@@ -1,0 +1,5 @@
+FAIL	bowling [build failed]
+FAIL
+# bowling [bowling.test]
+./bowling.go:24:25: g.currentFrameAndIndex undefined (type *Game has no field or method currentFrameAndIndex)
+./bowling.go:80:7: g.isGameComplete undefined (type *Game has no field or method isGameComplete)

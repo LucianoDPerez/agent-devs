@@ -1,0 +1,30 @@
+-- The CXX compiler identification is AppleClang 21.0.0.21000334
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Configuring done (0.8s)
+-- Generating done (0.0s)
+-- Build files have been written to: /private/tmp/poly225/CP01/all-your-base/build
+[ 25%] Building CXX object CMakeFiles/all-your-base.dir/all_your_base_test.cpp.o
+[ 50%] Building CXX object CMakeFiles/all-your-base.dir/all_your_base.cpp.o
+[ 75%] Building CXX object CMakeFiles/all-your-base.dir/test/tests-main.cpp.o
+CMake Warning (deprecated) at CMakeLists.txt:5 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+This warning is for project developers.  Use -Wno-author or -Wno-deprecated
+to suppress it.
+
+/private/tmp/poly225/CP01/all-your-base/all_your_base_test.cpp:15:54: error: no member named 'convert' in namespace 'all_your_base'
+   15 |     vector<unsigned int> out_digits = all_your_base::convert(2, in_digits, 10);
+      |                                                      ^~~~~~~
+1 error generated.
+make[2]: *** [CMakeFiles/all-your-base.dir/all_your_base_test.cpp.o] Error 1
+make[2]: *** Waiting for unfinished jobs....
+make[1]: *** [CMakeFiles/all-your-base.dir/all] Error 2
+make: *** [all] Error 2

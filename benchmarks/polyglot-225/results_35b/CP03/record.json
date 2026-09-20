@@ -1,0 +1,18 @@
+{
+  "id": "CP03",
+  "lang": "cpp",
+  "exercise": "bank-account",
+  "passed": true,
+  "finished": true,
+  "secs": 382.4,
+  "tools": [
+    "edit_file",
+    "read_file",
+    "run_build",
+    "run_lint",
+    "run_npm_script",
+    "run_verify",
+    "search_code"
+  ],
+  "model": "qwen3.6-35b-a3b"
+}

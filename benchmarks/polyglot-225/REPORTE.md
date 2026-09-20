@@ -1,4 +1,14 @@
-# REPORTE — Polyglot-225 primeras 25 (baseline Spark 4B)
+# REPORTE — Polyglot-225 primeras 25
+
+## Comparativa mismo harness, distinto modelo (2026-09-20)
+
+| modelo | pass | py | js | go | java | cpp |
+|---|---|---|---|---|---|---|
+| spark2.5-4B (local) | **2/25 (8%)** | 0/5 | 1/5 | 0/5 | 0/5 | 1/5 |
+| qwen3.6-35b-a3b Q3_XXS (otra máquina) | **19/25 (76%)** | 5/5 | 4/5 | 3/5 | 4/5 | 3/5 |
+
+Detalle 35B en `results_35b/` (record.json + verify.txt por tarea + summary.jsonl).
+Baseline Spark en `results/`.
 
 Fecha: 2026-09-20. Harness: post-P1 (`b68e006` + Fase 2 `a0dc2ba`).
 Modelo: `spark2.5-4B` local, temperature 0.2, 1 trial. Criterio: suite del

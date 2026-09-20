@@ -1,0 +1,90 @@
+han group of five plus group of three
+
+    expect(received).toEqual(expected) // deep equality
+
+    Expected: 5120
+    Received: 7280
+
+      40 |     test('two groups of four is cheaper than group of five plus group of three', () => {
+      41 |       const basket = [1, 1, 2, 2, 3, 3, 4, 5];
+    > 42 |       expect(cost(basket)).toEqual(5120);
+         |                            ^
+      43 |     });
+      44 |
+      45 |     test('two groups of four is cheaper than groups of five and three', () => {
+
+      at Object.toEqual (book-store.spec.js:42:28)
+
+  ● Book Store › Creating a basket › two groups of four is cheaper than groups of five and three
+
+    expect(received).toEqual(expected) // deep equality
+
+    Expected: 5120
+    Received: 7280
+
+      45 |     test('two groups of four is cheaper than groups of five and three', () => {
+      46 |       const basket = [1, 1, 2, 3, 4, 4, 5, 5];
+    > 47 |       expect(cost(basket)).toEqual(5120);
+         |                            ^
+      48 |     });
+      49 |
+      50 |     test('group of four plus group of two is cheaper than two groups of three', () => {
+
+      at Object.toEqual (book-store.spec.js:47:28)
+
+  ● Book Store › Creating a basket › four groups of four are cheaper than two groups each of five and three
+
+    expect(received).toEqual(expected) // deep equality
+
+    Expected: 10240
+    Received: 9840
+
+      75 |     test('four groups of four are cheaper than two groups each of five and three', () => {
+      76 |       const basket = [1, 1, 2, 2, 3, 3, 4, 5, 1, 1, 2, 2, 3, 3, 4, 5];
+    > 77 |       expect(cost(basket)).toEqual(10240);
+         |                            ^
+      78 |     });
+      79 |
+      80 |     test('two groups of four and a group of five', () => {
+
+      at Object.toEqual (book-store.spec.js:77:28)
+
+  ● Book Store › Creating a basket › two groups of four and a group of five
+
+    expect(received).toEqual(expected) // deep equality
+
+    Expected: 8120
+    Received: 9840
+
+      80 |     test('two groups of four and a group of five', () => {
+      81 |       const basket = [1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 5, 5];
+    > 82 |       expect(cost(basket)).toEqual(8120);
+         |                            ^
+      83 |     });
+      84 |
+      85 |     test('shuffled book order', () => {
+
+      at Object.toEqual (book-store.spec.js:82:28)
+
+  ● Book Store › Creating a basket › shuffled book order
+
+    expect(received).toEqual(expected) // deep equality
+
+    Expected: 8120
+    Received: 9840
+
+      85 |     test('shuffled book order', () => {
+      86 |       const basket = [1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3];
+    > 87 |       expect(cost(basket)).toEqual(8120);
+         |                            ^
+      88 |     });
+      89 |   });
+      90 | });
+
+      at Object.toEqual (book-store.spec.js:87:28)
+
+Test Suites: 1 failed, 1 total
+Tests:       5 failed, 12 passed, 17 total
+Snapshots:   0 total
+Time:        0.13 s, estimated 1 s
+Ran all test suites matching /.\//i.

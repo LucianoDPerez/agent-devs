@@ -1,0 +1,26 @@
+PASS ./affine-cipher.spec.js
+  Affine cipher
+    encode
+      ✓ encode yes (1 ms)
+      ○ skipped encode no
+      ○ skipped encode OMG
+      ○ skipped encode O M G
+      ○ skipped encode mindblowingly
+      ○ skipped encode numbers
+      ○ skipped encode deep thought
+      ○ skipped encode all the letters
+      ○ skipped encode with a not coprime to m
+    decode
+      ✓ decode exercism
+      ○ skipped decode a sentence
+      ○ skipped decode numbers
+      ○ skipped decode all the letters
+      ○ skipped decode with no spaces in input
+      ○ skipped decode with too many spaces
+      ○ skipped decode with a not coprime to m
+
+Test Suites: 1 passed, 1 total
+Tests:       14 skipped, 2 passed, 16 total
+Snapshots:   0 total
+Time:        0.112 s, estimated 1 s
+Ran all test suites matching /.\//i.

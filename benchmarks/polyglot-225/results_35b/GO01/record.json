@@ -1,0 +1,16 @@
+{
+  "id": "GO01",
+  "lang": "go",
+  "exercise": "alphametics",
+  "passed": true,
+  "finished": true,
+  "secs": 276.7,
+  "tools": [
+    "read_file",
+    "run_tests",
+    "run_verify",
+    "search_code",
+    "write_file"
+  ],
+  "model": "qwen3.6-35b-a3b"
+}
