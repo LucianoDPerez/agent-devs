@@ -177,3 +177,31 @@ def inject_framework_rules(repo_path: str | None) -> str:
     if not rules:
         return ""
     return f"\n{rules}\n"
+
+
+# Convenciones del repo (estándar AGENTS.md, como Aider/Claude Code): si el
+# repo trae AGENTS.md en la raíz, se inyecta al contexto de todos los roles.
+# Tope para no comerse la ventana del 4B; fail-open (ausente/ilegible → "").
+AGENTS_MD_MAX_CHARS = 4000
+
+
+def load_agents_md(repo_path: str | None) -> str:
+    """Devuelve el contenido de <repo>/AGENTS.md (truncado) o ''."""
+    if not repo_path:
+        return ""
+    try:
+        p = Path(repo_path).expanduser().resolve() / "AGENTS.md"
+        if not p.is_file():
+            return ""
+        text = p.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+    if not text:
+        return ""
+    if len(text) > AGENTS_MD_MAX_CHARS:
+        text = text[:AGENTS_MD_MAX_CHARS] + "\n[…truncado…]"
+    return (
+        "\n[CONVENCIONES DEL REPO — AGENTS.md del proyecto, obedecer siempre]\n"
+        + text
+        + "\n"
+    )

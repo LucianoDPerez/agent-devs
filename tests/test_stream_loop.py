@@ -53,6 +53,13 @@ def _text_chunk(text):
     return AIMessageChunk(content=text)
 
 
+def _reason_chunk(text):
+    return AIMessageChunk(
+        content="",
+        additional_kwargs={"is_reasoning": True, "reasoning_content": text},
+    )
+
+
 def _run(agent, **kwargs):
     return asyncio.run(
         stream_agent_turn(agent, [], {"configurable": {"thread_id": "t"}}, **kwargs)
@@ -155,3 +162,42 @@ def test_text_after_tools_returns_text_with_require_text():
         require_text=True,
     )
     assert out == "campos: id, nombre"
+
+
+# ── max_reasoning_chars (presupuesto proactivo de thinking) ──────────────────
+
+
+def test_reasoning_sobre_presupuesto_corta_y_reintenta():
+    """Bloque de reasoning > tope sin output → corte + ReasoningOnlyResponse
+    (el retry posterior corre con thinking desactivado)."""
+    with pytest.raises(ReasoningOnlyResponse):
+        _run(
+            _FakeAgent([_reason_chunk("x" * 5000) for _ in range(3)]),
+            idle_timeout=5,
+            max_reasoning_chars=12000,
+        )
+
+
+def test_reasoning_bajo_presupuesto_no_corta():
+    """Reasoning corto + tool call: sin corte, sin raise."""
+    out = _run(
+        _FakeAgent([_reason_chunk("pienso"), _tool_chunk()]),
+        idle_timeout=5,
+        max_reasoning_chars=12000,
+    )
+    assert out == ""
+
+
+def test_reasoning_presupuesto_fresco_por_bloque():
+    """El presupuesto es por bloque: output intermedio lo resetea."""
+    out = _run(
+        _FakeAgent([
+            _reason_chunk("y" * 10000),
+            _tool_chunk(),
+            _reason_chunk("z" * 10000),
+            _tool_chunk(),
+        ]),
+        idle_timeout=5,
+        max_reasoning_chars=12000,
+    )
+    assert out == ""

@@ -100,6 +100,7 @@ def _text_loop_detected(text: str) -> bool:
 
 async def stream_agent_turn(agent, messages, config, idle_timeout: float | None = 120.0,
                             max_reasoning_seconds: float | None = None,
+                            max_reasoning_chars: int | None = None,
                             max_tool_calls: int | None = None,
                             require_write: bool = False,
                             max_content_seconds: float | None = None,
@@ -111,6 +112,13 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
 
     ``max_reasoning_seconds``: si el modelo lleva razonando más tiempo que este
     límite sin producir content/tool_calls, corta el stream.
+
+    ``max_reasoning_chars``: presupuesto de razonamiento POR BLOQUE (se resetea
+    al emitir output, igual que el de segundos). Si el bloque supera el tope
+    sin producir content/tool_calls, corta. El corte por segundos no alcanza
+    cuando el server emite thinking rápido y largo (muchos tokens en poco
+    tiempo); el corte por chars sí. El retry posterior corre con thinking
+    desactivado (force_tool_calls), así que cortar antes es barato.
 
     ``max_tool_calls``: límite duro de tool calls (contados por nombre) en toda
     la conversación del turno. Si se supera, corta el stream.
@@ -139,6 +147,7 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
     reasoning_text: list[str] = []
     produced_output = False
     reasoning_since: float | None = None
+    reasoning_chars = 0
     total_tool_calls = 0
     tool_call_limit_hit = False
     wrote_something = False
@@ -193,6 +202,7 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                     _md_end()
                     md_open = False
                 reasoning_text.append(chunk.additional_kwargs.get("reasoning_content") or "")
+                reasoning_chars += len(chunk.additional_kwargs.get("reasoning_content") or "")
                 # Timeout POR BLOQUE de razonamiento: el timer arranca cuando
                 # empieza el bloque y se resetea al emitir output (content o
                 # tool call). Si un MISMO bloque razona > límite sin emitir
@@ -215,6 +225,13 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                             f"reintenta con lo ya leído.[/dim]"
                         )
                         break
+                if max_reasoning_chars is not None and reasoning_chars > max_reasoning_chars:
+                    console.print(
+                        f"\n[dim]↻ Razonamiento excedió presupuesto "
+                        f"({reasoning_chars:,} chars). Se corta aquí — el turno se "
+                        f"reintenta con thinking desactivado.[/dim]"
+                    )
+                    break
             else:
                 if not response_started:
                     response_started = True
@@ -289,6 +306,7 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                     # Reset del timer: el próximo bloque de razonamiento
                     # arranca con presupuesto fresco.
                     reasoning_since = None
+                    reasoning_chars = 0
                 if tool_call_limit_hit:
                     break
     except StopAsyncIteration:

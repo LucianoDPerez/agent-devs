@@ -17,7 +17,7 @@ from config import (
 )
 from core.roles import Role, load_prompt, tools_for_role
 from display.console import console
-from orchestration.framework_rules import inject_framework_rules
+from orchestration.framework_rules import inject_framework_rules, load_agents_md
 from orchestration.tool_dedupe import (
     ExploreBudget,
     ToolCallDedupe,
@@ -229,6 +229,9 @@ async def build_agent(
             f"{cached_analysis}\n"
         )
     fw_rules = inject_framework_rules(repo_path)
+    agents_md = load_agents_md(repo_path)
+    if agents_md:
+        extra_context += agents_md
     if force_write:
         extra_context += (
             "\n⛔ RETRY: NO tenés read_file ni tools de exploración.\n"

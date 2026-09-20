@@ -200,6 +200,14 @@ MAX_EDIT_REJECTIONS_BEFORE_OVERWRITE = 2
 # permitir runaway (el rescate de _partial_reasoning recicla igual si corta).
 EXECUTE_MAX_REASONING_SECONDS = 150
 
+# Presupuesto de razonamiento POR BLOQUE en chars (corte proactivo en el
+# stream). El corte por segundos no alcanza cuando el server emite thinking
+# rápido y largo; el de chars sí (~4 chars/token: 12000 ≈ 3000 tokens).
+# El retry posterior corre con thinking desactivado, así que cortar es barato.
+# El 4B razona 1500-2500 chars antes de actuar: el tope debe dejar margen.
+EXECUTE_MAX_REASONING_CHARS = 12000
+MAX_REASONING_CHARS = 6000
+
 # Generación continua de CONTENIDO: si el modelo lleva > N segundos generando
 # texto SIN tool calls, no emitió EOS y está en loop (genera su resumen y
 # sigue hasta el límite de max_tokens — turnos de 10+ min colgados). El

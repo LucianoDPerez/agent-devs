@@ -2,13 +2,13 @@
   "id": "P04",
   "passed": true,
   "finished": true,
-  "secs": 294.2,
+  "secs": 868.6,
   "tools": [
     "read_file",
-    "run_npm_script",
     "run_tests",
+    "run_verify",
     "write_file"
   ],
-  "tokens": 292.4368961248547,
+  "tokens": 867.245756624965,
   "model": "spark2.5-4B"
 }

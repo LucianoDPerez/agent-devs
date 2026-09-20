@@ -7,10 +7,11 @@
 - [x] **P0 — Fix cierre prematuro en crear-archivo** — `_commit_during_turn()`:
   el commit cuenta solo si es posterior al inicio del turno (pilot P01: el setup
   'init tests' engañaba a `_nothing_pending_to_write()`). Re-run P01 e2e en curso.
-- [ ] **P1 — Output-parser por modelo** — ampliar `test_llm_tool_recovery.py`:
-  ```tool / `<tool_call>` / JSON pelado / trailing commas / single quotes.
-- [ ] **P1 — Thinking-budget con retry-off** — cap + reintento sin thinking
-  (referencia: `thinking-budget/index.ts`, 4096).
+- [x] **Fase 2 (paquete "SLM torpe")** — output-parser (```tool, tags,
+  JSON pelado, repair), thinking-budget por bloque (EXECUTE 12000/resto 6000
+  chars, retry ya corría sin thinking), AGENTS.md (tope 4000, todos los
+  roles). Verificado: suite 711, e2e AGENTS.md (hints=True), P04 PASS.
+  Ver `FASE2.md`.
 - [ ] **P1 — Dynamic intervention** — inyectar hint ante error repetido
   (path inválido → sugerir `search_code`; re-lectura → exigir edit o verify).
   Equivalente nativo a skill-inject, sin otra LLM.

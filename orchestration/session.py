@@ -37,6 +37,7 @@ from config import (
     EXECUTE_EXPLORE_BUDGET,
     EXECUTE_MAX_CONTENT_SECONDS,
     EXECUTE_MAX_READS_AFTER_EXPLORE,
+    EXECUTE_MAX_REASONING_CHARS,
     EXECUTE_MAX_REASONING_SECONDS,
     EXECUTE_MAX_TOOLS_BEFORE_WRITE,
     EXECUTE_MAX_VERIFY_BEFORE_WRITE,
@@ -49,6 +50,7 @@ from config import (
     JUDGE_MODEL_NAME,
     JUDGE_TEMPERATURE,
     LLM_BASE_URL,
+    MAX_REASONING_CHARS,
     MAX_REASONING_SECONDS,
     MAX_TOOL_CALLS_PER_TURN,
     PATH_FIX_ENABLED,
@@ -3569,6 +3571,14 @@ class Session:
                             EXECUTE_MAX_REASONING_SECONDS
                             if new_role == Role.EXECUTE
                             else MAX_REASONING_SECONDS
+                        )
+                    ),
+                    max_reasoning_chars=(
+                        None if self._readonly_retry
+                        else (
+                            EXECUTE_MAX_REASONING_CHARS
+                            if new_role == Role.EXECUTE
+                            else MAX_REASONING_CHARS
                         )
                     ),
                     max_tool_calls=(

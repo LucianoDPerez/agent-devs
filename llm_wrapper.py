@@ -48,6 +48,81 @@ _PARAM_XML_RE = re.compile(
 _INLINE_JSON_RE = re.compile(
     r"(?:🔧\s*)?(?P<name>[a-zA-Z_][\w]*)\{(?P<args>[^{}]*)\}",
 )
+# ```tool\n{"name": "read_file", "args": {...}}\n``` — el 4B envuelve el call
+# en fence de código en vez de emitir function-calling nativo.
+_FENCED_TOOL_RE = re.compile(
+    r"```(?:tool|json)?\s*(?P<body>\{.*?\})\s*```",
+    re.DOTALL,
+)
+# <tool_call>{"name": ...}</tool_call> / <tool_call_start>[Read(...)]<tool_call_end>
+# (estilo pythonico LFM2) / [TOOL] name({...}).
+_TOOL_TAG_RE = re.compile(
+    r"<tool_call(?:_start)?>\s*(?P<body>.*?)\s*</?tool_call(?:_end)?>",
+    re.DOTALL,
+)
+_PYTHONIC_CALL_RE = re.compile(
+    r"(?P<name>[a-zA-Z_][\w]*)\s*\((?P<args>[^()]*)\)",
+)
+_BRACKET_TOOL_RE = re.compile(
+    r"\[(?:TOOL|tool)\]\s*(?P<name>[a-zA-Z_][\w]*)\s*\((?P<args>.*?)\)\s*$",
+    re.DOTALL | re.MULTILINE,
+)
+
+_KWARG_RE = re.compile(
+    r"(?P<key>[a-zA-Z_][\w]*)\s*=\s*(?P<val>'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"|[^,]+)",
+)
+
+
+def _parse_pythonic_args(raw: str) -> dict[str, Any]:
+    """Parsea kwargs estilo Python: path='/x', recursive=True."""
+    args: dict[str, Any] = {}
+    for m in _KWARG_RE.finditer(raw):
+        args[m.group("key")] = _coerce_value(m.group("val"))
+    return args
+
+
+# JSON pelado {"name": ..., "args": {...}} con un nivel de anidado.
+_BARE_JSON_RE = re.compile(
+    r"(?P<obj>\{(?:[^{}]|\{[^{}]*\})*\"name\"\s*:(?:[^{}]|\{[^{}]*\})*\})",
+)
+
+
+def _repair_json(raw: str) -> dict | None:
+    """Parseo tolerante de args: trailing commas y single quotes.
+
+    Los SLM chicos emiten JSON casi-válido (comas colgando, comillas simples).
+    Solo se usa para ARGUMENTOS de tool calls, nunca para archivos del repo.
+    """
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        fixed = re.sub(r",\s*([}\]])", r"\1", raw).strip()
+        if (
+            len(fixed) >= 2
+            and fixed.startswith("{")
+            and fixed.endswith("}")
+            and "'" in fixed
+        ):
+            fixed = fixed.replace("'", '"')
+        try:
+            parsed = json.loads(fixed)
+        except json.JSONDecodeError:
+            return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _norm_bare_call(name: str, args: Any) -> dict[str, Any] | None:
+    """Normaliza {"name":..., "args"|"parameters"|"arguments":...} a tool call."""
+    if not name or not isinstance(name, str):
+        return None
+    if not isinstance(args, dict):
+        return None
+    return {
+        "id": f"call_bare_{uuid.uuid4().hex[:8]}",
+        "name": name,
+        "args": args,
+        "type": "tool_call",
+    }
 
 
 def _coerce_value(raw: str) -> Any:
@@ -96,11 +171,8 @@ def parse_text_tool_calls(content: str) -> list[dict[str, Any]]:
     for match in _INLINE_JSON_RE.finditer(content):
         name = match.group("name")
         raw_args = "{" + match.group("args") + "}"
-        try:
-            args = json.loads(raw_args)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(args, dict):
+        args = _repair_json(raw_args)
+        if args is None:
             continue
         calls.append({
             "id": f"call_txt_{uuid.uuid4().hex[:8]}",
@@ -108,6 +180,87 @@ def parse_text_tool_calls(content: str) -> list[dict[str, Any]]:
             "args": args,
             "type": "tool_call",
         })
+
+    if calls:
+        return calls
+
+    # Bloques fenceados ```tool {...}``` / ```json {...}```.
+    for match in _FENCED_TOOL_RE.finditer(content):
+        parsed = _repair_json(match.group("body"))
+        if not isinstance(parsed, dict):
+            continue
+        norm = _norm_bare_call(
+            parsed.get("name"),
+            parsed.get("args", parsed.get("parameters", parsed.get("arguments"))),
+        )
+        if norm is not None:
+            calls.append(norm)
+
+    if calls:
+        return calls
+
+    # Tags <tool_call>…</tool_call> (JSON o pythonico Read(path='…')).
+    for match in _TOOL_TAG_RE.finditer(content):
+        body = match.group("body").strip()
+        parsed = _repair_json(body)
+        if isinstance(parsed, dict):
+            norm = _norm_bare_call(
+                parsed.get("name"),
+                parsed.get("args", parsed.get("parameters", parsed.get("arguments"))),
+            )
+            if norm is not None:
+                calls.append(norm)
+                continue
+        builtin = _BRACKET_TOOL_RE.search(body) or _BRACKET_TOOL_RE.search(content)
+        if builtin is not None:
+            args = _repair_json(builtin.group("args"))
+            norm = _norm_bare_call(builtin.group("name"), args if args else {})
+            if norm is not None:
+                calls.append(norm)
+                continue
+        # Pythonico dentro del tag: Read(path='/x', recursive=True).
+        py = _PYTHONIC_CALL_RE.search(body)
+        if py is not None:
+            norm = _norm_bare_call(py.group("name"), _parse_pythonic_args(py.group("args")))
+            if norm is not None:
+                calls.append(norm)
+
+    if calls:
+        return calls
+
+    # JSON pelado {"name": "...", "args": {...}} en el texto (un nivel de
+    # anidado para el objeto de args).
+    for match in _BARE_JSON_RE.finditer(content):
+        parsed = _repair_json(match.group("obj"))
+        if not isinstance(parsed, dict):
+            continue
+        norm = _norm_bare_call(
+            parsed.get("name"),
+            parsed.get("args", parsed.get("parameters", parsed.get("arguments"))),
+        )
+        if norm is not None:
+            calls.append(norm)
+
+    if calls:
+        return calls
+
+    # [TOOL] name(...) y pythonico Name(k='v') a nivel de texto (sin tags).
+    for match in _BRACKET_TOOL_RE.finditer(content):
+        raw = match.group("args").strip()
+        args = _repair_json(raw if raw.startswith("{") else "{" + raw + "}")
+        if args is None:
+            args = _parse_pythonic_args(raw)
+        norm = _norm_bare_call(match.group("name"), args)
+        if norm is not None and norm["args"]:
+            calls.append(norm)
+
+    if calls:
+        return calls
+
+    for match in _PYTHONIC_CALL_RE.finditer(content):
+        norm = _norm_bare_call(match.group("name"), _parse_pythonic_args(match.group("args")))
+        if norm is not None and norm["args"]:
+            calls.append(norm)
 
     return calls
 
