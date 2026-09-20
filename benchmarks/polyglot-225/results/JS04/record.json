@@ -1,0 +1,14 @@
+{
+  "id": "JS04",
+  "lang": "javascript",
+  "exercise": "binary",
+  "passed": false,
+  "finished": true,
+  "secs": 825.7,
+  "tools": [
+    "edit_file",
+    "read_file",
+    "run_verify"
+  ],
+  "model": "spark2.5-4B"
+}

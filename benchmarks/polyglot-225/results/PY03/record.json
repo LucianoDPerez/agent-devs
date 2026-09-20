@@ -1,0 +1,19 @@
+{
+  "id": "PY03",
+  "lang": "python",
+  "exercise": "book-store",
+  "passed": false,
+  "finished": true,
+  "secs": 849.2,
+  "tools": [
+    "apply_patch",
+    "changed_files",
+    "git_log",
+    "read_file",
+    "run_lint",
+    "run_tests",
+    "run_verify",
+    "write_file"
+  ],
+  "model": "spark2.5-4B"
+}

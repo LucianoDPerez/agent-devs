@@ -1,0 +1,13 @@
+{
+  "id": "JV01",
+  "lang": "java",
+  "exercise": "affine-cipher",
+  "passed": false,
+  "finished": true,
+  "secs": 1487.1,
+  "tools": [
+    "read_file",
+    "run_verify"
+  ],
+  "model": "spark2.5-4B"
+}

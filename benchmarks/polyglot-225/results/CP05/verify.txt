@@ -1,0 +1,48 @@
+(true) {
+      |                                                                                                            ^~~~~~~~~~~~
+/private/tmp/poly225/CP05/circular-buffer/circular_buffer.cpp:13:35: error: unknown type name 'T'
+   13 | void circular_buffer::write(const T &value) {
+      |                                   ^
+/private/tmp/poly225/CP05/circular-buffer/circular_buffer.cpp:14:9: error: use of undeclared identifier 'full_'
+   14 |     if (full_) {
+      |         ^
+/private/tmp/poly225/CP05/circular-buffer/circular_buffer.cpp:18:13: error: use of undeclared identifier 'head_'; did you mean 'end_'?
+   18 |     buffer_[head_] = value;
+      |             ^~~~~
+      |             end_
+/private/tmp/poly225/CP05/circular-buffer/circular_buffer.h:32:17: note: 'end_' declared here
+   32 |     std::size_t end_;
+      |                 ^
+/private/tmp/poly225/CP05/circular-buffer/circular_buffer.cpp:19:5: error: use of undeclared identifier 'head_'
+   19 |     head_ = (head_ + 1) % capacity_;
+      |     ^
+/private/tmp/poly225/CP05/circular-buffer/circular_buffer.cpp:19:14: error: use of undeclared identifier 'head_'
+   19 |     head_ = (head_ + 1) % capacity_;
+      |              ^
+/private/tmp/poly225/CP05/circular-buffer/circular_buffer.cpp:21:9: error: use of undeclared identifier 'empty_'; did you mean 'std::empty'?
+   21 |     if (empty_) {
+      |         ^~~~~~
+      |         std::empty
+/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1/__iterator/empty.h:27:1: note: 'std::empty' declared here
+   27 | empty(const _Cont& __c) noexcept(noexcept(__c.empty())) -> decltype(__c.empty()) {
+      | ^
+/private/tmp/poly225/CP05/circular-buffer/circular_buffer.cpp:21:9: error: reference to overloaded function could not be resolved; did you mean to call it?
+   21 |     if (empty_) {
+      |         ^~~~~~
+/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1/__iterator/empty.h:27:1: note: possible target for call
+   27 | empty(const _Cont& __c) noexcept(noexcept(__c.empty())) -> decltype(__c.empty()) {
+      | ^
+fatal error: too many errors emitted, stopping now [-ferror-limit=]
+20 errors generated.
+make[2]: *** [CMakeFiles/circular-buffer.dir/circular_buffer.cpp.o] Error 1
+make[2]: *** Waiting for unfinished jobs....
+/private/tmp/poly225/CP05/circular-buffer/circular_buffer_test.cpp:14:37: error: expected unqualified-id
+   14 |     circular_buffer::circular_buffer<int> buffer(1);
+      |                                     ^
+/private/tmp/poly225/CP05/circular-buffer/circular_buffer_test.cpp:16:23: error: use of undeclared identifier 'buffer'
+   16 |     REQUIRE_THROWS_AS(buffer.read(), std::domain_error);
+      |                       ^
+10 errors generated.
+make[2]: *** [CMakeFiles/circular-buffer.dir/circular_buffer_test.cpp.o] Error 1
+make[1]: *** [CMakeFiles/circular-buffer.dir/all] Error 2
+make: *** [all] Error 2

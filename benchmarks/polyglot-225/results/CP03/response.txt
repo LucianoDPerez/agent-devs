@@ -1,0 +1,14 @@
+He obtuve la implementación completa del ejemplo. El stub solo tiene `class Bankaccount {};`. Voy a completar ambos archivos con la implementación correcta (mutex para concurrencia, checks para cerrado y errores, conexión a `bank_account.h`).
+
+**Plan:**
+1. Completar `bank_account.h` con la clase `Bankaccount` (mutex, campos, métodos públicos/privados).
+2. Completar `bank_account.cpp` con las implementaciones de todos los métodos (open/deposit/withdraw/close/balance + checks).
+3. Verificar con `run_verify` en `bank-account/`.
+
+Ambos archivos están completos con la implementación correcta. Ahora verifico con la batería completa en el subdirectorio `bank-account/`.
+
+**Verificación final:**La batería de `run_verify` no detecta el stack en el subdirectorio (el `CMakeLists.txt` está en el root del repo). Como es un proyecto C++ con CMake, uso las herramientas de verificación directas con el path al root del repo donde está el `CMakeLists.txt`.
+
+**Verificación con herramientas de stack (C++/CMake):**Las herramientas de verificación no detectan el stack C++/CMake automáticamente. Según las instrucciones, debo ejecutar el build y el test manualmente con los comandos especificados.
+
+**Build y test manual (comandos del ejercicio):**

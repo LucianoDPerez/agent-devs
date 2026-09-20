@@ -1,0 +1,59 @@
+und, no more bottles of beer on the wall.",
+        ]
+>       self.assertEqual(recite(start=1), expected)
+E       AssertionError: Lists differ: ['1 b[60 chars] and pass it around, no more bottles of beer on the wall.', ''] != ['1 b[60 chars] and pass it around, no more bottles of beer on the wall.']
+E       
+E       First list contains 1 additional elements.
+E       First extra element 2:
+E       ''
+E       
+E         ['1 bottle of beer on the wall, 1 bottle of beer.',
+E       -  'Take it down and pass it around, no more bottles of beer on the wall.',
+E       ?                                                                         ^
+E       
+E       +  'Take it down and pass it around, no more bottles of beer on the wall.']
+E       ?                                                                         ^
+E       
+E       -  '']
+
+beer_song_test.py:39: AssertionError
+____________________ BeerSongTest.test_verse_with_2_bottles ____________________
+
+self = <beer_song_test.BeerSongTest testMethod=test_verse_with_2_bottles>
+
+    def test_verse_with_2_bottles(self):
+        expected = [
+            "2 bottles of beer on the wall, 2 bottles of beer.",
+            "Take one down and pass it around, 1 bottle of beer on the wall.",
+        ]
+>       self.assertEqual(recite(start=2), expected)
+E       AssertionError: Lists differ: ['2 b[57 chars]e down and pass it around, 1 bottles of beer on the wall.', ''] != ['2 b[57 chars]e down and pass it around, 1 bottle of beer on the wall.']
+E       
+E       First differing element 1:
+E       'Take one down and pass it around, 1 bottles of beer on the wall.'
+E       'Take one down and pass it around, 1 bottle of beer on the wall.'
+E       
+E       First list contains 1 additional elements.
+E       First extra element 2:
+E       ''
+E       
+E         ['2 bottles of beer on the wall, 2 bottles of beer.',
+E       -  'Take one down and pass it around, 1 bottles of beer on the wall.',
+E       ?                                             -                      ^
+E       
+E       +  'Take one down and pass it around, 1 bottle of beer on the wall.']
+E       ?                                                                   ^
+E       
+E       -  '']
+
+beer_song_test.py:32: AssertionError
+=========================== short test summary info ============================
+FAILED beer_song_test.py::BeerSongTest::test_all_verses - AssertionError: Lis...
+FAILED beer_song_test.py::BeerSongTest::test_first_generic_verse - AssertionE...
+FAILED beer_song_test.py::BeerSongTest::test_first_two_verses - AssertionErro...
+FAILED beer_song_test.py::BeerSongTest::test_last_generic_verse - AssertionEr...
+FAILED beer_song_test.py::BeerSongTest::test_last_three_verses - AssertionErr...
+FAILED beer_song_test.py::BeerSongTest::test_verse_with_0_bottles - Assertion...
+FAILED beer_song_test.py::BeerSongTest::test_verse_with_1_bottle - AssertionE...
+FAILED beer_song_test.py::BeerSongTest::test_verse_with_2_bottles - Assertion...
+8 failed in 0.05s

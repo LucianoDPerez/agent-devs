@@ -1,0 +1,37 @@
+n();
+      |     ~~~~~~~ ^
+/private/tmp/poly225/CP03/bank-account/bank_account_test.cpp:14:21: error: no member named 'balance' in 'Bankaccount::Bankaccount'
+   14 |     REQUIRE(account.balance() == 0);
+      |             ~~~~~~~ ^
+/private/tmp/poly225/CP03/bank-account/test/catch.hpp:17637:90: note: expanded from macro 'REQUIRE'
+ 17637 | #define REQUIRE( ... ) INTERNAL_CATCH_TEST( "REQUIRE", Catch::ResultDisposition::Normal, __VA_ARGS__  )
+       |                                                                                          ^~~~~~~~~~~
+/private/tmp/poly225/CP03/bank-account/test/catch.hpp:2703:40: note: expanded from macro 'INTERNAL_CATCH_TEST'
+ 2703 |         CATCH_INTERNAL_IGNORE_BUT_WARN(__VA_ARGS__); \
+      |                                        ^~~~~~~~~~~
+/private/tmp/poly225/CP03/bank-account/test/catch.hpp:165:76: note: expanded from macro 'CATCH_INTERNAL_IGNORE_BUT_WARN'
+  165 | #    define CATCH_INTERNAL_IGNORE_BUT_WARN(...) (void)__builtin_constant_p(__VA_ARGS__) /* NOLINT(cppcoreguidelines-pro-type-vararg, hicpp-vararg) */
+      |                                                                            ^~~~~~~~~~~
+/private/tmp/poly225/CP03/bank-account/bank_account_test.cpp:14:21: error: no member named 'balance' in 'Bankaccount::Bankaccount'
+   14 |     REQUIRE(account.balance() == 0);
+      |             ~~~~~~~ ^
+/private/tmp/poly225/CP03/bank-account/test/catch.hpp:17637:90: note: expanded from macro 'REQUIRE'
+ 17637 | #define REQUIRE( ... ) INTERNAL_CATCH_TEST( "REQUIRE", Catch::ResultDisposition::Normal, __VA_ARGS__  )
+       |                                                                                          ^~~~~~~~~~~
+/private/tmp/poly225/CP03/bank-account/test/catch.hpp:2708:70: note: expanded from macro 'INTERNAL_CATCH_TEST'
+ 2708 |             catchAssertionHandler.handleExpr( Catch::Decomposer() <= __VA_ARGS__ ); \
+      |                                                                      ^~~~~~~~~~~
+/private/tmp/poly225/CP03/bank-account/bank_account_test.cpp:14:21: error: no member named 'balance' in 'Bankaccount::Bankaccount'
+   14 |     REQUIRE(account.balance() == 0);
+      |             ~~~~~~~ ^
+/private/tmp/poly225/CP03/bank-account/test/catch.hpp:17637:90: note: expanded from macro 'REQUIRE'
+ 17637 | #define REQUIRE( ... ) INTERNAL_CATCH_TEST( "REQUIRE", Catch::ResultDisposition::Normal, __VA_ARGS__  )
+       |                                                                                          ^~~~~~~~~~~
+/private/tmp/poly225/CP03/bank-account/test/catch.hpp:2712:56: note: expanded from macro 'INTERNAL_CATCH_TEST'
+ 2712 |     } while( (void)0, (false) && static_cast<bool>( !!(__VA_ARGS__) ) )
+      |                                                        ^~~~~~~~~~~
+4 errors generated.
+make[2]: *** [CMakeFiles/bank-account.dir/bank_account_test.cpp.o] Error 1
+make[2]: *** Waiting for unfinished jobs....
+make[1]: *** [CMakeFiles/bank-account.dir/all] Error 2
+make: *** [all] Error 2

@@ -1,0 +1,65 @@
+> Task :compileJava
+> Task :processResources NO-SOURCE
+> Task :classes
+> Task :compileTestJava
+> Task :processTestResources NO-SOURCE
+> Task :testClasses
+
+> Task :test FAILED
+
+BankAccountTest > multipleDeposits() SKIPPED
+
+BankAccountTest > canHandleConcurrentTransactions() SKIPPED
+
+BankAccountTest > cannotCheckBalanceOfClosedAccount() SKIPPED
+
+BankAccountTest > cannotDepositNegativeAmount() SKIPPED
+
+BankAccountTest > cannotDepositIntoUnopenedAccount() SKIPPED
+
+BankAccountTest > withdrawTwice() SKIPPED
+
+BankAccountTest > reopenedAccountDoesNotRetainBalance() SKIPPED
+
+BankAccountTest > cannotWithdrawNegativeAmount() SKIPPED
+
+BankAccountTest > singleDeposit() SKIPPED
+
+BankAccountTest > cannotWithdrawMoreThanWasDeposited() SKIPPED
+
+BankAccountTest > cannotWithdrawFromClosedAccount() SKIPPED
+
+BankAccountTest > cannotCloseAnAccountThatWasNotOpened() SKIPPED
+
+BankAccountTest > newlyOpenedAccountHasEmptyBalance() FAILED
+    java.lang.UnsupportedOperationException: Delete this statement and write your own implementation.
+        at BankAccount.open(BankAccount.java:4)
+        at BankAccountTest.newlyOpenedAccountHasEmptyBalance(BankAccountTest.java:19)
+
+BankAccountTest > canDoMultipleOperationsSequentially() SKIPPED
+
+BankAccountTest > withdrawOnce() SKIPPED
+
+BankAccountTest > cannotOpenAnAlreadyOpenedAccount() SKIPPED
+
+BankAccountTest > cannotDepositIntoClosedAccount() SKIPPED
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 9.0.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/8.7/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+3 actionable tasks: 3 executed
+
+17 tests completed, 1 failed, 16 skipped
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':test'.
+> There were failing tests. See the report at: file:///private/tmp/poly225/JV04/bank-account/build/reports/tests/test/index.html
+
+* Try:
+> Run with --scan to get full insights.
+
+BUILD FAILED in 1s

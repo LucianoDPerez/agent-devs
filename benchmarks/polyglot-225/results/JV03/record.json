@@ -1,0 +1,12 @@
+{
+  "id": "JV03",
+  "lang": "java",
+  "exercise": "alphametics",
+  "passed": false,
+  "finished": true,
+  "secs": 1096.1,
+  "tools": [
+    "read_file"
+  ],
+  "model": "spark2.5-4B"
+}

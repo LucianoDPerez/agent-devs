@@ -1,0 +1,41 @@
+FAIL ./affine-cipher.spec.js
+  Affine cipher
+    encode
+      ✓ encode yes (2 ms)
+      ○ skipped encode no
+      ○ skipped encode OMG
+      ○ skipped encode O M G
+      ○ skipped encode mindblowingly
+      ○ skipped encode numbers
+      ○ skipped encode deep thought
+      ○ skipped encode all the letters
+      ○ skipped encode with a not coprime to m
+    decode
+      ✕ decode exercism
+      ○ skipped decode a sentence
+      ○ skipped decode numbers
+      ○ skipped decode all the letters
+      ○ skipped decode with no spaces in input
+      ○ skipped decode with too many spaces
+      ○ skipped decode with a not coprime to m
+
+  ● Affine cipher › decode › decode exercism
+
+    a and m must be coprime.
+
+      93 |   const inverse = modularInverse(a, ALPHABET_SIZE);
+      94 |   if (inverse === null) {
+    > 95 |     throw new Error('a and m must be coprime.');
+         |           ^
+      96 |   }
+      97 |   const result = [];
+      98 |   for (const group of phrase.split(' ')) {
+
+      at decode (affine-cipher.js:95:11)
+      at Object.<anonymous> (affine-cipher.spec.js:54:20)
+
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 14 skipped, 1 passed, 16 total
+Snapshots:   0 total
+Time:        0.487 s
+Ran all test suites matching /.\//i.

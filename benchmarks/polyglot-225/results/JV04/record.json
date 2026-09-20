@@ -1,0 +1,14 @@
+{
+  "id": "JV04",
+  "lang": "java",
+  "exercise": "bank-account",
+  "passed": false,
+  "finished": true,
+  "secs": 827.0,
+  "tools": [
+    "list_prs",
+    "read_file",
+    "search_code"
+  ],
+  "model": "spark2.5-4B"
+}

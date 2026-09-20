@@ -1,0 +1,17 @@
+{
+  "id": "CP05",
+  "lang": "cpp",
+  "exercise": "circular-buffer",
+  "passed": false,
+  "finished": true,
+  "secs": 1075.8,
+  "tools": [
+    "apply_patch",
+    "edit_file",
+    "read_file",
+    "run_lint",
+    "run_tests",
+    "run_verify"
+  ],
+  "model": "spark2.5-4B"
+}

@@ -1,0 +1,14 @@
+{
+  "id": "GO05",
+  "lang": "go",
+  "exercise": "bowling",
+  "passed": false,
+  "finished": true,
+  "secs": 980.4,
+  "tools": [
+    "edit_file",
+    "read_file",
+    "search_code"
+  ],
+  "model": "spark2.5-4B"
+}

@@ -1,0 +1,14 @@
+{
+  "id": "PY05",
+  "lang": "python",
+  "exercise": "bowling",
+  "passed": false,
+  "finished": true,
+  "secs": 770.4,
+  "tools": [
+    "edit_file",
+    "list_prs",
+    "read_file"
+  ],
+  "model": "spark2.5-4B"
+}

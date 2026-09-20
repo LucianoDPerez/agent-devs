@@ -1,0 +1,13 @@
+{
+  "id": "JS01",
+  "lang": "javascript",
+  "exercise": "affine-cipher",
+  "passed": false,
+  "finished": true,
+  "secs": 1319.9,
+  "tools": [
+    "apply_patch",
+    "read_file"
+  ],
+  "model": "spark2.5-4B"
+}

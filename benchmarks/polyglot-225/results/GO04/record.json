@@ -1,0 +1,12 @@
+{
+  "id": "GO04",
+  "lang": "go",
+  "exercise": "bottle-song",
+  "passed": false,
+  "finished": true,
+  "secs": 1879.6,
+  "tools": [
+    "read_file"
+  ],
+  "model": "spark2.5-4B"
+}

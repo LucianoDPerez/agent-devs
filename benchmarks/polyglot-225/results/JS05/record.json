@@ -1,0 +1,14 @@
+{
+  "id": "JS05",
+  "lang": "javascript",
+  "exercise": "book-store",
+  "passed": true,
+  "finished": true,
+  "secs": 806.4,
+  "tools": [
+    "edit_file",
+    "read_file",
+    "run_verify"
+  ],
+  "model": "spark2.5-4B"
+}

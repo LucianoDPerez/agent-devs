@@ -1,0 +1,18 @@
+{
+  "id": "CP03",
+  "lang": "cpp",
+  "exercise": "bank-account",
+  "passed": false,
+  "finished": true,
+  "secs": 644.2,
+  "tools": [
+    "read_file",
+    "run_build",
+    "run_npm_script",
+    "run_tests",
+    "run_verify",
+    "search_code",
+    "write_file"
+  ],
+  "model": "spark2.5-4B"
+}

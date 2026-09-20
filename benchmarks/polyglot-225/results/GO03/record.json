@@ -1,0 +1,15 @@
+{
+  "id": "GO03",
+  "lang": "go",
+  "exercise": "book-store",
+  "passed": false,
+  "finished": true,
+  "secs": 2703.7,
+  "tools": [
+    "read_file",
+    "run_tests",
+    "run_verify",
+    "write_file"
+  ],
+  "model": "spark2.5-4B"
+}

@@ -1,0 +1,4 @@
+✅ Tarea realizada: 1 archivo(s) modificado(s) en este turno
+   · bowling/bowling.go
+   Verificación: no se corrió (podés pedirla con 'revisá los cambios')
+   Evidencia: ⚠️ la respuesta no cita archivo:línea ni verificación exitosa — VERIFICAR CON EVIDENCIA ANTES DE CONFIRMAR (revisá el diff antes de commitear)

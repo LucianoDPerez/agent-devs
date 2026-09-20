@@ -1,0 +1,6 @@
+FAIL	bookstore [build failed]
+FAIL
+# bookstore [bookstore.test]
+./book_store.go:48:11: undefined: recursiveMax
+./book_store.go:52:20: undefined: recursiveMax
+./book_store.go:95:22: undefined: recursiveMax

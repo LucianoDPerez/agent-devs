@@ -1,0 +1,64 @@
+e wall."
+E       
+E       Diff is 2240 characters long. Set self.maxDiff to None to see it.
+
+bottle_song_test.py:80: AssertionError
+___________________ BottleSongTest.test_verse_with_1_bottle ____________________
+
+self = <bottle_song_test.BottleSongTest testMethod=test_verse_with_1_bottle>
+
+    def test_verse_with_1_bottle(self):
+        expected = [
+            "One green bottle hanging on the wall,",
+            "One green bottle hanging on the wall,",
+            "And if one green bottle should accidentally fall,",
+            "There'll be no green bottles hanging on the wall.",
+        ]
+>       self.assertEqual(recite(start=1), expected)
+E       AssertionError: Lists differ: ["1 green bottles hanging on the wall,\n1 [132 chars]ll."] != ['One green bottle hanging on the wall,', [141 chars]ll."]
+E       
+E       First differing element 0:
+E       "1 green bottles hanging on the wall,\n1 [131 chars]all."
+E       'One green bottle hanging on the wall,'
+E       
+E       Second list contains 3 additional elements.
+E       First extra element 1:
+E       'One green bottle hanging on the wall,'
+E       
+E       Diff is 731 characters long. Set self.maxDiff to None to see it.
+
+bottle_song_test.py:47: AssertionError
+___________________ BottleSongTest.test_verse_with_2_bottles ___________________
+
+self = <bottle_song_test.BottleSongTest testMethod=test_verse_with_2_bottles>
+
+    def test_verse_with_2_bottles(self):
+        expected = [
+            "Two green bottles hanging on the wall,",
+            "Two green bottles hanging on the wall,",
+            "And if one green bottle should accidentally fall,",
+            "There'll be one green bottle hanging on the wall.",
+        ]
+>       self.assertEqual(recite(start=2), expected)
+E       AssertionError: Lists differ: ["2 green bottles hanging on the wall,\n2 [132 chars]ll."] != ['Two green bottles hanging on the wall,',[143 chars]ll."]
+E       
+E       First differing element 0:
+E       "2 green bottles hanging on the wall,\n2 [131 chars]all."
+E       'Two green bottles hanging on the wall,'
+E       
+E       Second list contains 3 additional elements.
+E       First extra element 1:
+E       'Two green bottles hanging on the wall,'
+E       
+E       Diff is 750 characters long. Set self.maxDiff to None to see it.
+
+bottle_song_test.py:38: AssertionError
+=========================== short test summary info ============================
+FAILED bottle_song_test.py::BottleSongTest::test_all_verses - AssertionError:...
+FAILED bottle_song_test.py::BottleSongTest::test_first_generic_verse - Assert...
+FAILED bottle_song_test.py::BottleSongTest::test_first_two_verses - Assertion...
+FAILED bottle_song_test.py::BottleSongTest::test_last_generic_verse - Asserti...
+FAILED bottle_song_test.py::BottleSongTest::test_last_three_verses - Assertio...
+FAILED bottle_song_test.py::BottleSongTest::test_verse_with_1_bottle - Assert...
+FAILED bottle_song_test.py::BottleSongTest::test_verse_with_2_bottles - Asser...
+7 failed in 0.10s

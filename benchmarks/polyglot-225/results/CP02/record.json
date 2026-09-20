@@ -1,0 +1,17 @@
+{
+  "id": "CP02",
+  "lang": "cpp",
+  "exercise": "allergies",
+  "passed": true,
+  "finished": true,
+  "secs": 964.1,
+  "tools": [
+    "edit_file",
+    "read_file",
+    "run_build",
+    "run_npm_script",
+    "run_verify",
+    "search_code"
+  ],
+  "model": "spark2.5-4B"
+}

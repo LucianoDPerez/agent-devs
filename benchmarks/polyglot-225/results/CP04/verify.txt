@@ -1,0 +1,39 @@
+^
+/private/tmp/poly225/CP04/binary-search-tree/binary_search_tree_test.cpp:12:42: note: to match this '<'
+   12 | using tree_ptr = typename std::unique_ptr<binary_search_tree::binary_tree<T>>;
+      |                                          ^
+/private/tmp/poly225/CP04/binary-search-tree/binary_search_tree_test.cpp:12:74: error: expected ';' after alias declaration
+   12 | using tree_ptr = typename std::unique_ptr<binary_search_tree::binary_tree<T>>;
+      |                                                                          ^
+      |                                                                          ;
+/private/tmp/poly225/CP04/binary-search-tree/binary_search_tree_test.cpp:15:29: error: no template named 'tree_ptr'
+   15 | static void test_leaf(const tree_ptr<T> &tree, 
+      |                             ^
+/private/tmp/poly225/CP04/binary-search-tree/binary_search_tree_test.cpp:24:8: error: no template named 'tree_ptr'
+   24 | static tree_ptr<T> make_tree(const std::vector<T> &data)
+      |        ^
+/private/tmp/poly225/CP04/binary-search-tree/binary_search_tree_test.cpp:27:16: error: use of function template name with no prior declaration in function call with explicit template arguments is a C++20 extension [-Werror,-Wc++20-extensions]
+   27 |         return tree_ptr<T>(nullptr);
+      |                ^
+/private/tmp/poly225/CP04/binary-search-tree/binary_search_tree_test.cpp:30:33: error: no matching constructor for initialization of 'binary_search_tree::binary_tree'
+   30 |     auto tree = tree_ptr<T>(new binary_search_tree::binary_tree<T>(*data_iter));
+      |                                 ^
+/private/tmp/poly225/CP04/binary-search-tree/binary_search_tree.h:11:5: note: candidate constructor not viable: requires 1 argument, but 0 were provided
+   11 |     binary_tree(const binary_tree&) = default;
+      |     ^           ~~~~~~~~~~~~~~~~~~
+/private/tmp/poly225/CP04/binary-search-tree/binary_search_tree.h:12:5: note: candidate constructor not viable: requires 1 argument, but 0 were provided
+   12 |     binary_tree(binary_tree&&) noexcept = default;
+      |     ^           ~~~~~~~~~~~~~
+/private/tmp/poly225/CP04/binary-search-tree/binary_search_tree_test.cpp:30:65: error: 'T' does not refer to a value
+   30 |     auto tree = tree_ptr<T>(new binary_search_tree::binary_tree<T>(*data_iter));
+      |                                                                 ^
+/private/tmp/poly225/CP04/binary-search-tree/binary_search_tree_test.cpp:23:19: note: declared here
+   23 | template<typename T>
+      |                   ^
+/private/tmp/poly225/CP04/binary-search-tree/binary_search_tree_test.cpp:43:19: error: no matching function for call to 'make_tree'
+   43 |     auto tested = make_tree<uint32_t>({4});
+      |                   ^~~~~~~~~~~~~~~~~~~
+17 errors generated.
+make[2]: *** [CMakeFiles/binary-search-tree.dir/binary_search_tree_test.cpp.o] Error 1
+make[1]: *** [CMakeFiles/binary-search-tree.dir/all] Error 2
+make: *** [all] Error 2

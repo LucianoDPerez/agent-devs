@@ -1,0 +1,13 @@
+{
+  "id": "PY02",
+  "lang": "python",
+  "exercise": "beer-song",
+  "passed": false,
+  "finished": true,
+  "secs": 898.9,
+  "tools": [
+    "read_file",
+    "write_file"
+  ],
+  "model": "spark2.5-4B"
+}

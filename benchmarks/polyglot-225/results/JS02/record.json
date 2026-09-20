@@ -1,0 +1,12 @@
+{
+  "id": "JS02",
+  "lang": "javascript",
+  "exercise": "alphametics",
+  "passed": false,
+  "finished": true,
+  "secs": 864.3,
+  "tools": [
+    "read_file"
+  ],
+  "model": "spark2.5-4B"
+}

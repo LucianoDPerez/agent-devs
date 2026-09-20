@@ -1,0 +1,71 @@
+> Task :compileJava
+> Task :processResources NO-SOURCE
+> Task :classes
+> Task :compileTestJava
+> Task :processTestResources NO-SOURCE
+> Task :testClasses
+
+> Task :test FAILED
+
+BaseConverterTest > testSingleDecimalToBinary() SKIPPED
+
+BaseConverterTest > testDecimalToBinary() SKIPPED
+
+BaseConverterTest > testFirstBaseIsOne() SKIPPED
+
+BaseConverterTest > testBinaryToSingleDecimal() SKIPPED
+
+BaseConverterTest > testFirstBaseIsZero() SKIPPED
+
+BaseConverterTest > testLeadingZeros() SKIPPED
+
+BaseConverterTest > testTrinaryToHexadecimal() SKIPPED
+
+BaseConverterTest > testHexadecimalToTrinary() SKIPPED
+
+BaseConverterTest > testSecondBaseIsZero() SKIPPED
+
+BaseConverterTest > testEmptyDigits() SKIPPED
+
+BaseConverterTest > testSingleZero() SKIPPED
+
+BaseConverterTest > testBinaryToMultipleDecimal() SKIPPED
+
+BaseConverterTest > testSecondBaseIsNegative() SKIPPED
+
+BaseConverterTest > test15BitInteger() SKIPPED
+
+BaseConverterTest > testSingleBitOneToDecimal() FAILED
+    java.lang.UnsupportedOperationException: Delete this statement and write your own implementation.
+        at BaseConverter.<init>(BaseConverter.java:4)
+        at BaseConverterTest.testSingleBitOneToDecimal(BaseConverterTest.java:11)
+
+BaseConverterTest > testInvalidPositiveDigit() SKIPPED
+
+BaseConverterTest > testMultipleZeros() SKIPPED
+
+BaseConverterTest > testNegativeDigit() SKIPPED
+
+BaseConverterTest > testFirstBaseIsNegative() SKIPPED
+
+BaseConverterTest > testSecondBaseIsOne() SKIPPED
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 9.0.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/8.7/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+3 actionable tasks: 3 executed
+
+20 tests completed, 1 failed, 19 skipped
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':test'.
+> There were failing tests. See the report at: file:///private/tmp/poly225/JV02/all-your-base/build/reports/tests/test/index.html
+
+* Try:
+> Run with --scan to get full insights.
+
+BUILD FAILED in 1s

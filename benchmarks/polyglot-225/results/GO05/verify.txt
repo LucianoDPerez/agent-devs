@@ -1,0 +1,14 @@
+FAIL	bowling [build failed]
+FAIL
+# bowling [bowling.test]
+./bowling.go:41:7: g.completedFrames undefined (type *Game has no field or method completedFrames)
+./bowling.go:47:31: g.completedFrames undefined (type *Game has no field or method completedFrames)
+./bowling.go:49:5: g.completeTheFrame undefined (type *Game has no field or method completeTheFrame)
+./bowling.go:52:7: g.rollsThisFrame undefined (type *Game has no field or method rollsThisFrame)
+./bowling.go:54:8: g.rawFrameScore undefined (type *Game has no field or method rawFrameScore)
+./bowling.go:56:9: g.completedFrames undefined (type *Game has no field or method completedFrames)
+./bowling.go:56:52: g.isStrike undefined (type *Game has no field or method isStrike)
+./bowling.go:60:8: g.completedFrames undefined (type *Game has no field or method completedFrames)
+./bowling.go:62:6: g.completeTheFrame undefined (type *Game has no field or method completeTheFrame)
+./bowling.go:66:8: g.rawFrameScore undefined (type *Game has no field or method rawFrameScore)
+./bowling.go:66:8: too many errors

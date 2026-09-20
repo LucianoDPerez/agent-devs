@@ -1,0 +1,62 @@
+_________
+
+self = <affine_cipher_test.AffineCipherTest testMethod=test_encode_numbers>
+
+    def test_encode_numbers(self):
+>       self.assertEqual(
+            encode("Testing,1 2 3, testing.", 3, 4), "jqgjc rw123 jqgjc rw"
+        )
+E       AssertionError: 'J Q G J C R W J Q G J C R W' != 'jqgjc rw123 jqgjc rw'
+E       - J Q G J C R W J Q G J C R W
+E       + jqgjc rw123 jqgjc rw
+
+../../../polyglot-benchmark/python/exercises/practice/affine-cipher/affine_cipher_test.py:30: AssertionError
+______________________ AffineCipherTest.test_encode_o_m_g ______________________
+
+self = <affine_cipher_test.AffineCipherTest testMethod=test_encode_o_m_g>
+
+    def test_encode_o_m_g(self):
+>       self.assertEqual(encode("O M G", 25, 47), "hjp")
+E       AssertionError: 'H J P' != 'hjp'
+E       - H J P
+E       + hjp
+
+../../../polyglot-benchmark/python/exercises/practice/affine-cipher/affine_cipher_test.py:24: AssertionError
+_______________________ AffineCipherTest.test_encode_omg _______________________
+
+self = <affine_cipher_test.AffineCipherTest testMethod=test_encode_omg>
+
+    def test_encode_omg(self):
+>       self.assertEqual(encode("OMG", 21, 3), "lvz")
+E       AssertionError: 'L V Z' != 'lvz'
+E       - L V Z
+E       + lvz
+
+../../../polyglot-benchmark/python/exercises/practice/affine-cipher/affine_cipher_test.py:21: AssertionError
+_______________________ AffineCipherTest.test_encode_yes _______________________
+
+self = <affine_cipher_test.AffineCipherTest testMethod=test_encode_yes>
+
+    def test_encode_yes(self):
+>       self.assertEqual(encode("yes", 5, 7), "xbt")
+E       AssertionError: 'X B T' != 'xbt'
+E       - X B T
+E       + xbt
+
+../../../polyglot-benchmark/python/exercises/practice/affine-cipher/affine_cipher_test.py:15: AssertionError
+=========================== short test summary info ============================
+FAILED affine_cipher_test.py::AffineCipherTest::test_decode_a_sentence - Asse...
+FAILED affine_cipher_test.py::AffineCipherTest::test_decode_all_the_letters
+FAILED affine_cipher_test.py::AffineCipherTest::test_decode_exercism - Assert...
+FAILED affine_cipher_test.py::AffineCipherTest::test_decode_numbers - Asserti...
+FAILED affine_cipher_test.py::AffineCipherTest::test_decode_with_no_spaces_in_input
+FAILED affine_cipher_test.py::AffineCipherTest::test_decode_with_too_many_spaces
+FAILED affine_cipher_test.py::AffineCipherTest::test_encode_all_the_letters
+FAILED affine_cipher_test.py::AffineCipherTest::test_encode_deep_thought - As...
+FAILED affine_cipher_test.py::AffineCipherTest::test_encode_mindblowingly - A...
+FAILED affine_cipher_test.py::AffineCipherTest::test_encode_no - AssertionErr...
+FAILED affine_cipher_test.py::AffineCipherTest::test_encode_numbers - Asserti...
+FAILED affine_cipher_test.py::AffineCipherTest::test_encode_o_m_g - Assertion...
+FAILED affine_cipher_test.py::AffineCipherTest::test_encode_omg - AssertionEr...
+FAILED affine_cipher_test.py::AffineCipherTest::test_encode_yes - AssertionEr...
+14 failed, 2 passed in 0.05s

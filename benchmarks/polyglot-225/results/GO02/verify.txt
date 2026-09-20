@@ -1,0 +1,5 @@
+FAIL	beer [build failed]
+FAIL
+# beer [beer.test]
+./beer_song.go:17:14: undefined: fmt
+./beer_song.go:20:14: undefined: fmt

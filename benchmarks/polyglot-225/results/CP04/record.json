@@ -1,0 +1,12 @@
+{
+  "id": "CP04",
+  "lang": "cpp",
+  "exercise": "binary-search-tree",
+  "passed": false,
+  "finished": true,
+  "secs": 1243.0,
+  "tools": [
+    "read_file"
+  ],
+  "model": "spark2.5-4B"
+}

@@ -1,0 +1,10 @@
+{
+  "id": "GO01",
+  "lang": "go",
+  "exercise": "alphametics",
+  "passed": false,
+  "finished": true,
+  "secs": 581.3,
+  "tools": [],
+  "model": "spark2.5-4B"
+}

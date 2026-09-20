@@ -1,0 +1,14 @@
+{
+  "id": "JV02",
+  "lang": "java",
+  "exercise": "all-your-base",
+  "passed": false,
+  "finished": true,
+  "secs": 749.5,
+  "tools": [
+    "list_prs",
+    "read_file",
+    "search_code"
+  ],
+  "model": "spark2.5-4B"
+}

@@ -1,0 +1,26 @@
+PASS ./book-store.spec.js
+  Book Store
+    Creating a basket
+      ✓ only a single book (3 ms)
+      ○ skipped two of the same book
+      ○ skipped empty basket
+      ○ skipped two different books
+      ○ skipped three different books
+      ○ skipped four different books
+      ○ skipped five different books
+      ○ skipped two groups of four is cheaper than group of five plus group of three
+      ○ skipped two groups of four is cheaper than groups of five and three
+      ○ skipped group of four plus group of two is cheaper than two groups of three
+      ○ skipped two each of first 4 books and 1 copy each of rest
+      ○ skipped two copies of each book
+      ○ skipped three copies of first book and 2 each of remaining
+      ○ skipped three each of first 2 books and 2 each of remaining books
+      ○ skipped four groups of four are cheaper than two groups each of five and three
+      ○ skipped two groups of four and a group of five
+      ○ skipped shuffled book order
+
+Test Suites: 1 passed, 1 total
+Tests:       16 skipped, 1 passed, 17 total
+Snapshots:   0 total
+Time:        0.185 s, estimated 1 s
+Ran all test suites matching /.\//i.

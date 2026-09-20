@@ -1,0 +1,12 @@
+{
+  "id": "PY04",
+  "lang": "python",
+  "exercise": "bottle-song",
+  "passed": false,
+  "finished": true,
+  "secs": 952.2,
+  "tools": [
+    "read_file"
+  ],
+  "model": "spark2.5-4B"
+}

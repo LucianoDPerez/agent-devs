@@ -1,0 +1,22 @@
+--- FAIL: TestSolve (0.00s)
+    --- FAIL: TestSolve/puzzle_with_three_letters (0.00s)
+panic: Please implement the Solve function [recovered]
+	panic: Please implement the Solve function
+
+goroutine 4 [running]:
+testing.tRunner.func1.2({0x10079de40, 0x1007c7ab0})
+	/usr/local/go/src/testing/testing.go:1632 +0x1bc
+testing.tRunner.func1()
+	/usr/local/go/src/testing/testing.go:1635 +0x334
+panic({0x10079de40?, 0x1007c7ab0?})
+	/usr/local/go/src/runtime/panic.go:785 +0x124
+alphametics.Solve(...)
+	/private/tmp/poly225/GO01/alphametics/alphametics.go:4
+alphametics.TestSolve.func1(0x1400007ed00?)
+	/private/tmp/poly225/GO01/alphametics/alphametics_test.go:11 +0x30
+testing.tRunner(0x1400007ed00, 0x14000020460)
+	/usr/local/go/src/testing/testing.go:1690 +0xe4
+created by testing.(*T).Run in goroutine 3
+	/usr/local/go/src/testing/testing.go:1743 +0x314
+FAIL	alphametics	0.606s
+FAIL

@@ -1,0 +1,12 @@
+{
+  "id": "PY01",
+  "lang": "python",
+  "exercise": "affine-cipher",
+  "passed": false,
+  "finished": true,
+  "secs": 1314.1,
+  "tools": [
+    "read_file"
+  ],
+  "model": "spark2.5-4B"
+}
