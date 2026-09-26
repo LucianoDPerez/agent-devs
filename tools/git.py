@@ -55,19 +55,47 @@ def _truncate(text: str, limit: int = _MAX_DIFF_BYTES) -> str:
 
 # --- Implementaciones internas (sin StructuredTool) para reuso entre tools ---
 
+def _is_not_git_error(e: Exception) -> bool:
+    """True si la excepción es 'not a git repository' (repo sin git init)."""
+    msg = str(e).lower()
+    return "not a git repository" in msg or "no es un repositorio git" in msg
+
+
+_NO_GIT_HINT = (
+    "Not a git repository (sin .git en este path). "
+    "Podés seguir igual: usá write_file/list_files/read_file para trabajar. "
+    "Si querés versionar, pedile al usuario que corra `git init` — NO lo hagas vos por iniciativa propia."
+)
+
+
 def _current_branch_impl(path: str) -> str:
-    return _run(path, ["git", "branch", "--show-current"]) or "(detached HEAD)"
+    try:
+        return _run(path, ["git", "branch", "--show-current"]) or "(detached HEAD)"
+    except ToolException as e:
+        if _is_not_git_error(e):
+            return f"(sin git) — {_NO_GIT_HINT}"
+        raise
 
 
 def _changed_files_impl(path: str) -> str:
-    out = _run(path, ["git", "status", "--porcelain"])
+    try:
+        out = _run(path, ["git", "status", "--porcelain"])
+    except ToolException as e:
+        if _is_not_git_error(e):
+            return f"Sin git en {path} — {_NO_GIT_HINT}"
+        raise
     if not out:
         return "Working tree clean: no changed files."
     return "Changed files (X|Y porcelain status):\n" + out
 
 
 def _git_status_impl(path: str) -> str:
-    branch = _run(path, ["git", "rev-parse", "--abbrev-ref", "HEAD"]) or None
+    try:
+        branch = _run(path, ["git", "rev-parse", "--abbrev-ref", "HEAD"]) or None
+    except ToolException as e:
+        if _is_not_git_error(e):
+            return f"Sin git en {path} — {_NO_GIT_HINT}"
+        raise
     parts = [f"🌿 Branch: {branch or 'HEAD (detached)'}"]
 
     if branch and branch != "HEAD":
@@ -88,9 +116,17 @@ def _git_status_impl(path: str) -> str:
 
 
 def _git_log_impl(path: str, limit: int = 20) -> str:
-    limit = max(1, min(int(limit), _MAX_LOG_LINES))
+    try:
+        limit = max(1, min(int(limit), _MAX_LOG_LINES))
+    except (TypeError, ValueError):
+        limit = 20
     fmt = "%h %ad %s"
-    return _run(path, ["git", "log", "-n", str(limit), "--date=short", "--pretty=format:" + fmt])
+    try:
+        return _run(path, ["git", "log", "-n", str(limit), "--date=short", "--pretty=format:" + fmt])
+    except ToolException as e:
+        if _is_not_git_error(e):
+            return f"Sin git en {path} — {_NO_GIT_HINT}"
+        raise
 
 
 # --- Tools públicas (wrappers) ---

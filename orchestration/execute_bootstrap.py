@@ -35,6 +35,12 @@ _ABS_FILE_RE = re.compile(
 _REL_FILE_RE = re.compile(
     r"(?:^|[\s`\"'(])((?:[\w.-]+/)+[\w.-]+\.(?:md|txt|json|yml|yaml))",
 )
+# Paths quoteados con espacios: '/Users/lucho/PROYECTOS IA/pruebas/clima/tasks.json'
+# Los dos regex de arriba usan [\w.-] que corta en el espacio. Este va PRIMERO
+# y acepta cualquier char salvo la comilla de cierre (incluye espacios).
+_QUOTED_FILE_RE = re.compile(
+    r"""['"]([^'"]+\.(?:md|txt|json|yml|yaml))['"]""",
+)
 
 # "Tarea 1", "tarea 2"
 _TASK_SINGULAR_RE = re.compile(r"\btarea\s+(\d+)\b", re.IGNORECASE)
@@ -582,6 +588,11 @@ def _collect_cited_paths(user_input: str, repo_path: str | None) -> list[Path]:
             return
         seen.add(key)
         cited.append(p.resolve() if p.exists() else p)
+
+    for match in _QUOTED_FILE_RE.finditer(user_input):
+        _try_add(Path(match.group(1)))
+        if len(cited) >= EXECUTE_PRELOAD_MAX_FILES:
+            return cited
 
     for match in _ABS_FILE_RE.finditer(user_input):
         _try_add(Path(match.group(1)))

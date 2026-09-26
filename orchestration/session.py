@@ -1494,11 +1494,16 @@ class Session:
         rng = extract_task_range(text)
         numbers = list(range(rng[0], rng[1] + 1)) if rng else extract_requested_task_numbers(text)
         # Archivo de tareas: primer path .md/.txt/.json citado (o None).
+        # Soporta quoteados con espacios: '/Users/lucho/PROYECTOS IA/x/tasks.json'.
         import re as _re
 
-        m = _re.search(r"([\w./-]+\.(?:md|txt|json))", text)
+        m = _re.search(r"""['"]([^'"]+\.(?:md|txt|json))['"]""", text)
         if m:
             tasks_file = m.group(1)
+        else:
+            m = _re.search(r"([\w./-]+\.(?:md|txt|json))", text)
+            if m:
+                tasks_file = m.group(1)
         if not numbers:
             console.print(
                 "[yellow]Uso: /tasks-pool T001-T010 [archivo] [--commit][/yellow]\n"
