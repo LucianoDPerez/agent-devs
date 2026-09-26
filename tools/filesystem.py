@@ -639,6 +639,35 @@ def _md_integrity_violation(before: dict, after: dict) -> str:
 
 
 @tool
+def make_dir(path: str) -> str:
+    """
+    Create a directory (including parents). Use for empty scaffold folders
+    like backend/ or frontend/ that write_file cannot create alone
+    (write_file needs a FILE inside; git does not track empty dirs —
+    add a .gitkeep inside if you need it versioned).
+    Idempotent: if the directory already exists, reports success.
+    Usage: make_dir(path="/path/to/repo/backend")
+    """
+    if _is_protected_task_path(path):
+        return (
+            f"⛔ '{path}' es un path de PLANIFICACIÓN (tasks/PRD/plan) PROHIBIDO. "
+            "NO crees carpetas ahí: es tu fuente de verdad de la tarea."
+        )
+    p = Path(path)
+    if p.exists() and p.is_file():
+        return (
+            f"⛔ '{path}' is a FILE, not a directory. "
+            "Do NOT call make_dir on a file path."
+        )
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+    except (OSError, FileExistsError) as e:
+        return f"⛔ Failed to create directory {path}: {e}."
+    _mark_read(str(p))
+    return f"✅ Directory ready: {path}"
+
+
+@tool
 def delete_file(path: str) -> str:
     """
     Delete a file from the filesystem.

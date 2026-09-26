@@ -59,7 +59,7 @@ EXPLORE_TOOL_NAMES = (
     | MCP_EXPLORE_TOOL_NAMES
 )
 WRITE_TOOL_NAMES = frozenset({
-    "write_file", "edit_file", "apply_patch", "delete_file", "stage_files", "create_commit", "push", "create_pr",
+    "write_file", "edit_file", "apply_patch", "delete_file", "make_dir", "stage_files", "create_commit", "push", "create_pr",
 })
 # Tools de lectura (no son "write" pero son acción productiva)
 READISH_TOOL_NAMES = frozenset(
@@ -107,15 +107,25 @@ def _in_scope(target: str, scope: frozenset) -> bool:
     un match parcial cuenta como dentro (mejor dejar pasar un auxiliar que
     frenar un fix legítimo; el runaway lo corta el tope por cantidad).
     """
-    t = str(target).replace("\\", "/")
+    t = str(target).replace("\\", "/").rstrip("/")
     base = t.rsplit("/", 1)[-1]
     sib = re.sub(r"\.(spec|test)(?=\.[^.]+$)", "", base)
     candidates = {base} | ({sib} if sib != base else set())
     for s in scope:
-        sn = str(s).replace("\\", "/").lstrip("./")
+        sn = str(s).replace("\\", "/")
+        # Quitar prefijos ./ y / sin comerse el punto de dotfiles (.env, .gitignore).
+        while sn.startswith("./"):
+            sn = sn[2:]
+        sn = sn.lstrip("/").rstrip("/")
         if not sn:
             continue
         if t == sn or t.endswith("/" + sn):
+            return True
+        # Alcance de carpeta (backend/): cualquier path bajo ella vale.
+        # T01 cita backend/ + docker-compose.yml; make_dir backend y
+        # backend/.gitkeep deben pasar sin gastar el cupo out-of-scope.
+        # Vale para paths absolutos (.../repo/backend/x) y relativos.
+        if ("/" + sn + "/") in t + "/":
             return True
         sb = sn.rsplit("/", 1)[-1]
         if sb and sb in candidates:
@@ -130,7 +140,7 @@ PRODUCTIVE_TOOL_NAMES = READISH_TOOL_NAMES | VERIFY_TOOL_NAMES
 # (EXECUTE_CONFIRM_WRITES): el harness pausa la tool hasta que el usuario
 # aprueba. stage_files/create_commit NO van acá: el commit ya tiene su propio
 # prompt post-turno (EXECUTE_ASK_COMMIT).
-CONFIRM_TOOL_NAMES = frozenset({"write_file", "edit_file", "apply_patch", "delete_file"})
+CONFIRM_TOOL_NAMES = frozenset({"write_file", "edit_file", "apply_patch", "delete_file", "make_dir"})
 
 
 class ToolCallDedupe:
@@ -1089,7 +1099,7 @@ def _wrap_one(
         # STOP terminal (no reintentar), intento 2+ al MISMO path = excepción
         # directa. No pasa por el mensaje genérico "ya se ejecutó" (mentira:
         # nunca se escribió, está bloqueado).
-        if name in ("write_file", "edit_file", "apply_patch", "delete_file"):
+        if name in ("write_file", "edit_file", "apply_patch", "delete_file", "make_dir"):
             _ppath = (kwargs or {}).get("path", "")
             if _ppath:
                 try:
@@ -1141,7 +1151,7 @@ def _wrap_one(
         # schema) pasan en silencio; al superar el tope se levanta excepción
         # (E2E real: T002 de infra/sqs.tf → 5 writes de T003). El cierre
         # determinístico reporta la lista.
-        if name in ("write_file", "edit_file", "apply_patch", "delete_file"):
+        if name in ("write_file", "edit_file", "apply_patch", "delete_file", "make_dir"):
             _tp = (kwargs or {}).get("path", "")
             _scope = getattr(dedupe, "scope_files", None)
             if _tp and _scope and not _in_scope(_tp, _scope):

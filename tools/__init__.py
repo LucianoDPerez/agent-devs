@@ -10,7 +10,7 @@ agente (analyzer, planner, executor, reviewer) use solo las que necesita.
 """
 
 from .env import inspect_env
-from .filesystem import apply_patch, delete_file, edit_file, list_files, read_file, write_file
+from .filesystem import apply_patch, delete_file, edit_file, list_files, make_dir, read_file, write_file
 from .git import (
     changed_files,
     create_branch,
@@ -33,7 +33,7 @@ from .search import search_code
 from .verify import run_build, run_install, run_lint, run_npm_script, run_tests, run_verify
 
 ALL_TOOLS = [
-    list_files, read_file, write_file, edit_file, delete_file, search_code, inspect_routes,
+    list_files, read_file, write_file, edit_file, delete_file, make_dir, search_code, inspect_routes,
     inspect_models,
     run_install, run_lint, run_tests, run_build, run_verify, run_npm_script,
     current_branch, changed_files, git_status, git_log,
@@ -51,7 +51,7 @@ PLANNER_TOOLS = [list_files, read_file, search_code, inspect_routes, inspect_mod
 # atención del modelo 4B — "olvidaba" que tenía edit_file y se escondía en
 # read_file infinitos. 12 tools + trace_component (compuesta, agrega agent_builder).
 EXECUTOR_TOOLS = [
-    read_file, write_file, edit_file, apply_patch, delete_file,
+    read_file, write_file, edit_file, apply_patch, delete_file, make_dir,
     search_code, inspect_routes,
     run_lint, run_tests, run_build, run_verify, run_npm_script,
     # git de LECTURA: 'hacer commit de los modificados' exige VER qué cambió
@@ -68,7 +68,7 @@ REVIEWER_TOOLS = [list_files, read_file, search_code, inspect_routes, inspect_mo
 # exacto de los archivos va inyectado en el mensaje (read_cache → anchor).
 # Sin list_files/search_code (nada que explorar) y sin run_install/create_pr.
 WRITE_ONLY_TOOLS = [
-    write_file, edit_file, apply_patch, delete_file,
+    write_file, edit_file, apply_patch, delete_file, make_dir,
     stage_files, create_commit, push,
     run_lint, run_tests, run_build, run_verify,
 ]
@@ -102,7 +102,7 @@ WRITE_RETRY_TOOLS = [
 # rama). Git de lectura + stage/commit/push: el retry puede COMPLETAR un
 # commit a mitad (tarea de git interrumpida), no solo editar código.
 BUDGET_RETRY_TOOLS = [
-    read_file, edit_file, apply_patch, write_file,
+    read_file, edit_file, apply_patch, write_file, make_dir,
     current_branch, changed_files, git_status, git_log,
     stage_files, create_commit, push,
 ]
@@ -114,7 +114,7 @@ BUDGET_RETRY_TOOLS = [
 # el error ya viene inyectado, no hay que explorar) y SIN git-write (el fix
 # no debe volver a commiteear).
 GATE_RETRY_TOOLS = [
-    read_file, edit_file, apply_patch, write_file, delete_file,
+    read_file, edit_file, apply_patch, write_file, delete_file, make_dir,
     *_READONLY_GIT, *_VERIFY, run_npm_script,
 ]
 

@@ -248,13 +248,47 @@ def filter_json_task_sections(raw: str, task_numbers: list[int]) -> str:
 _SCOPE_FILE_RE = re.compile(
     rf"([\w.\-/]+?\.(?:{_EVIDENCE_EXT_PATTERN}))\b",
 )
+# Dotfiles y archivos sin extensión trackeada (.env.example, .gitignore,
+# Dockerfile, docker-compose.yml ya cubierto): el regex de extensiones los
+# ignora y T01 quedaría con 2 de sus 3 archivos fuera de alcance (falso
+# SCOPE CREEP). Se capturan explícitos.
+_SCOPE_DOTFILE_RE = re.compile(
+    r"(?:^|[\s`\"'(])((?:[\w.\-/]+/)?(?:\.env(?:\.[\w\-]+)?|\.gitignore|Dockerfile(?:\.[\w\-]+)?|docker-compose\.ya?ml))(?=[\s`\"'),.:;\]]|$)",
+)
+# Carpetas citadas con trailing slash: backend/, frontend/, src/domain/.
+# Sin extensión → el regex de archivos las ignora (T01 scaffold quedaba sin
+# alcance para make_dir). Solo tokens que TERMINAN en "/" ante un borde
+# (espacio, coma, fin, comilla): no el prefijo de un archivo ("infra/" en
+# "infra/sqs.tf" NO cuenta — el lookahead lo evita).
+_SCOPE_DIR_RE = re.compile(
+    r"(?:^|[\s`\"'(])((?:[\w.\-]+/)+)(?=[\s`\"'),.:;\]]|$)",
+)
+
+
+def _strip_rel(tok: str) -> str:
+    """Quita prefijos ./ y / sin comerse el punto de dotfiles (.env, .gitignore)."""
+    tok = (tok or "").strip()
+    while tok.startswith("./"):
+        tok = tok[2:]
+    return tok.lstrip("/")
 
 
 def extract_scope_files(text: str) -> set[str]:
     """Paths con extensión de código/infra mencionados en el texto."""
     found: set[str] = set()
     for match in _SCOPE_FILE_RE.finditer(text or ""):
-        tok = match.group(1).strip().lstrip("./")
+        tok = _strip_rel(match.group(1))
+        if tok and len(tok) < 200:
+            found.add(tok)
+    # Carpetas citadas tipo backend/, frontend/ (T01 scaffold): sin extensión,
+    # el regex de arriba las ignora y make_dir quedaría fuera de alcance.
+    for match in _SCOPE_DIR_RE.finditer(text or ""):
+        tok = _strip_rel(match.group(1)).rstrip("/") + "/"
+        if tok and len(tok) < 200 and tok != "/":
+            found.add(tok)
+    # Dotfiles (.env.example, .gitignore, Dockerfile): sin extensión trackeada.
+    for match in _SCOPE_DOTFILE_RE.finditer(text or ""):
+        tok = _strip_rel(match.group(1))
         if tok and len(tok) < 200:
             found.add(tok)
     return found
