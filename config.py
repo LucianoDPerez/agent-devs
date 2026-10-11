@@ -252,6 +252,15 @@ ANALYZE_EXPLORE_BUDGET = 4
 ANALYZE_MAX_READS_AFTER_EXPLORE = 8
 PLAN_EXPLORE_BUDGET = 4
 PLAN_MAX_READS_AFTER_EXPLORE = 8
+# Nube (modelos fuertes, no loopean): presupuesto AMPLIO para ANALYZE/PLAN.
+# Evidencia: Spark-1.3 gastó 8 explores DISTINTOS (0 repeticiones) en un
+# análisis whole-project antes del corte con 4 (turno Medicos "deuda técnica").
+# EXECUTE/REVIEW no se tocan: su maquinaria anti-loop cubre otro riesgo
+# (loops de escritura/verify, no de lectura) y en la nube cada call cuesta.
+CLOUD_ANALYZE_EXPLORE_BUDGET = 10
+CLOUD_ANALYZE_MAX_READS_AFTER_EXPLORE = 12
+CLOUD_PLAN_EXPLORE_BUDGET = 10
+CLOUD_PLAN_MAX_READS_AFTER_EXPLORE = 12
 
 # Compuerta post-escritura (EXECUTE): tras escribir código, corre el build/lint
 # y si falla por un archivo que acabamos de tocar, reintenta inyectando el error.

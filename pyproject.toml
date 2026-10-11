@@ -36,6 +36,7 @@ py-modules = [
     "business_logic",
     "cache",
     "config",
+    "llm_config",
     "llm_wrapper",
     "main",
     "verify_gate",

@@ -57,3 +57,37 @@ def match_profile(model_id: str | None) -> dict:
             if any(re.search(p, low) for p in prof["patterns"]):
                 return dict(prof)
     return dict(DEFAULT_PROFILE)
+
+
+def analyze_budget_for(llm) -> tuple[int, int]:
+    """(max_calls, max_reads) de ANALYZE según el proveedor del LLM.
+
+    Nube = amplio (modelos fuertes, no loopean); local/vacío = ajustado
+    (calibrado contra el 4B). Ver CLOUD_* en config.py.
+    """
+    from config import (
+        ANALYZE_EXPLORE_BUDGET,
+        ANALYZE_MAX_READS_AFTER_EXPLORE,
+        CLOUD_ANALYZE_EXPLORE_BUDGET,
+        CLOUD_ANALYZE_MAX_READS_AFTER_EXPLORE,
+    )
+    from llm_config import is_cloud_url
+
+    if is_cloud_url(getattr(llm, "base_url", "") or ""):
+        return (CLOUD_ANALYZE_EXPLORE_BUDGET, CLOUD_ANALYZE_MAX_READS_AFTER_EXPLORE)
+    return (ANALYZE_EXPLORE_BUDGET, ANALYZE_MAX_READS_AFTER_EXPLORE)
+
+
+def plan_budget_for(llm) -> tuple[int, int]:
+    """(max_calls, max_reads) de PLAN según el proveedor del LLM."""
+    from config import (
+        CLOUD_PLAN_EXPLORE_BUDGET,
+        CLOUD_PLAN_MAX_READS_AFTER_EXPLORE,
+        PLAN_EXPLORE_BUDGET,
+        PLAN_MAX_READS_AFTER_EXPLORE,
+    )
+    from llm_config import is_cloud_url
+
+    if is_cloud_url(getattr(llm, "base_url", "") or ""):
+        return (CLOUD_PLAN_EXPLORE_BUDGET, CLOUD_PLAN_MAX_READS_AFTER_EXPLORE)
+    return (PLAN_EXPLORE_BUDGET, PLAN_MAX_READS_AFTER_EXPLORE)

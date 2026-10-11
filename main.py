@@ -55,14 +55,32 @@ from tools import ALL_TOOLS  # noqa: E402
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
-def _make_llm(max_tokens: int = LLM_MAX_TOKENS, temperature: float = LLM_TEMPERATURE) -> LocalLLM:
+def _make_llm(max_tokens: int = LLM_MAX_TOKENS, temperature: float = LLM_TEMPERATURE,
+             provider: str | None = None, model: str | None = None,
+             reasoning: str | None = None) -> LocalLLM:
+    from llm_config import resolve_llm
+
+    resolved = resolve_llm(provider_override=provider, model_override=model,
+                           reasoning_override=reasoning)
     return LocalLLM(
-        base_url=LLM_BASE_URL,
-        model_name=LLM_MODEL_NAME,
+        base_url=resolved["base_url"],
+        model_name=resolved["model"],
         temperature=temperature,
         max_tokens=max_tokens,
-        api_key="not-needed",
+        api_key=resolved["api_key"] or "not-needed",
+        transport=resolved.get("transport") or "chat",
+        reasoning_effort=resolved.get("reasoning") or None,
     )
+
+
+def _opencode_missing_exit() -> None:
+    """Mensaje amigable cuando falta la API key de OpenCode. Nunca hace traceback."""
+    print("\n❌ Falta la API key de OpenCode — el proveedor activo es 'opencode'", flush=True)
+    print("   Conseguila en https://opencode.ai/zen y guardala de una de estas formas:", flush=True)
+    print("     agent-devs --setup-opencode   # la pide y la guarda en tu config (600)", flush=True)
+    print("     export OPENCODE_API_KEY=oc_sk_...   # o en el .env del repo (gitignored)", flush=True)
+    print("   O volvé al modo local: agent-devs --provider local .\n", flush=True)
+    sys.exit(1)
 
 
 def _cached_analysis_valid(cached: dict) -> bool:
@@ -103,10 +121,16 @@ def _ensure_analysis(llm: LocalLLM, repo_path: str, status: str | None = None) -
                     flush=True,
                 )
                 return load_analysis(repo_path) or cached
-    # Chequeo rápido antes de esperar 420s de timeout si el server está caído
-    alive, _ = _llama_server_alive(timeout=1.5)
-    if not alive:
-        _llama_down_exit()
+    # Chequeo rápido según el LLM que SE VA A USAR (no el de config.py):
+    # local → ping al server; nube → solo exigir key (el turno reporta el resto).
+    from llm_config import is_local_url
+
+    if is_local_url(getattr(llm, "base_url", "") or ""):
+        alive, _ = _llama_server_alive(timeout=1.5)
+        if not alive:
+            _llama_down_exit()
+    elif not (getattr(llm, "api_key", "") or ""):
+        _opencode_missing_exit()
     if status:
         print(status, flush=True)
     try:
@@ -117,8 +141,7 @@ def _ensure_analysis(llm: LocalLLM, repo_path: str, status: str | None = None) -
     except (KeyboardInterrupt, SystemExit):
         raise
     except BaseException as e:
-        if _is_llama_connection_error(e):
-            _llama_down_exit()
+        _llm_down_exit(e)
         raise
     save_analysis(repo_path, snapshot=result["snapshot"], language=result["language"],
                   tech_stack=result["tech_stack"], analysis=result["analysis"],
@@ -419,6 +442,9 @@ def run_fullscreen(session) -> None:
         elif payload[0] == "/pr":
             session.slash_pr(payload[1])
             return
+        elif payload[0] == "/model":
+            console.print(session.slash_model(payload[1]))
+            return
         elif payload[0] == "/help":
             console.print("[bold]Comandos:[/bold]\n" + format_help())
             return
@@ -613,8 +639,170 @@ def _llama_down_exit() -> None:
     print("   Encendelo antes de ejecutar agent-devs, por ejemplo:", flush=True)
     print("     llama-server -hf bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M --port 8080", flush=True)
     print("   Si ya está corriendo en otro puerto/host, revisá config.py → LLM_BASE_URL", flush=True)
+    print("   O usá la nube: agent-devs --setup-opencode  (luego agent-devs --provider opencode .)", flush=True)
     print("   Verificá el estado con: agent-devs --doctor\n", flush=True)
     sys.exit(1)
+
+
+def _opencode_down_exit(exc: BaseException | None = None) -> None:
+    """Mensaje amigable cuando OpenCode falla (red, key inválida, sin saldo)."""
+    from llm_wrapper import is_protocol_error
+
+    msg = str(exc).lower() if exc else ""
+    print("\n❌ No se pudo hablar con OpenCode Zen", flush=True)
+    if exc is not None and is_protocol_error(exc):
+        print("   El modelo no habla el protocolo intentado (chat vs responses).", flush=True)
+        print("   Si es un claude-*, solo sale por API Anthropic (sin soporte acá).", flush=True)
+        print("   Probá: agent-devs --provider opencode --model muse-spark-1.3 .", flush=True)
+    elif "401" in msg or "unauthorized" in msg or "invalid" in msg and "key" in msg:
+        print("   La API key fue rechazada (401). Regenerala en https://opencode.ai/zen y:", flush=True)
+        print("     agent-devs --setup-opencode", flush=True)
+    elif "429" in msg or "rate" in msg or "quota" in msg or "balance" in msg or "credit" in msg:
+        print("   Límite de uso o saldo agotado (429/sin créditos). Revisá tu balance en", flush=True)
+        print("   https://opencode.ai/zen y probá con un modelo 🆓 (agent-devs --list-models).", flush=True)
+    else:
+        print("   Revisá tu conexión y que la key siga válida:", flush=True)
+        print("     agent-devs --doctor   # chequea la key sin mostrarla", flush=True)
+        print("     agent-devs --list-models   # prueba la conexión y lista modelos", flush=True)
+    print(flush=True)
+    sys.exit(1)
+
+
+def _messages_api_exit(model: str) -> None:
+    """El modelo solo habla la API de Anthropic Messages (sin soporte acá)."""
+    print(f"\n❌ '{model}' solo se sirve por la API de Anthropic Messages", flush=True)
+    print("   agent-devs habla chat/completions y responses, no Messages.", flush=True)
+    print("   Alternativas verificadas acá:", flush=True)
+    print("     agent-devs --provider opencode --model deepseek-v4.1-flash .", flush=True)
+    print("     agent-devs --provider opencode --model muse-spark-1.3 .   # Responses + reasoning", flush=True)
+    print("   Ver la tabla completa: agent-devs --list-models\n", flush=True)
+    sys.exit(1)
+
+
+def run_setup_opencode() -> int:
+    """Pide la API key y la guarda en el config de usuario (600). Nunca la imprime."""
+    import getpass
+
+    from llm_config import active_config_file, load_file_config, save_config
+
+    current = load_file_config()
+    print("🔑 Setup de OpenCode Zen")
+    print("   Conseguí tu key en https://opencode.ai/zen (empieza con oc_sk_...)")
+    print(f"   Se guarda SOLO en {active_config_file()} con permiso 600 (nunca en el repo).")
+    if current.get("opencode_api_key"):
+        print("   Ya hay una key guardada (no la muestro). Enter = conservar, o pegá una nueva.")
+    try:
+        key = getpass.getpass("   Pegá tu OPENCODE_API_KEY (no se ve al escribir): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\n   Cancelado.")
+        return 1
+    if not key:
+        if current.get("opencode_api_key"):
+            key = current["opencode_api_key"]
+        else:
+            print("❌ Sin key no hay nada para guardar.")
+            return 1
+    if not key.startswith("oc_sk_"):
+        print("⚠️  La key no empieza con 'oc_sk_' — la guardo igual, pero revisala.")
+    current["provider"] = "opencode"
+    current["opencode_api_key"] = key
+    current.setdefault("opencode_model", "deepseek-v4.1-flash")
+    saved = save_config(current)
+    print(f"✅ Guardado en {saved} (provider=opencode, model={current['opencode_model']}).")
+    print("   Probá con: agent-devs --list-models")
+    print("   Usalo con: agent-devs --provider opencode .")
+    return 0
+
+
+def run_show_config() -> int:
+    """Muestra la config efectiva con la key tapada. Exit 0 siempre."""
+    from llm_config import active_config_file, load_file_config, resolve_llm
+
+    raw = load_file_config()
+    resolved = resolve_llm()
+    key = str(raw.get("opencode_api_key") or "")
+    masked = f"{key[:6]}…{key[-4:]} ({len(key)} chars)" if key else "ausente"
+
+    print("🔧 Config efectiva (key tapada)\n")
+    print(f"   archivo:   {active_config_file()}")
+    print(f"   provider:  {resolved['provider']}")
+    if resolved["provider"] == "opencode":
+        print(f"   modelo:    {resolved['model']}  (transporte {resolved.get('transport', 'chat')}"
+              + (f", reasoning {resolved.get('reasoning')}" if resolved.get("transport") == "responses" else "")
+              + ")")
+        print(f"   base_url:  {resolved['base_url']}")
+        print(f"   api_key:   {masked}")
+        if "opencode_reasoning" not in raw:
+            print(f"   reasoning: {resolved.get('reasoning')} (default; fijalo con \"opencode_reasoning\" en el json)")
+    else:
+        print(f"   modelo local: {resolved['model']}")
+        print(f"   base_url:     {resolved['base_url']}")
+    print("\n   Flags > env/.env > json. Cambiar en caliente: /model · ver modelos: --list-models")
+    return 0
+
+
+def run_list_models() -> int:
+    """Lista modelos OpenCode: 🆓/💰 + protocolo (chat/responses). Exit 0/1."""
+    from llm_config import (
+        fetch_opencode_models,
+        format_model_list,
+        is_free_model,
+        needs_messages_api,
+        resolve_llm,
+        transport_for,
+    )
+
+    resolved = resolve_llm()
+    if resolved["provider"] != "opencode":
+        # --list-models implica opencode aunque el config diga local.
+        resolved = resolve_llm(provider_override="opencode")
+    if not resolved["api_key"]:
+        _opencode_missing_exit()
+    try:
+        models = fetch_opencode_models(resolved["api_key"], resolved["base_url"], force=True)
+    except Exception as e:
+        _opencode_down_exit(e)
+        return 1
+    for m in models:
+        mid = m["id"]
+        if needs_messages_api(mid):
+            m["proto"] = "messages✗"
+        else:
+            m["proto"] = "responses" if transport_for(mid) == "responses" else "chat"
+    free = [m for m in models if is_free_model(m) is True]
+    paid = [m for m in models if is_free_model(m) is False]
+    unk = [m for m in models if is_free_model(m) is None]
+    print(f"📦 {len(models)} modelos en OpenCode Zen ({resolved['base_url']})")
+    print(f"   🆓 gratis: {len(free)} · 💰 pago: {len(paid)}" + (f" · ? s/d: {len(unk)}" if unk else ""))
+    print("   ⚠️  Los 🆓 solo funcionan DENTRO de OpenCode (desde acá dan FreeTierError).")
+    print("   responses = usa /v1/responses con reasoning low|medium|high (--reasoning).")
+    print("   messages✗ = API Anthropic, sin soporte (verificado: claude-*).")
+    print("   Verificados acá: deepseek-v4.1-flash (chat+tools), muse-spark-1.3 (responses+tools).")
+    print()
+    # Gratis primero para que se vean sin scroll.
+    ordered = free + unk + paid
+    print(format_model_list(ordered))
+    print()
+    print(f"   Modelo actual: {resolved['model']} · reasoning: {resolved.get('reasoning', 'medium')}")
+    print("   Cambiarlo: agent-devs --provider opencode --model <id> [--reasoning low|medium|high] .")
+    return 0
+
+
+def _llm_down_exit(exc: BaseException) -> None:
+    """Mensaje amigable según el proveedor activo. Si el error no es del LLM,
+    retorna sin hacer nada para que el caller lo re-lance (nunca traceback)."""
+    from llm_config import resolve_llm
+    from llm_wrapper import is_protocol_error
+
+    try:
+        provider = resolve_llm()["provider"]
+    except Exception:
+        provider = "local"
+    if provider == "opencode":
+        if _is_llama_connection_error(exc) or is_protocol_error(exc):
+            _opencode_down_exit(exc)
+    elif _is_llama_connection_error(exc):
+        _llama_down_exit()
 
 
 def _locate_install_repo() -> Path | None:
@@ -760,9 +948,16 @@ def run_doctor() -> int:
             )
             problems += 1
 
-    # 6) llama.cpp: binario (auto-instala con brew en macOS) + server vivo
+    # 6) LLM: local (llama.cpp) + OpenCode. Solo el proveedor ACTIVO suma
+    # problemas; el otro se informa sin bloquear.
+    from llm_config import active_config_file, is_free_model, resolve_llm
+
+    try:
+        _active = resolve_llm()["provider"]
+    except Exception:
+        _active = "local"
     has_llama_bin = shutil.which("llama-server") or shutil.which("llama-server.exe")
-    if not has_llama_bin and sys.platform == "darwin" and shutil.which("brew"):
+    if not has_llama_bin and sys.platform == "darwin" and shutil.which("brew") and _active == "local":
         print("     ⏳ llama-server no encontrado — instalando con brew…\n     $ brew install llama.cpp")
         r = sp.run(["brew", "install", "llama.cpp"], capture_output=True, text=True, timeout=900)
         if r.returncode == 0 and shutil.which("llama-server"):
@@ -774,22 +969,50 @@ def run_doctor() -> int:
     alive, base = _llama_server_alive()
     if has_llama_bin:
         _doctor_ok("llama.cpp (llama-server)", shutil.which("llama-server"))
-    else:
+    elif _active == "local":
         hint = {
-            "darwin": "brew install llama.cpp",
+            "darwin": "brew install llama.cpp (o usá la nube: agent-devs --setup-opencode)",
             "windows": "bajá el release de https://github.com/ggml-org/llama.cpp/releases y agregalo al PATH",
         }.get(sys.platform, "compilá con cmake o bajá un release de https://github.com/ggml-org/llama.cpp/releases")
         _doctor_fail("llama.cpp (llama-server)", hint)
         problems += 1
-    if alive:
-        _doctor_ok("Modelo corriendo", base)
     else:
+        print("  ── llama.cpp (llama-server): no instalado (proveedor activo: opencode — no bloquea)")
+    if alive:
+        _doctor_ok("Modelo local corriendo", base)
+    elif _active == "local":
         _doctor_fail(
-            "Modelo corriendo",
-            f"nadie responde en {base}. Bajá uno y levantalo antes de usar agent-devs.",
+            "Modelo local corriendo",
+            f"nadie responde en {base}. Bajá uno y levantalo, o pasate a la nube con --setup-opencode.",
         )
         _doctor_model_advice()
         problems += 1
+    else:
+        print(f"  ── Modelo local: nadie en {base} (proveedor activo: opencode — no bloquea)")
+
+    # 6b) OpenCode Zen: key presente (sin mostrarla) + conexión + conteo 🆓/💰.
+    _resolved_oc = resolve_llm(provider_override="opencode")
+    if _resolved_oc["api_key"]:
+        _doctor_ok("OpenCode API key", f"presente ({active_config_file()}, sin mostrar) · modelo: {_resolved_oc['model']}")
+        try:
+            from llm_config import fetch_opencode_models
+
+            _models = fetch_opencode_models(_resolved_oc["api_key"], _resolved_oc["base_url"])
+            _free = sum(1 for m in _models if is_free_model(m) is True)
+            _doctor_ok("OpenCode Zen", f"{len(_models)} modelos (🆓 {_free} gratis) — ver con --list-models")
+        except Exception as e:
+            _msg = str(e)
+            if "401" in _msg or "Unauthorized" in _msg:
+                _doctor_fail("OpenCode Zen", "la key fue rechazada (401) — regenerala y repetí --setup-opencode")
+            else:
+                _doctor_fail("OpenCode Zen", f"no se pudo listar modelos: {_msg[-200:]}")
+            if _active == "opencode":
+                problems += 1
+    elif _active == "opencode":
+        _doctor_fail("OpenCode API key", "falta — corré agent-devs --setup-opencode")
+        problems += 1
+    else:
+        print("  ── OpenCode: sin API key (proveedor activo: local — no bloquea; agregala con --setup-opencode)")
 
     # 7) Checkout del harness: hash visible + estado (sucio/atrás).
     # E2E: crash por mezcla de versiones tras un update (session.py nuevo +
@@ -862,20 +1085,40 @@ def main():
                         help="Salta el análisis LLM al arrancar (usa caché o resumen determinista, ~1s)")
     parser.add_argument("--list", action="store_true", help="Lista los análisis guardados")
     parser.add_argument("--doctor", action="store_true",
-                        help="Verifica el entorno (deps, git, MCP, llama-server) e instala lo que falte")
+                        help="Verifica el entorno (deps, git, MCP, LLM) e instala lo que falte")
     parser.add_argument("--update", action="store_true",
                         help="Actualiza esta instalación: git pull + reinstall editable")
+    parser.add_argument("--provider", choices=("local", "opencode"), default=None,
+                        help="Proveedor LLM (default: el de tu config o 'local')")
+    parser.add_argument("--model", default=None,
+                        help="Modelo a usar (default: el del config; en opencode ej. muse-spark-1.3)")
+    parser.add_argument("--reasoning", choices=("low", "medium", "high"), default=None,
+                        help="Nivel de razonamiento para modelos Responses (muse-spark-*, gpt-*, grok-*)")
+    parser.add_argument("--list-models", action="store_true",
+                        help="Lista los modelos de OpenCode (🆓 gratis vs 💰 pago) y sale")
+    parser.add_argument("--setup-opencode", action="store_true",
+                        help="Guarda tu API key de OpenCode en tu config (permiso 600)")
+    parser.add_argument("--show-config", action="store_true",
+                        help="Muestra la config efectiva (key tapada) y sale")
     args = parser.parse_args()
 
     if args.doctor:
         return run_doctor()
     if args.update:
         return run_update()
+    if args.setup_opencode:
+        return run_setup_opencode()
+    if args.show_config:
+        return run_show_config()
+    if args.list_models:
+        return run_list_models()
     if args.list:
         do_list()
         return
     if args.analyze:
-        do_analyze(_make_llm(max_tokens=1024, temperature=0.4), args.analyze)
+        do_analyze(_make_llm(max_tokens=1024, temperature=0.4,
+                             provider=args.provider, model=args.model,
+                             reasoning=args.reasoning), args.analyze)
         return
 
     # Normalizar a ABSOLUTO siempre: 'agent-devs .' dejaba repo_path='.'
@@ -884,11 +1127,20 @@ def main():
     # bad_root_path=. en la máquina del otro usuario).
     repo_path = str(Path(args.repo or os.getcwd()).expanduser().resolve()).strip()
 
-    # Fail-fast: si llama.cpp no responde, salir con mensaje amigable antes de
-    # intentar cualquier llamada LLM (evita el traceback de httpx/openai).
-    alive, _ = _llama_server_alive(timeout=1.5)
-    if not alive:
-        _llama_down_exit()
+    # Fail-fast según proveedor (evita el traceback de httpx/openai).
+    from llm_config import needs_messages_api, resolve_llm
+
+    _resolved = resolve_llm(provider_override=args.provider, model_override=args.model,
+                            reasoning_override=args.reasoning)
+    if _resolved["provider"] == "opencode":
+        if not _resolved["api_key"]:
+            _opencode_missing_exit()
+        if needs_messages_api(_resolved["model"]):
+            _messages_api_exit(_resolved["model"])
+    else:
+        alive, _ = _llama_server_alive(timeout=1.5)
+        if not alive:
+            _llama_down_exit()
 
     reset_turn_usage()
     try:
@@ -897,7 +1149,9 @@ def main():
             cached = deterministic_analysis(repo_path)
         else:
             cached = _ensure_analysis(
-                _make_llm(max_tokens=1024, temperature=0.4),
+                _make_llm(max_tokens=1024, temperature=0.4,
+                          provider=args.provider, model=args.model,
+                          reasoning=args.reasoning),
                 repo_path,
                 status="🤔 Analizando el repositorio... (puede tardar 1-2 min). Ctrl+C para cancelar.",
             )
@@ -905,15 +1159,33 @@ def main():
         raise
     except BaseException as e:
         if _is_llama_connection_error(e):
-            _llama_down_exit()
+            if _resolved["provider"] == "opencode":
+                _opencode_down_exit(e)
+            else:
+                _llama_down_exit()
+        else:
+            from llm_wrapper import is_protocol_error
+
+            if _resolved["provider"] == "opencode" and is_protocol_error(e):
+                _opencode_down_exit(e)
         raise
 
-    session = Session(_make_llm(), repo_path, cached_analysis=_format_cached_context(cached))
+    session = Session(_make_llm(provider=args.provider, model=args.model,
+                                reasoning=args.reasoning),
+                      repo_path, cached_analysis=_format_cached_context(cached))
     try:
         session.start()
     except BaseException as e:
         if _is_llama_connection_error(e):
-            _llama_down_exit()
+            if _resolved["provider"] == "opencode":
+                _opencode_down_exit(e)
+            else:
+                _llama_down_exit()
+        else:
+            from llm_wrapper import is_protocol_error
+
+            if _resolved["provider"] == "opencode" and is_protocol_error(e):
+                _opencode_down_exit(e)
         raise
 
     # TUI siempre que haya terminal interactiva. Sin tty (pipe/script) el
@@ -924,7 +1196,7 @@ def main():
         return
 
     print_welcome(
-        repo_path, LLM_MODEL_NAME, LLM_BASE_URL, LLM_TEMPERATURE,
+        repo_path, _resolved["model"], _resolved["base_url"], LLM_TEMPERATURE,
         (len(ALL_TOOLS), session._mcp_count),
         branch=session.get_status().get("branch", ""),
     )
@@ -1006,6 +1278,9 @@ def main():
             if kind == "run" and payload[0] == "/pr":
                 session.slash_pr(payload[1])
                 continue
+            if kind == "run" and payload[0] == "/model":
+                console.print(session.slash_model(payload[1]) + "\n")
+                continue
             if kind == "run" and payload[0] == "/help":
                 console.print("[bold]Comandos:[/bold]\n" + format_help() + "\n")
                 continue
@@ -1051,13 +1326,24 @@ def main():
             except (KeyboardInterrupt, SystemExit):
                 raise
             except BaseException as e:
-                if _is_llama_connection_error(e):
-                    console.print(
-                        f"\n[red]❌ llama.cpp está apagado — no se pudo conectar a {LLM_BASE_URL}[/red]\n"
-                        "[yellow]   Encendelo antes de seguir, por ejemplo:[/yellow]\n"
-                        "[dim]     llama-server -hf bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M --port 8080[/dim]\n"
-                        "[dim]   Verificá con: agent-devs --doctor[/dim]\n"
-                    )
+                from llm_wrapper import is_protocol_error
+
+                if _is_llama_connection_error(e) or (
+                    _resolved["provider"] == "opencode" and is_protocol_error(e)
+                ):
+                    if _resolved["provider"] == "opencode":
+                        console.print(
+                            "\n[red]❌ No se pudo hablar con OpenCode Zen[/red]\n"
+                            "[dim]   Verificá con: agent-devs --doctor / agent-devs --list-models[/dim]\n"
+                        )
+                    else:
+                        console.print(
+                            f"\n[red]❌ llama.cpp está apagado — no se pudo conectar a {LLM_BASE_URL}[/red]\n"
+                            "[yellow]   Encendelo antes de seguir, por ejemplo:[/yellow]\n"
+                            "[dim]     llama-server -hf bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M --port 8080[/dim]\n"
+                            "[dim]   O usá la nube: agent-devs --setup-opencode[/dim]\n"
+                            "[dim]   Verificá con: agent-devs --doctor[/dim]\n"
+                        )
                     continue
                 raise
     finally:

@@ -290,6 +290,27 @@ def _openai_tool_calls_to_lc(msg) -> list[dict[str, Any]]:
     return out
 
 
+def is_protocol_error(exc: BaseException) -> bool:
+    """True si el gateway dice que el modelo no habla ese protocolo.
+
+    Zen responde 400 ModelProtocolUnsupported cuando se usa chat/completions
+    con un modelo de Responses (gpt-*, muse-spark-*, grok-*) y viceversa.
+    """
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if getattr(cur, "code", None) == "ModelProtocolUnsupported":
+            return True
+        if "modelprotocolunsupported" in str(cur).lower().replace(" ", ""):
+            return True
+        if "does not support this protocol" in str(cur).lower():
+            return True
+        nxt = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+        cur = nxt if isinstance(nxt, BaseException) else None
+    return False
+
+
 class _UsageTracker:
     """Contador de tokens compartido entre instancias (sobrevive a model_copy)."""
 
@@ -328,7 +349,17 @@ def get_usage() -> dict:
 
 
 class LocalLLM(BaseChatModel):
-    """Chat model que conecta a un llama-server OpenAI-compatible con soporte de reasoning_content."""
+    """Chat model que conecta a un llama-server OpenAI-compatible con soporte de reasoning_content.
+
+    Transporte dual para la nube (OpenCode Zen):
+    - "chat": POST /v1/chat/completions (default; único que habla llama.cpp).
+    - "responses": POST /v1/responses (modelos que lo exigen: gpt-*, muse-spark-*,
+      grok-*). Conmutación automática ante ModelProtocolUnsupported + caché en
+      disco para no pagar el 400 dos veces. El nivel de razonamiento de estos
+      modelos se controla con `reasoning_effort` (low/medium/high, nativo de
+      la API Responses); los params llama-only (max_reasoning_tokens,
+      chat_template_kwargs) NUNCA viajan a la nube.
+    """
 
     base_url: str = "http://localhost:8080/v1"
     model_name: str = "agents-a1-4b"
@@ -337,6 +368,8 @@ class LocalLLM(BaseChatModel):
     api_key: str = "not-needed"
     max_reasoning_tokens: int = 0
     force_tool_calls: bool = False
+    transport: str = "chat"
+    reasoning_effort: str | None = None
     # Control de thinking vía chat_template_kwargs (ej. {"enable_thinking": False}
     # para Gemma 4/Qwen3 en llama.cpp). El retry desactiva el thinking: con
     # tool_choice="required" + thinking activo, el modelo razona sin converger
@@ -363,6 +396,38 @@ class LocalLLM(BaseChatModel):
         if self.chat_template_kwargs is not None:
             new.chat_template_kwargs = dict(self.chat_template_kwargs)
         return new
+
+    def _is_local(self) -> bool:
+        base = self.base_url or ""
+        return "localhost" in base or "127.0.0.1" in base
+
+    def _sync_transport(self) -> None:
+        """Si el caché en disco ya sabe que el modelo es responses, conmutar
+        sin pagar un 400 (las copias via model_copy pueden traerlo viejo)."""
+        if self.transport == "chat" and not self._is_local():
+            try:
+                from llm_config import transport_for
+
+                if transport_for(self.model_name) == "responses":
+                    self.transport = "responses"
+            except Exception:
+                pass
+
+    def _known_text_tool_calls(self, content: str) -> list[dict[str, Any]]:
+        """Recovery de tool calls en texto FILTRADO a tools reales.
+
+        Sin filtro, la prosa de un modelo fuerte (snippets citados como
+        `if (rule.type === ...)`, conteos "0 matches") se parsea como calls
+        fantasma (if/casero/matches) → error de tool inexistente → el modelo
+        reintenta repitiendo el análisis → loop hasta el corte. Los calls del
+        4B (read_file/cm__* con nombres reales) pasan igual; sin tools
+        bindeadas no hay nada válido que recuperar.
+        """
+        recovered = parse_text_tool_calls(content)
+        if not recovered or not self._tools:
+            return []
+        known = {getattr(t, "name", "") for t in self._tools}
+        return [tc for tc in recovered if tc.get("name") in known]
 
     def _convert_messages(self, messages: list[BaseMessage]) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
@@ -410,13 +475,17 @@ class LocalLLM(BaseChatModel):
             params["tool_choice"] = self._tool_choice
         if stop:
             params["stop"] = stop
-        if self.max_reasoning_tokens > 0 or self.chat_template_kwargs:
+        # Params llama-only: SOLO contra llama-server. La nube (Zen) los
+        # reenvía al proveedor real y un campo desconocido puede dar 400.
+        if self._is_local() and (self.max_reasoning_tokens > 0 or self.chat_template_kwargs):
             body = {**kwargs.get("extra_body", {})}
             if self.max_reasoning_tokens > 0:
                 body["max_reasoning_tokens"] = self.max_reasoning_tokens
             if self.chat_template_kwargs:
                 body["chat_template_kwargs"] = self.chat_template_kwargs
             params["extra_body"] = body
+        elif kwargs.get("extra_body"):
+            params["extra_body"] = kwargs["extra_body"]
         return params
 
     @property
@@ -432,15 +501,24 @@ class LocalLLM(BaseChatModel):
         return result
 
     async def _agenerate(self, messages, stop=None, **kwargs):
+        self._sync_transport()
+        if self.transport == "responses":
+            return await self._agenerate_responses(messages)
         client = self._get_client()
         params = self._extract_kwargs(stop, **kwargs)
         openai_msgs = self._convert_messages(messages)
 
-        response = await client.chat.completions.create(
-            **params,
-            messages=openai_msgs,
-            stream=False,
-        )
+        try:
+            response = await client.chat.completions.create(
+                **params,
+                messages=openai_msgs,
+                stream=False,
+            )
+        except Exception as e:
+            if not self._is_local() and is_protocol_error(e):
+                self._switch_to_responses()
+                return await self._agenerate_responses(messages)
+            raise
 
         choice = response.choices[0]
         msg = choice.message
@@ -448,7 +526,7 @@ class LocalLLM(BaseChatModel):
         content = msg.content or ""
         tool_calls = _openai_tool_calls_to_lc(msg)
         if not tool_calls:
-            tool_calls = parse_text_tool_calls(content)
+            tool_calls = self._known_text_tool_calls(content)
 
         usage = response.usage
         prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
@@ -469,17 +547,263 @@ class LocalLLM(BaseChatModel):
         )
         return ChatResult(generations=[generation])
 
+    # ── Transporte Responses (/v1/responses) ─────────────────────────────
+
+    def _switch_to_responses(self) -> None:
+        """Conmuta a responses y lo cachea (no pagar el 400 dos veces)."""
+        self.transport = "responses"
+        try:
+            from llm_config import remember_transport
+
+            remember_transport(self.model_name, "responses")
+        except Exception:
+            pass
+
+    def _responses_tools(self) -> list[dict[str, Any]] | None:
+        """Tools al formato function de Responses API (plano, sin strict)."""
+        if not self._tools:
+            return None
+        out: list[dict[str, Any]] = []
+        for t in self._tools:
+            chat_tool = convert_to_openai_tool(t)
+            fn = chat_tool.get("function", chat_tool)
+            out.append({
+                "type": "function",
+                "name": fn.get("name", t.name),
+                "description": fn.get("description") or "",
+                "parameters": fn.get("parameters") or {"type": "object", "properties": {}},
+            })
+        return out
+
+    def _convert_to_responses_input(self, messages: list[BaseMessage]) -> list[dict[str, Any]]:
+        """Mensajes LangChain → items de Responses API (stateless: input full).
+
+        Los tool_calls del assistant se reinyectan como function_call y sus
+        resultados como function_call_output (matcheados por call_id).
+        """
+        items: list[dict[str, Any]] = []
+        for msg in messages:
+            if isinstance(msg, HumanMessage):
+                items.append({"role": "user", "content": str(msg.content or "")})
+            elif isinstance(msg, SystemMessage):
+                items.append({"role": "system", "content": str(msg.content or "")})
+            elif isinstance(msg, AIMessage):
+                if msg.content:
+                    items.append({"role": "assistant", "content": str(msg.content)})
+                for tc in msg.tool_calls or []:
+                    items.append({
+                        "type": "function_call",
+                        "call_id": tc.get("id", ""),
+                        "name": tc.get("name", ""),
+                        "arguments": json.dumps(tc.get("args", {})),
+                    })
+            elif isinstance(msg, ToolMessage):
+                items.append({
+                    "type": "function_call_output",
+                    "call_id": msg.tool_call_id or "",
+                    "output": str(msg.content or ""),
+                })
+            else:
+                items.append({"role": "user", "content": str(msg.content)})
+        return items
+
+    def _responses_kwargs(self) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "model": self.model_name,
+            "max_output_tokens": self.max_tokens,
+        }
+        tools = self._responses_tools()
+        if tools:
+            params["tools"] = tools
+            if self.force_tool_calls:
+                params["tool_choice"] = "required"
+        if self._tool_choice is not None:
+            params["tool_choice"] = self._tool_choice
+        # Modo de razonamiento particular del modelo (low/medium/high).
+        # Es el reemplazo cloud de max_reasoning_tokens de llama.cpp.
+        if self.reasoning_effort:
+            params["reasoning"] = {"effort": self.reasoning_effort}
+        return params
+
+    @staticmethod
+    def _responses_text(output_items: list) -> str:
+        parts: list[str] = []
+        for item in output_items or []:
+            if getattr(item, "type", None) != "message":
+                continue
+            for block in getattr(item, "content", None) or []:
+                if getattr(block, "type", None) == "output_text":
+                    parts.append(getattr(block, "text", "") or "")
+        return "".join(parts)
+
+    @staticmethod
+    def _responses_tool_calls(output_items: list) -> list[dict[str, Any]]:
+        calls: list[dict[str, Any]] = []
+        for item in output_items or []:
+            if getattr(item, "type", None) != "function_call":
+                continue
+            name = getattr(item, "name", "") or ""
+            if not name:
+                continue
+            raw_args = getattr(item, "arguments", "") or "{}"
+            try:
+                args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+            except json.JSONDecodeError:
+                args = {}
+            calls.append({
+                "id": getattr(item, "call_id", "") or f"call_resp_{uuid.uuid4().hex[:8]}",
+                "name": name,
+                "args": args if isinstance(args, dict) else {},
+                "type": "tool_call",
+            })
+        return calls
+
+    async def _agenerate_responses(self, messages) -> ChatResult:
+        client = self._get_client()
+        params = self._responses_kwargs()
+        params["input"] = self._convert_to_responses_input(messages)
+        # Sin temperature primero: varios reasoning models la rechazan si no
+        # es el default. Si el 400 la menciona, reintentar CON temperature.
+        # (Al revés que lo intuitivo: el default ya es el del proveedor.)
+        response = await client.responses.create(**params, stream=False)
+
+        output_items = list(getattr(response, "output", None) or [])
+        content = self._responses_text(output_items)
+        tool_calls = self._responses_tool_calls(output_items)
+        if not tool_calls:
+            tool_calls = self._known_text_tool_calls(content)
+
+        usage = getattr(response, "usage", None)
+        prompt_tokens = getattr(usage, "input_tokens", 0) if usage else 0
+        completion_tokens = getattr(usage, "output_tokens", 0) if usage else 0
+        _USAGE.record(prompt_tokens, completion_tokens)
+
+        return ChatResult(generations=[ChatGeneration(
+            message=AIMessage(content=content, tool_calls=tool_calls),
+            generation_info={"input_tokens": prompt_tokens, "output_tokens": completion_tokens},
+        )])
+
+    async def _astream_responses(self, messages: list[BaseMessage]) -> AsyncIterator[ChatGenerationChunk]:
+        client = self._get_client()
+        params = self._responses_kwargs()
+        params["input"] = self._convert_to_responses_input(messages)
+
+        stream = await client.responses.create(**params, stream=True)
+
+        saw_native_tool = False
+        content_parts: list[str] = []
+        # item_id → índice estable para los tool_call_chunks del merger.
+        item_index: dict[str, int] = {}
+        item_meta: dict[str, dict] = {}
+
+        async for event in stream:
+            etype = getattr(event, "type", "") or ""
+            if etype == "response.completed":
+                resp = getattr(event, "response", None)
+                usage = getattr(resp, "usage", None) if resp else None
+                if usage:
+                    _USAGE.record(
+                        getattr(usage, "input_tokens", 0) or 0,
+                        getattr(usage, "output_tokens", 0) or 0,
+                    )
+                continue
+            if etype == "response.output_text.delta":
+                delta = getattr(event, "delta", "") or ""
+                if delta:
+                    content_parts.append(delta)
+                    yield ChatGenerationChunk(
+                        message=AIMessageChunk(content=delta)
+                    )
+            elif etype == "response.output_item.added":
+                item = getattr(event, "item", None)
+                if item is not None and getattr(item, "type", None) == "function_call":
+                    iid = getattr(event, "item_id", "") or getattr(item, "id", "") or ""
+                    if iid and iid not in item_index:
+                        item_index[iid] = len(item_index)
+                        item_meta[iid] = {
+                            "call_id": getattr(item, "call_id", "") or iid,
+                            "name": getattr(item, "name", "") or "",
+                        }
+                        saw_native_tool = True
+            elif etype == "response.function_call_arguments.delta":
+                iid = getattr(event, "item_id", "") or ""
+                delta = getattr(event, "delta", "") or ""
+                if iid not in item_index:
+                    item_index[iid] = len(item_index)
+                    item_meta[iid] = {"call_id": iid, "name": ""}
+                    saw_native_tool = True
+                if delta:
+                    meta = item_meta[iid]
+                    chunk_entry: dict[str, Any] = {"index": item_index[iid], "args": delta}
+                    # id+name en el primer chunk del item para que el merger
+                    # de LangChain lo ensamble (igual que el path chat).
+                    if not meta.get("sent"):
+                        if meta.get("call_id"):
+                            chunk_entry["id"] = meta["call_id"]
+                        if meta.get("name"):
+                            chunk_entry["name"] = meta["name"]
+                        meta["sent"] = True
+                    yield ChatGenerationChunk(
+                        message=AIMessageChunk(
+                            content="",
+                            tool_call_chunks=[chunk_entry],
+                        )
+                    )
+            elif etype == "response.function_call_arguments.done":
+                iid = getattr(event, "item_id", "") or ""
+                if iid in item_meta and not item_meta[iid].get("name") and getattr(event, "name", ""):
+                    item_meta[iid]["name"] = event.name
+            elif etype in ("response.reasoning_summary_text.delta", "response.reasoning_text.delta"):
+                delta = getattr(event, "delta", "") or ""
+                if delta:
+                    yield ChatGenerationChunk(
+                        message=AIMessageChunk(
+                            content="",
+                            additional_kwargs={"is_reasoning": True, "reasoning_content": delta},
+                        )
+                    )
+
+        # Fallback filtrado a tools reales (sin filtro, la prosa con código
+        # genera calls fantasma → loop). Ver _known_text_tool_calls.
+        if not saw_native_tool:
+            recovered = self._known_text_tool_calls("".join(content_parts))
+            for i, tc in enumerate(recovered):
+                yield ChatGenerationChunk(
+                    message=AIMessageChunk(
+                        content="",
+                        tool_call_chunks=[{
+                            "index": i,
+                            "id": tc["id"],
+                            "name": tc["name"],
+                            "args": json.dumps(tc["args"]),
+                        }],
+                    )
+                )
+
     async def _astream(self, messages: list[BaseMessage], **kwargs) -> AsyncIterator[ChatGenerationChunk]:
+        self._sync_transport()
+        if self.transport == "responses":
+            async for chunk in self._astream_responses(messages):
+                yield chunk
+            return
         client = self._get_client()
         params = self._extract_kwargs(**kwargs)
         openai_msgs = self._convert_messages(messages)
 
-        stream = await client.chat.completions.create(
-            **params,
-            messages=openai_msgs,
-            stream=True,
-            stream_options={"include_usage": True},
-        )
+        try:
+            stream = await client.chat.completions.create(
+                **params,
+                messages=openai_msgs,
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+        except Exception as e:
+            if not self._is_local() and is_protocol_error(e):
+                self._switch_to_responses()
+                async for chunk in self._astream_responses(messages):
+                    yield chunk
+                return
+            raise
 
         saw_native_tool = False
         content_parts: list[str] = []
@@ -535,9 +859,10 @@ class LocalLLM(BaseChatModel):
                     )
                 )
 
-        # Fallback: modelo escribió tools como XML/texto en content
+        # Fallback filtrado a tools reales (sin filtro, la prosa con código
+        # genera calls fantasma → loop). Ver _known_text_tool_calls.
         if not saw_native_tool:
-            recovered = parse_text_tool_calls("".join(content_parts))
+            recovered = self._known_text_tool_calls("".join(content_parts))
             for i, tc in enumerate(recovered):
                 yield ChatGenerationChunk(
                     message=AIMessageChunk(

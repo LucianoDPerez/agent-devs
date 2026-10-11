@@ -6,6 +6,12 @@ de rango, ej. `:0`), el turno reintenta UNA vez para corregir. E2E real
 T1b/9B: informe con `src/lib/patient.service.ts:0` y otros paths Next.js
 inexistentes en un repo NestJS.
 
+Nombres pelados (`validate.ts:15` sin el prefijo desde la raíz) se resuelven
+por basename antes de marcarlos: el modelo suele citar corto lo que SÍ existe
+(E2E Spark: retractó hallazgos verdaderos por citar sin prefijo). Si varios
+archivos comparten el nombre, basta que UNO valide (fail-open a menos
+falsos positivos; el objetivo es cazar paths inventados, no el formato).
+
 Solo para roles de verificación (REVIEW/ANALYZE): PLAN cita archivos por
 crear (falsos positivos garantizados) y EXECUTE resume lo que escribió.
 """
@@ -49,6 +55,25 @@ def _extract_cites(response: str) -> list[tuple[str, int]]:
     return out
 
 
+def _resolve_candidates(path: str, root: Path) -> list[Path]:
+    """Archivos reales candidatos para una cita: path desde la raíz, o basename.
+
+    Lista vacía = la cita no existe en disco (path inventado). La búsqueda
+    por basename cubre citas en corto (`validate.ts:15` de algo real).
+    """
+    p = Path(path)
+    if p.is_absolute():
+        return [p] if p.is_file() else []
+    direct = root / path
+    if direct.is_file():
+        return [direct]
+    # Nombre pelado o prefijo parcial: candidatos por basename.
+    try:
+        return [c for c in root.rglob(p.name) if c.is_file()]
+    except OSError:
+        return []
+
+
 def find_unverifiable_cites(response: str | None, repo_path: str) -> list[str]:
     """Citas `path:línea` que NO verifican en disco. Lista vacía = todo ok
     (incluido el caso sin citas: negativa honesta sin fabricar evidencia)."""
@@ -59,27 +84,32 @@ def find_unverifiable_cites(response: str | None, repo_path: str) -> list[str]:
     for path, line in _extract_cites(response):
         if path.startswith(("http://", "https://")):
             continue
-        p = Path(path)
-        if not p.is_absolute():
-            p = root / path
-        try:
-            if not p.is_file():
-                bad.append(f"{path}:{line}")
-                continue
-            if line < 1:
-                bad.append(f"{path}:{line}")
-                continue
-            try:
-                if p.stat().st_size > _MAX_CHECK_BYTES:
-                    continue  # fail-open en gigantes
-            except OSError:
-                continue
-            try:
-                total = sum(1 for _ in p.open(encoding="utf-8", errors="replace"))
-            except OSError:
-                continue  # ilegible → fail-open
-            if line > total:
-                bad.append(f"{path}:{line}")
-        except OSError:
+        if line < 1:
+            bad.append(f"{path}:{line}")
             continue
+        cands = _resolve_candidates(path, root)
+        if not cands:
+            bad.append(f"{path}:{line}")
+            continue
+        # Vale si ALGÚN candidato tiene esa línea (fail-open en gigantes o
+        # ilegibles, igual que antes: el objetivo es cazar paths inventados).
+        ok = False
+        for cand in cands:
+            try:
+                if cand.stat().st_size > _MAX_CHECK_BYTES:
+                    ok = True
+                    break
+            except OSError:
+                ok = True
+                break
+            try:
+                total = sum(1 for _ in cand.open(encoding="utf-8", errors="replace"))
+            except OSError:
+                ok = True
+                break
+            if line <= total:
+                ok = True
+                break
+        if not ok:
+            bad.append(f"{path}:{line}")
     return bad

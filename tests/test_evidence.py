@@ -75,3 +75,29 @@ def test_paths_absolutos_y_relativos(tmp_path):
     assert find_unverifiable_cites(f"ok {abs_cite}", str(repo)) == []
     bad = find_unverifiable_cites("mal **[otro/b.ts:1]**", str(repo))
     assert bad == ["otro/b.ts:1"]
+
+
+def test_nombre_pelado_resuelve_por_basename(tmp_path):
+    # E2E Spark: citó `validate.ts:15` sin prefijo de algo real → el guard
+    # lo marcaba malo y el modelo retractaba hallazgos verdaderos.
+    repo = _repo(tmp_path)
+    assert find_unverifiable_cites("ver `a.ts:2` listo", str(repo)) == []
+    assert find_unverifiable_cites("ver **[a.ts:3]** listo", str(repo)) == []
+
+
+def test_nombre_pelado_fuera_de_rango_sigue_marcando(tmp_path):
+    repo = _repo(tmp_path)
+    assert find_unverifiable_cites("ver `a.ts:99`", str(repo)) == ["a.ts:99"]
+
+
+def test_nombre_pelado_inexistente_sigue_marcando(tmp_path):
+    repo = _repo(tmp_path)
+    assert find_unverifiable_cites("ver `noexiste.ts:1`", str(repo)) == ["noexiste.ts:1"]
+
+
+def test_basename_ambiguo_acepta_si_uno_valida(tmp_path):
+    repo = _repo(tmp_path)
+    (repo / "otro").mkdir()
+    (repo / "otro" / "a.ts").write_text("solo-1-linea\n", encoding="utf-8")
+    # backend/src/a.ts tiene 3 líneas: la cita vale por ese candidato.
+    assert find_unverifiable_cites("ver `a.ts:2`", str(repo)) == []

@@ -25,8 +25,6 @@ from cache import (
 )
 from config import (
     AGENT_RECURSION_LIMIT,
-    ANALYZE_EXPLORE_BUDGET,
-    ANALYZE_MAX_READS_AFTER_EXPLORE,
     BULK_MAX_BATCH_ATTEMPTS,
     BULK_SESSION_ROTATION_CTX,
     EXECUTE_ASK_COMMIT,
@@ -54,8 +52,6 @@ from config import (
     MAX_REASONING_SECONDS,
     MAX_TOOL_CALLS_PER_TURN,
     PATH_FIX_ENABLED,
-    PLAN_EXPLORE_BUDGET,
-    PLAN_MAX_READS_AFTER_EXPLORE,
     POST_WRITE_GATE_ENABLED,
     POST_WRITE_GATE_MAX_RETRIES,
     PROTECTED_TASK_DIRS,
@@ -134,12 +130,28 @@ def _is_llama_connection_error(exc: BaseException) -> bool:
     return False
 
 
-def _llama_down_console_msg() -> None:
+def _llama_down_console_msg(base: str | None = None) -> None:
     from config import LLM_BASE_URL as _BASE
-    console.print(f"\n[red]❌ llama.cpp está apagado — no se pudo conectar a {_BASE}[/red]")
+    console.print(f"\n[red]❌ llama.cpp está apagado — no se pudo conectar a {base or _BASE}[/red]")
     console.print("[yellow]   Encendelo antes de seguir, por ejemplo:[/yellow]")
     console.print("[dim]     llama-server -hf bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M --port 8080[/dim]")
+    console.print("[dim]   O pasate a la nube: /model muse-spark-1.3[/dim]")
     console.print("[dim]   Verificá con: agent-devs --doctor[/dim]\n")
+
+
+def _opencode_down_console_msg() -> None:
+    console.print("\n[red]❌ No se pudo hablar con OpenCode Zen[/red]")
+    console.print("[dim]   Verificá tu key y saldo: agent-devs --doctor[/dim]")
+    console.print("[dim]   O pasate a local: /model local (con llama-server arriba)[/dim]\n")
+
+
+def _llm_down_console_msg(llm) -> None:
+    """Mensaje de caída según el proveedor del LLM de la SESIÓN (no config)."""
+    base = getattr(llm, "base_url", "") or ""
+    if "localhost" in base or "127.0.0.1" in base or not base:
+        _llama_down_console_msg(base or None)
+    else:
+        _opencode_down_console_msg()
 
 _ROLE_LABELS = {
     Role.ANALYZE: "🔍 Análisis", Role.PLAN: "📋 Planificación",
@@ -1221,9 +1233,13 @@ class Session:
         )
         # ANALYZE/PLAN: capa la búsqueda MCP pero NUNCA presiona a escribir.
         # Al agotarse lanza ToolBudgetExceeded → retry no_explore (no write-only).
+        # Montos por perfil (nube amplio, local ajustado): ver model_profiles.
+        from core.model_profiles import analyze_budget_for
+
+        _ab_calls, _ab_reads = analyze_budget_for(self.llm)
         self._analyze_budget = ExploreBudget(
-            max_calls=ANALYZE_EXPLORE_BUDGET,
-            max_reads_after_explore=ANALYZE_MAX_READS_AFTER_EXPLORE,
+            max_calls=_ab_calls,
+            max_reads_after_explore=_ab_reads,
             max_tools_before_write=0,
             write_pressure=False,
         )
@@ -1340,26 +1356,42 @@ class Session:
                 pass
             self._turn_start_ts = time.time()
             self._tools, self._mcp_available = loop.run_until_complete(init_mcp())
-            # n_ctx REAL del server (GET /props): el config hardcodeado quedaba
-            # viejo y el summary automático no alcanzaba a disparar.
-            from llm_wrapper import detect_context_limit
-            detected_ctx = detect_context_limit(LLM_BASE_URL)
-            if detected_ctx:
-                self._ctx_limit = detected_ctx
-            # Profile del SLM cargado (adaptación, no duplicación del server):
-            # qué familia es + sus presupuestos propios. Visible en el header.
-            try:
-                from core.model_profiles import match_profile
-                from llm_wrapper import detect_server_model
-                _mid = detect_server_model(LLM_BASE_URL) or ""
-                self._model_profile = match_profile(_mid)
-                console.print(
-                    f"[dim]🎛️  Profile: {self._model_profile.get('family', '?')} "
-                    f"({_mid or 'desconocido'}) — "
-                    f"{self._model_profile.get('notes', '')}[/dim]"
-                )
-            except Exception:
-                pass
+            # Detección llama-only (GET /props y /v1/models): en la nube no
+            # hay llama-server — se salta (el ctx default cubre de sobra y el
+            # header muestra el modelo configurado).
+            from llm_config import is_local_url
+
+            _llm_base = getattr(getattr(self, "llm", None), "base_url", "") or LLM_BASE_URL
+            _llm_model = getattr(getattr(self, "llm", None), "model_name", "") or ""
+            if is_local_url(_llm_base):
+                from llm_wrapper import detect_context_limit
+                detected_ctx = detect_context_limit(_llm_base)
+                if detected_ctx:
+                    self._ctx_limit = detected_ctx
+                # Profile del SLM cargado (adaptación, no duplicación del server):
+                # qué familia es + sus presupuestos propios. Visible en el header.
+                try:
+                    from core.model_profiles import match_profile
+                    from llm_wrapper import detect_server_model
+                    _mid = detect_server_model(_llm_base) or ""
+                    self._model_profile = match_profile(_mid)
+                    console.print(
+                        f"[dim]🎛️  Profile: {self._model_profile.get('family', '?')} "
+                        f"({_mid or 'desconocido'}) — "
+                        f"{self._model_profile.get('notes', '')}[/dim]"
+                    )
+                except Exception:
+                    pass
+            else:
+                try:
+                    from core.model_profiles import match_profile
+                    self._model_profile = match_profile(_llm_model)
+                    console.print(
+                        f"[dim]☁️  Nube: {_llm_model or 'modelo configurado'} "
+                        f"({self._model_profile.get('family', '?')})[/dim]"
+                    )
+                except Exception:
+                    pass
             # Resolver UNA vez la key del knowledge graph del repo actual:
             # el 4B la inventa (trace_component fallaba y repetía la llamada).
             self._graph_project = ""
@@ -3355,29 +3387,43 @@ class Session:
         self._runtime_healthy = None
         self._runtime_report = None
 
+    def _preflight_llm(self) -> bool:
+        """True si el turno puede intentar su llamada LLM.
+
+        Local: ping a /health o /v1/models del base_url DE LA SESIÓN (1s).
+        Nube: solo exige API key presente (sin ping por turno: el turno mismo
+        reporta errores de red/saldo con mensaje propio).
+        """
+        llm = getattr(self, "llm", None)
+        base = getattr(llm, "base_url", "") or ""
+        if "localhost" in base or "127.0.0.1" in base or not base:
+            try:
+                import urllib.request
+
+                root = (base or "http://localhost:8080/v1").split("/v1")[0]
+                for path in ("/health", "/v1/models"):
+                    try:
+                        with urllib.request.urlopen(root + path, timeout=1.0) as resp:
+                            if resp.status == 200:
+                                return True
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            _llama_down_console_msg(base or None)
+            return False
+        if not (getattr(llm, "api_key", "") or "") or getattr(llm, "api_key", "") == "not-needed":
+            _opencode_down_console_msg()
+            return False
+        return True
+
     def _run_turn_inner(self, user_input: str, status: str | None = None) -> None:
         """Clasifica, cambia rol, ejecuta con historial, persiste en SQLite."""
-        # Chequeo rápido: si llama.cpp está apagado, no intentar clasificar
-        # (también usa LLM). Evita 60s de timeout + traceback crudo.
-        try:
-            import urllib.request
-
-            from config import LLM_BASE_URL as _BU
-            _base = _BU.split("/v1")[0]
-            _alive = False
-            for _p in ("/health", "/v1/models"):
-                try:
-                    with urllib.request.urlopen(_base + _p, timeout=1.0) as _r:
-                        if _r.status == 200:
-                            _alive = True
-                            break
-                except Exception:
-                    continue
-            if not _alive:
-                _llama_down_console_msg()
-                return
-        except Exception:
-            pass
+        # Pre-flight contra el LLM DE LA SESIÓN (no el de config.py): con
+        # proveedor nube no se pinge localhost (bug: todo turno moría con el
+        # mensaje de llama aunque la sesión era opencode).
+        if not self._preflight_llm():
+            return
 
         self._readonly_retry = False
         # Pregunta ORIGINAL del turno (los reintentos inyectan HumanMessages
@@ -3400,7 +3446,7 @@ class Session:
             intent = classify_intent(self.llm, user_input)
         except BaseException as e:
             if _is_llama_connection_error(e):
-                _llama_down_console_msg()
+                _llm_down_console_msg(self.llm)
                 return
             raise
         new_role = role_for_intent(intent)
@@ -3467,11 +3513,15 @@ class Session:
             # tools le ordena "write_file AHORA", incorrecto para reviewer).
             self._explore_budget.write_pressure = False
         elif new_role == Role.ANALYZE:
-            self._analyze_budget.max_calls = ANALYZE_EXPLORE_BUDGET
-            self._analyze_budget.max_reads_after_explore = ANALYZE_MAX_READS_AFTER_EXPLORE
+            from core.model_profiles import analyze_budget_for
+
+            self._analyze_budget.max_calls, self._analyze_budget.max_reads_after_explore = \
+                analyze_budget_for(self.llm)
         elif new_role == Role.PLAN:
-            self._analyze_budget.max_calls = PLAN_EXPLORE_BUDGET
-            self._analyze_budget.max_reads_after_explore = PLAN_MAX_READS_AFTER_EXPLORE
+            from core.model_profiles import plan_budget_for
+
+            self._analyze_budget.max_calls, self._analyze_budget.max_reads_after_explore = \
+                plan_budget_for(self.llm)
         self._reset_turn_state()
         # Los overrides de write_file (habilitados tras fallar la cirugía fina
         # de edit_file) son por TURNO: limpiar para que el próximo turno
@@ -4109,13 +4159,17 @@ class Session:
                             "corregir…[/yellow]\n"
                         )
                         self._messages.append(HumanMessage(
-                            f"⛔ Tu respuesta cita evidencia que NO existe en "
-                            f"disco: {shown}. Cada [archivo:línea] debe ser un "
-                            f"archivo REAL del repo con la línea dentro del "
-                            f"rango (la línea 0 no existe). Corregí el informe "
-                            f"citando SOLO paths que leíste con tools, o marcá "
-                            f"esos puntos como NO verificados sin citarlos. "
-                            f"Respondé el informe corregido AHORA."
+                            f"⛔ Tu respuesta cita evidencia con formato que NO "
+                            f"verifica en disco: {shown}. OJO: esto suele ser "
+                            f"formato (nombre pelado sin el path desde la raíz, "
+                            f"línea mal copiada), no contenido inventado: lo que "
+                            f"ya verificaste vía cm__get_code_snippet o queries "
+                            f"del grafo VALE — no lo retractes, corregí el "
+                            f"formato de la cita al path completo desde la raíz "
+                            f"con la línea dentro del rango (la línea 0 no "
+                            f"existe). Solo marcá como NO verificado lo que de "
+                            f"verdad no pudiste confirmar. Respondé el informe "
+                            f"corregido AHORA."
                         ))
                         messages_for_agent = list(self._messages)
                         continue
@@ -4353,7 +4407,7 @@ class Session:
                 continue
             except Exception as e:
                 if _is_llama_connection_error(e):
-                    _llama_down_console_msg()
+                    _llm_down_console_msg(self.llm)
                     turn_failed = True
                     interrupted = True
                     break
@@ -5109,6 +5163,7 @@ class Session:
     def get_status(self) -> dict:
         usage = get_usage()
         total = usage["session"]["prompt"] + usage["session"]["completion"]
+        llm = getattr(self, "llm", None)
         return {
             "branch": _git_branch(self.repo_path),
             "tokens": total,
@@ -5119,7 +5174,128 @@ class Session:
             "confirm_pending": self.confirm_pending(),
             "confirm_imminent": self.confirm_imminent(),
             "auto_approve": self._auto_approve,
+            # LLM REAL de la sesión (no el config): el header de la TUI lo
+            # muestra y /model lo actualiza en caliente.
+            "model": getattr(llm, "model_name", "") or "",
+            "llm_base": getattr(llm, "base_url", "") or "",
+            "transport": getattr(llm, "transport", "chat") or "chat",
+            "reasoning": getattr(llm, "reasoning_effort", None),
         }
+
+    def slash_model(self, arg: str) -> str:
+        """Comando /model: parsea y delega en switch_model. Retorna texto."""
+        tokens = (arg or "").split()
+        if not tokens:
+            ok, msg = self.switch_model()
+            return msg
+        if tokens[0].strip().lower() == "local":
+            ok, msg = self.switch_model(provider="local")
+            return msg
+        model = tokens[0].strip()
+        reasoning = None
+        if len(tokens) > 1 and tokens[1].strip().lower() in ("low", "medium", "high"):
+            reasoning = tokens[1].strip().lower()
+        ok, msg = self.switch_model(model=model, reasoning=reasoning)
+        return msg
+
+    def switch_model(
+        self,
+        model: str | None = None,
+        provider: str | None = None,
+        reasoning: str | None = None,
+    ) -> tuple[bool, str]:
+        """Cambia el LLM en caliente (comando /model): reconstruye self.llm,
+        invalida el agente (se reconstruye en el próximo turno) y persiste la
+        elección en tu config (~/.config/agent-devs/config.json). Sin red salvo validación local.
+
+        Retorna (ok, mensaje para mostrar en el panel).
+        """
+        from llm_config import (
+            is_local_url,
+            load_file_config,
+            needs_messages_api,
+            resolve_llm,
+            resolve_reasoning,
+            save_config,
+            transport_for,
+        )
+
+        current = getattr(self, "llm", None)
+        cur_temp = getattr(current, "temperature", 0.2) or 0.2
+        cur_max = getattr(current, "max_tokens", 4096) or 4096
+
+        # Formas: /model local | /model <id> [low|medium|high] | /model (lista)
+        if model is None and provider is None:
+            status = self.get_status()
+            lines = [
+                f"🤖 Actual: {status['model'] or '?'} "
+                f"({status['transport']}"
+                + (f" · reasoning {status['reasoning']}" if status.get("reasoning") else "")
+                + ")",
+                "   Usá: /model <id> [low|medium|high] · /model local · /model <id> en opencode",
+            ]
+            try:
+                from llm_config import active_config_file, fetch_opencode_models, is_free_model
+
+                mods = fetch_opencode_models(
+                    resolve_llm(provider_override="opencode")["api_key"],
+                    resolve_llm(provider_override="opencode")["base_url"],
+                )
+                shown = [m["id"] for m in mods if is_free_model(m) is not True][:30]
+                lines.append("   Disponibles (pago, van por este harness): " + ", ".join(shown))
+                lines.append(f"   Detalle: agent-devs --list-models  (config: {active_config_file()})")
+            except Exception as e:
+                lines.append(f"   (no pude listar Zen: {str(e)[-120:]})")
+            return True, "\n".join(lines)
+
+        if (model or "").strip().lower() == "local":
+            resolved = resolve_llm(provider_override="local")
+        else:
+            if model and needs_messages_api(model):
+                return False, (
+                    f"❌ '{model}' solo sale por API Anthropic (sin soporte). "
+                    "Probá /model muse-spark-1.3 o /model deepseek-v4.1-flash."
+                )
+            resolved = resolve_llm(provider_override=provider or "opencode",
+                                   model_override=model,
+                                   reasoning_override=reasoning)
+            if resolved["provider"] == "opencode" and not resolved["api_key"]:
+                return False, "❌ Sin API key de OpenCode — corré agent-devs --setup-opencode."
+
+        new_llm = LocalLLM(
+            base_url=resolved["base_url"],
+            model_name=resolved["model"],
+            temperature=cur_temp,
+            max_tokens=cur_max,
+            api_key=resolved["api_key"] or "not-needed",
+            transport=resolved.get("transport") or "chat",
+            reasoning_effort=resolved.get("reasoning") or None,
+        )
+        self.llm = new_llm
+        self.agent = None  # el próximo turno lo reconstruye con el nuevo LLM
+        try:
+            from core.model_profiles import analyze_budget_for, match_profile
+
+            self._model_profile = match_profile(resolved["model"])
+            # El budget sigue al proveedor (nube amplio, local ajustado).
+            self._analyze_budget.max_calls, self._analyze_budget.max_reads_after_explore = \
+                analyze_budget_for(new_llm)
+        except Exception:
+            pass
+        # Persistir para futuros arranques (json-first: sin flags alcanza).
+        try:
+            cfg = load_file_config()
+            cfg["provider"] = resolved["provider"]
+            if resolved["provider"] == "opencode":
+                cfg["opencode_model"] = resolved["model"]
+                if reasoning:
+                    cfg["opencode_reasoning"] = resolve_reasoning(reasoning)
+            save_config(cfg)
+        except Exception:
+            pass
+        where = "local (llama.cpp)" if is_local_url(resolved["base_url"]) else resolved["base_url"]
+        extra = f" · reasoning {resolved['reasoning']}" if resolved.get("transport") == "responses" else ""
+        return True, f"✅ LLM ahora: {resolved['model']} ({where}{extra}). Próximo turno lo usa."
 
     def close(self):
         pass

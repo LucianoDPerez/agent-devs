@@ -298,27 +298,32 @@ class FullscreenTUI(App):
         """Header FIJO arriba (estilo opencode): info del entorno del harness.
 
         No scrollea: queda clavado en el tope; solo el RichLog del medio
-        scrollea. Toma los datos de status_provider() (repo/branch/tools) +
-        config del LLM.
+        scrollea. Toma los datos de status_provider() (repo/branch/tools +
+        LLM REAL de la sesión).
         """
-        from config import (
-            LLM_BASE_URL,
-            LLM_MODEL_NAME,
-        )
-        from llm_wrapper import detect_server_model
+        from config import LLM_BASE_URL
 
-        if self._model_name is None:
-            # Modelo REAL cargado en llama-server (el config puede quedar
-            # viejo si el usuario carga otro modelo). Fail-open a config.
-            self._model_name = detect_server_model(LLM_BASE_URL) or LLM_MODEL_NAME
         try:
             st = self.status_provider() or {}
         except Exception:
             st = {}
+        if self._model_name is None:
+            # Placeholder hasta el primer status con modelo real.
+            self._model_name = st.get("model") or "-"
+        # El header sigue a la sesión (incluye /model en caliente).
+        _live_model = st.get("model") or self._model_name
+        _transport = st.get("transport") or "chat"
+        _reasoning = st.get("reasoning")
+        if _transport == "responses" and _reasoning:
+            _live_model = f"{_live_model} [{_reasoning}]"
+        elif _transport != "chat" and _transport:
+            _live_model = f"{_live_model} ({_transport})"
+        self._model_name = _live_model
         repo = (st.get("repo") or "-").rstrip("/").split("/")[-1]
         branch = st.get("branch", "-")
+        _base_shown = st.get("llm_base") or LLM_BASE_URL
         lines = [
-            (" 🔌 LLM: ", "cyan bold"), (LLM_BASE_URL, ""),
+            (" 🔌 LLM: ", "cyan bold"), (_base_shown, ""),
             ("   📁 ", "cyan bold"), (repo, ""), ("  🌿 ", "green bold"), (branch, ""),
         ]
         right = [

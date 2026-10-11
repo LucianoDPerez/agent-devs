@@ -1,0 +1,8 @@
+{
+  "_nota": "Copiá esto a ~/.config/agent-devs/config.json y poné tu key. Nunca lo commitees. También vale OPENCODE_API_KEY en env o .env.",
+  "provider": "opencode",
+  "opencode_api_key": "oc_sk_...",
+  "opencode_model": "muse-spark-1.3",
+  "opencode_reasoning": "medium",
+  "opencode_base_url": "https://opencode.ai/zen/v1"
+}

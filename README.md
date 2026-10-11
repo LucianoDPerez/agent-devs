@@ -170,7 +170,7 @@ AgentDevs is designed for small models and works well on bounded tasks, but it h
 
 - **Agent not responding / hangs on start** → almost certainly the model is missing: run `agent-devs doctor`; if it says "nobody answers on http://localhost:8080", start llama-server.
 - **`cm__*` tools missing** → codebase-memory-mcp is missing; the doctor installs it on macOS/Linux.
-- **Want another port/model** → edit `LLM_BASE_URL` and `LLM_MODEL_NAME` in `config.py`.
+- **Want another port/model** → live with `/model` (e.g. `/model muse-spark-1.3 high`, `/model local`); or flags `--provider/--model/--reasoning`; or pinned in `~/.config/agent-devs/config.json`. Only touch `LLM_BASE_URL` in `config.py` if you run llama.cpp on another port.
 
 ## Contact
 

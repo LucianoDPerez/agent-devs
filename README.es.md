@@ -160,7 +160,7 @@ El límite de contexto se **detecta del server** (`/props` de llama.cpp): cuando
 
 - **El agente no responde / cuelga al iniciar** → casi seguro falta el modelo: corré `agent-devs doctor`; si dice "nadie responde en http://localhost:8080", levantá llama-server.
 - **No aparecen las tools `cm__*`** → falta codebase-memory-mcp; el doctor lo instala en macOS/Linux.
-- **Quiero usar otro puerto/modelo** → editá `LLM_BASE_URL` y `LLM_MODEL_NAME` en `config.py`.
+- **Quiero usar otro puerto/modelo** → en caliente con `/model` (ej. `/model muse-spark-1.3 high`, `/model local`); o con flags `--provider/--model/--reasoning`; o fijo en `~/.config/agent-devs/config.json`. Solo si usás llama.cpp en otro puerto tocá `LLM_BASE_URL` en `config.py`.
 
 ## Limitaciones conocidas (léelas antes de usar)
 

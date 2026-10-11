@@ -53,6 +53,9 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+# agent-devs: credenciales del proveedor LLM (nunca commitear)
+.agent-devs.json
+agent-devs-config.json
 
 # Project specific
 .atl/
