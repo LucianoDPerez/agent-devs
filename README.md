@@ -90,6 +90,16 @@ The doctor (`agent-devs --doctor`) detects your RAM and highlights your tier. Su
 > We only recommend families that passed our bench with real tool calling. Base Qwen3 is untested here — not recommended.
 > Workflow that pays off: plan with a frontier model, execute locally, and judge with a different model than the executor.
 
+**Or skip the local model and use the cloud** (OpenCode Zen, OpenAI-compatible API — no llama-server needed):
+
+```bash
+agent-devs --setup-opencode   # saves your key to ~/.config/agent-devs/config.json (mode 600)
+agent-devs --list-models      # catalog with free vs paid + protocol (chat/responses)
+agent-devs --provider opencode --model muse-spark-1.3 --reasoning medium .
+```
+
+Everything also lives in the config file (`provider`, `opencode_api_key`, `opencode_model`, `opencode_base_url`, `opencode_reasoning: low|medium|high`), so plain `agent-devs .` is enough once set — flags only override, and `/model` switches live inside the session (and persists). Check what's active with `agent-devs --show-config` (key masked). Notes: free (`🆓`) models only work inside OpenCode itself; `gpt-*`/`muse-spark-*`/`grok-*` use the Responses API (auto-detected) with native reasoning levels; `claude-*` need the Anthropic API (unsupported). Cloud ANALYZE/PLAN gets roomier tool budgets than local; EXECUTE/REVIEW keep the tight anti-loop ones.
+
 **2. Go to any project and talk to it:**
 
 ```bash
@@ -137,9 +147,14 @@ agent-devs --doctor       # verify the environment and install what's missing
 agent-devs --update       # update this installation (git pull + reinstall)
 agent-devs --list         # list already-analyzed repos (cache)
 agent-devs --analyze REPO # pre-analyze a repo without opening a session
+agent-devs --provider opencode --model <id> [--reasoning low|medium|high]
+                          # cloud session (overrides the config file)
+agent-devs --list-models  # OpenCode catalog: free vs paid + protocol
+agent-devs --show-config  # effective config (key masked)
+agent-devs --setup-opencode  # save your OpenCode key (mode 600)
 ```
 
-Inside the session: **ESC** cancels the running turn · **Ctrl+C ×2** quits · `/new` new session (clears the panel) · `/compact` summarizes the history to free context · `/history` last turns (with id) · `/resume <id>` resumes a previous session · `/autoapprove [on|off]` approves writes without asking (commit stays manual; `/new` turns it off) · `/verify` runs lint/tests/build now · `/commit todo|sesion [message|ai]` commits (`ai` lets the LLM write the message from the staged diff) · `/tasks-pool T001-T010 [file] [--commit]` runs tasks autonomously, one fresh turn each (no context buildup) · `/help` help. Typing `/` opens the command menu (↑/↓ navigate, Enter runs, Tab completes, Esc closes).
+Inside the session: **ESC** cancels the running turn · **Ctrl+C ×2** quits · `/new` new session (clears the panel) · `/compact` summarizes the history to free context · `/history` last turns (with id) · `/resume <id>` resumes a previous session · `/model [id|local] [low|medium|high]` switches LLM live (persists to the config) · `/autoapprove [on|off]` approves writes without asking (commit stays manual; `/new` turns it off) · `/verify` runs lint/tests/build now · `/commit todo|sesion [message|ai]` commits (`ai` lets the LLM write the message from the staged diff) · `/tasks-pool T001-T010 [file] [--commit]` runs tasks autonomously, one fresh turn each (no context buildup) · `/help` help. Typing `/` opens the command menu (↑/↓ navigate, Enter runs, Tab completes, Esc closes).
 
 The context limit is **detected from the server** (`/props` of llama.cpp): when the session reaches ~80%, AgentDevs warns you and offers to compact; at 90% it compacts automatically.
 
