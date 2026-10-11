@@ -26,7 +26,7 @@ COMMANDS: tuple[tuple[str, str, bool], ...] = (
     ("/commit", "Lista pendientes o commitea: /commit | /commit todo|sesion [mensaje|ai]", True),
     ("/push", "Pushea la rama actual: /push [remote]", True),
     ("/pr", "Abre PR de la rama actual con gh: /pr [base]", True),
-    ("/model", "LLM en caliente: /model | /model <id> [low|medium|high] | /model local", True),
+    ("/model", "LLM en caliente: /model | /model <id> [low|medium|high] | /model local|opencode", True),
     ("/help", "Muestra esta ayuda de comandos", False),
 )
 

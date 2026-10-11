@@ -5188,8 +5188,13 @@ class Session:
         if not tokens:
             ok, msg = self.switch_model()
             return msg
-        if tokens[0].strip().lower() == "local":
+        first = tokens[0].strip().lower()
+        if first == "local":
             ok, msg = self.switch_model(provider="local")
+            return msg
+        if first in ("opencode", "nube", "cloud"):
+            # Vuelve a tu nube del json (modelo + reasoning configurados).
+            ok, msg = self.switch_model(provider="opencode")
             return msg
         model = tokens[0].strip()
         reasoning = None

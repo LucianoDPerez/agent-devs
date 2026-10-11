@@ -113,6 +113,24 @@ class TestSwitchModel:
         bad = s.slash_model("claude-haiku-4-5")
         assert "Anthropic" in bad
 
+    def test_slash_opencode_returns_to_json(self, tmp_path, monkeypatch):
+        import llm_config
+
+        cfg = tmp_path / "cfg.json"
+        cfg.write_text(json.dumps({
+            "provider": "opencode",
+            "opencode_api_key": "oc_sk_fake",
+            "opencode_model": "muse-spark-1.3",
+            "opencode_reasoning": "high",
+        }))
+        monkeypatch.setattr(llm_config, "CONFIG_FILE", cfg)
+        monkeypatch.setattr(llm_config, "LEGACY_CONFIG_FILE", tmp_path / "old.json")
+        s = _session(tmp_path, _local_llm())
+        msg = s.slash_model("opencode")
+        assert "muse-spark-1.3" in msg
+        assert s.llm.model_name == "muse-spark-1.3"
+        assert s.llm.reasoning_effort == "high"
+
     def test_status_exposes_llm(self, tmp_path):
         llm = _local_llm(base_url="https://opencode.ai/zen/v1", model_name="muse-spark-1.3",
                          api_key="k", transport="responses", reasoning_effort="high")
