@@ -1172,6 +1172,10 @@ class Session:
         self._turn_saw_pass = False
         self._turn_verify_failed = False
         self._turn_writes_after_pass = False
+        # Resultado del último turno (lo lee el pool de tareas para frenar
+        # ante fallos). Vive a nivel sesión; se resetea por turno.
+        self._last_turn_failed = False
+        self._last_turn_interrupted = False
         # Última verificación corrida FUERA del turno (/verify o gate de
         # commit): {"passed": bool, "report": str} o None. Los rojos no se
         # evaporan entre turnos (E2E: /verify con tests ❌ y el "implementar"
@@ -1509,9 +1513,12 @@ class Session:
     def slash_task_pool(self, arg: str) -> dict | None:
         """Comando /tasks-pool — pool autónomo de tareas con turno fresco c/u.
 
-        Sintaxis: /tasks-pool T001-T010 [archivo-tareas] [--commit]
+        Sintaxis: /tasks-pool T001-T010 [archivo-tareas] [--commit] [--continue]
         Sin rango: usa los números citados (T003, tareas 1 y 2). Sin archivo:
         el prompt cita solo el N y la maquinaria pinnada resuelve.
+        El pool FRENA ante la primera tarea fallida (listas ordenadas: seguir
+        sobre una base rota quema tokens y arrastra el error). --continue
+        restaura el modo viejo (registrar y seguir).
         """
         from orchestration.execute_bootstrap import (
             extract_requested_task_numbers,
@@ -1521,7 +1528,8 @@ class Session:
 
         text = (arg or "").strip()
         commit_each = "--commit" in text
-        text = text.replace("--commit", "").strip()
+        continue_on_fail = "--continue" in text
+        text = text.replace("--commit", "").replace("--continue", "").strip()
         numbers: list[int] = []
         tasks_file: str | None = None
         rng = extract_task_range(text)
@@ -1532,7 +1540,7 @@ class Session:
         tasks_file = extract_tasks_file_path(text)
         if not numbers:
             console.print(
-                "[yellow]Uso: /tasks-pool T001-T010 [archivo] [--commit][/yellow]\n"
+                "[yellow]Uso: /tasks-pool T001-T010 [archivo] [--commit] [--continue][/yellow]\n"
                 "[dim]Ej: /tasks-pool T001-T003 plans/tareas.md --commit[/dim]"
             )
             return None
@@ -1540,9 +1548,11 @@ class Session:
             f"[bold cyan]Pool autónomo: {len(numbers)} tareas "
             f"({numbers[0]:03d}→{numbers[-1]:03d})[/bold cyan]"
             + (" + commit por tarea" if commit_each else "")
+            + (" (sigue aunque fallen)" if continue_on_fail else " (frena ante el primer fallo)")
             + "\n[dim]Un turno fresco por tarea (sin acumular contexto).[/dim]\n"
         )
-        return self.run_task_pool(numbers, tasks_file, commit_each)
+        return self.run_task_pool(numbers, tasks_file, commit_each,
+                                  stop_on_fail=not continue_on_fail)
 
     def _fresh_pool_turn(self) -> None:
         """Aislamiento por tarea del pool: conserva SystemMessages (system
@@ -1588,16 +1598,20 @@ class Session:
             return set()
 
     def run_task_pool(self, numbers: list[int], tasks_file: str | None = None,
-                      commit_each: bool = False) -> dict:
+                      commit_each: bool = False, stop_on_fail: bool = True) -> dict:
         """Ejecuta tareas T en secuencia autónoma, un turno fresco por tarea.
 
         Cada tarea corre `run_turn("implementar Tarea N [de <file>]")` con la
         maquinaria pinnada existente (scope, budgets) y el historial truncado
         antes de arrancar. Si commit_each, commitea alcance sesion por tarea.
-        Un fallo no frena el pool: se registra y sigue. Retorna resumen.
+        Por defecto FRENA ante la primera tarea fallida (listas ordenadas:
+        seguir sobre una base rota quema tokens y arrastra el error — E2E
+        T02 falló sin escribir y el pool igual avanzó a T03). Con
+        stop_on_fail=False se registra y sigue (modo viejo). Retorna resumen.
         """
         results: list[dict] = []
-        for n in numbers:
+        stopped_early = False
+        for idx, n in enumerate(numbers):
             self._fresh_pool_turn()
             touched_before = set(self._session_touched_files)
             prompt = f"implementar Tarea {n}"
@@ -1606,6 +1620,8 @@ class Session:
             status = "ok"
             try:
                 self.run_turn(prompt)
+                if getattr(self, "_last_turn_failed", False):
+                    status = "fallida (el turno no completó — ver salida arriba)"
             except Exception as e:  # noqa: BLE001
                 status = f"error: {e}"
             committed = ""
@@ -1636,15 +1652,34 @@ class Session:
                 except Exception as e:  # noqa: BLE001
                     committed = f"falló: {e}"
             results.append({"tarea": n, "status": status, "commit": committed})
+            if status != "ok" and stop_on_fail:
+                stopped_early = True
+                remaining = numbers[idx + 1:]
+                resume = ""
+                if remaining:
+                    rng = f"T{remaining[0]:03d}-T{remaining[-1]:03d}"
+                    resume = (
+                        f" Reanudá con: /tasks-pool {rng}"
+                        + (f" {tasks_file}" if tasks_file else "")
+                    )
+                console.print(
+                    f"\n[bold red]⛔ Pool detenido en T{n:03d} "
+                    f"(fallida).[/bold red]{resume}\n"
+                    "[dim]Para seguir igual aunque fallen: "
+                    "/tasks-pool ... --continue[/dim]"
+                )
+                break
         done = [r for r in results if r["status"] == "ok"]
         summary = {
             "total": len(results), "ok": len(done),
             "fallidas": [r["tarea"] for r in results if r["status"] != "ok"],
             "detalle": results,
+            "stopped_early": stopped_early,
         }
         console.print(
             f"\n[bold]Pool: {summary['ok']}/{summary['total']} tareas OK[/bold]"
             + (f" — fallidas: {summary['fallidas']}" if summary["fallidas"] else "")
+            + (" (detenido ante el primer fallo)" if stopped_early else "")
         )
         return summary
 
@@ -3414,6 +3449,9 @@ class Session:
         self._turn_saw_pass = False
         self._turn_verify_failed = False
         self._turn_writes_after_pass = False
+        # Resultado del turno anterior (lo lee el pool): reset al arrancar.
+        self._last_turn_failed = False
+        self._last_turn_interrupted = False
         # Alcance pinnado por tarea (breaker de scope creep): se recalcula
         # abajo para EXECUTE con Tarea(s) pinnada(s). Los retries del turno
         # reutilizan el mismo dedupe → el contador persiste en el turno.
@@ -3421,9 +3459,11 @@ class Session:
         self._dedupe.scope_files = frozenset()
         self._dedupe.scope_violations = {}
         # Contadores anti-loop por TURNO (los retries NO los borran): writes
-        # a planificación protegida y edits no-op. Solo la sesión limpia.
+        # a planificación protegida, edits no-op y rechazos quirúrgicos de
+        # edit_file (escalamiento a write_file). Solo la sesión limpia.
         self._dedupe.protected_rejects = {}
         self._dedupe.noop_rejects = {}
+        self._dedupe.edit_reject_counts = {}
         self._dedupe.fail_guides = {}
         # Primer fallo de verify del turno (lo llena el wrapper): el gate lo
         # usa para enfocar el fix. Se limpia por turno, no por retry.
@@ -4656,6 +4696,13 @@ class Session:
                 tokens_used=turn_tokens,
             )
         self._flush_evidence()
+        # Resultado del turno para consumidores programáticos (pool de
+        # tareas): run_turn no retorna nada ni lanza ante un turno fallido,
+        # así que el pool no podía distinguir "ok" de "fallido" y seguía con
+        # la siguiente tarea sobre una base rota (E2E T02 falló sin escribir
+        # y el pool igual avanzó a T03).
+        self._last_turn_failed = bool(turn_failed)
+        self._last_turn_interrupted = bool(interrupted)
 
         # Summary del turno: en modo --tui (full-screen) se omite — el panel
         # queda limpio solo con "vos ›" + respuesta del LLM; el summary era

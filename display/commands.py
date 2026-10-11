@@ -22,7 +22,7 @@ COMMANDS: tuple[tuple[str, str, bool], ...] = (
     ("/resume", "Retoma una sesión anterior: /resume <id>", True),
     ("/autoapprove", "Aprueba escrituras sin preguntar: /autoapprove [on|off]", True),
     ("/verify", "Corre lint/tests/build del repo ahora", False),
-    ("/tasks-pool", "Pool autónomo: /tasks-pool T001-T010 [archivo] [--commit]", True),
+    ("/tasks-pool", "Pool autónomo: /tasks-pool T001-T010 [archivo] [--commit] [--continue]", True),
     ("/commit", "Lista pendientes o commitea: /commit | /commit todo|sesion [mensaje|ai]", True),
     ("/push", "Pushea la rama actual: /push [remote]", True),
     ("/pr", "Abre PR de la rama actual con gh: /pr [base]", True),

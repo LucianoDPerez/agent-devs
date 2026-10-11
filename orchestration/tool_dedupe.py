@@ -168,6 +168,13 @@ class ToolCallDedupe:
         # La sesión los limpia por TURNO (run_turn), no reset().
         self.protected_rejects: dict[str, int] = {}
         self.noop_rejects: dict[str, int] = {}
+        # Rechazos quirúrgicos de edit_file POR PATH (escalamiento a
+        # write_file completo): misma razón — el contador vivía en el closure
+        # de wrap_tools_with_dedupe y cada rebuild lo reseteaba, así que el
+        # overwrite NUNCA se desbloqueaba en tareas de reemplazo total
+        # (E2E real T02: PASS1 juntó 1 rechazo + compuerta 2 más, siempre
+        # desde cero). La sesión lo limpia por TURNO en _reset_turn_state.
+        self.edit_reject_counts: dict[str, int] = {}
         # Guía dinámica ante fallos POR (tool, path): vive en el dedupe por
         # la misma razón (los retries reconstruyen el closure). La sesión lo
         # limpia por turno (run_turn), no reset().
@@ -795,8 +802,13 @@ def wrap_tools_with_dedupe(
     # Rechazos del guard quirúrgico de edit_file por path: al llegar al tope,
     # se habilita write_file completo para ese archivo (escalamiento de
     # estrategia — el modelo no converge con cirugía fina en cambios
-    # estructurales). El estado vive en este closure: se recrea por agente.
-    edit_rejections: dict[str, int] = {}
+    # estructurales). El estado vive EN EL DEDUPE COMPARTIDO (no en este
+    # closure: los retries reconstruyen el agente y el closure se recrea —
+    # ver ToolCallDedupe.edit_reject_counts). Compat: dedupes viejos sin el
+    # atributo lo inicializan acá.
+    if not isinstance(getattr(dedupe, "edit_reject_counts", None), dict):
+        dedupe.edit_reject_counts = {}
+    edit_rejections: dict[str, int] = dedupe.edit_reject_counts
     if explore_budget is not None:
         # El wrapper decide el tope write→verify POST-ejecución (raise solo
         # para writes efectivos + refund de fallidos). consume() directo

@@ -739,3 +739,67 @@ def test_write_bloqueado_no_cuenta_como_escrito(tmp_path):
     r2 = w.invoke({"path": str(p), "old_str": "x = 1", "new_str": "x = 2"})
     assert r2.startswith("✅")
     assert logged.names == {"edit_file"}  # éxito sí cuenta
+
+
+class TestEditEscalationAcrossRebuilds:
+    """E2E T02: el contador de rechazos quirúrgicos vivía en el closure del
+    wrapper y cada rebuild (retry) lo reseteaba — el overwrite nunca se
+    desbloqueaba y el reemplazo total de archivo era imposible."""
+
+    def _wrapped_edit(self, dd, repo):
+        from orchestration.tool_dedupe import ExploreBudget, wrap_tools_with_dedupe
+        from tools.filesystem import edit_file
+
+        return wrap_tools_with_dedupe(
+            [edit_file], dd, ExploreBudget(), repo_path=str(repo))[0]
+
+    def test_rechazos_acumulan_entre_rebuilds_y_desbloquean(self, tmp_path):
+        from orchestration.tool_dedupe import ToolCallDedupe
+        from tools.filesystem import WRITE_OVERRIDE_PATHS, clear_write_overrides
+
+        clear_write_overrides()
+        content = "\n".join(f"const line_{i} = {i};" for i in range(20)) + "\n"
+        p = tmp_path / "dotenv.ts"
+        p.write_text(content, encoding="utf-8")
+        args = {"path": str(p), "old_str": content, "new_str": "const x = 1;\n"}
+
+        from tools.filesystem import read_file
+
+        read_file.invoke({"path": str(p)})
+        dd = ToolCallDedupe(max_repeats=9)
+        # PASS1: un rechazo (como el intento que murió en thinking-timeout).
+        w1 = self._wrapped_edit(dd, tmp_path)
+        r1 = w1.invoke(args)
+        assert "QUIRÚRGICAS" in r1
+        # Retry = rebuild con el MISMO dedupe: el 2º rechazo debe desbloquear.
+        w2 = self._wrapped_edit(dd, tmp_path)
+        r2 = w2.invoke(args)
+        assert "CABIÁ" in r2 or "CAMBIÁ" in r2
+        assert str(p.resolve()) in {
+            str(__import__("pathlib").Path(o).resolve())
+            for o in WRITE_OVERRIDE_PATHS
+        }
+        clear_write_overrides()
+
+    def test_write_funciona_tras_desbloqueo(self, tmp_path):
+        from orchestration.tool_dedupe import ToolCallDedupe, wrap_tools_with_dedupe
+        from tools.filesystem import clear_write_overrides, write_file
+
+        clear_write_overrides()
+        content = "\n".join(f"const line_{i} = {i};" for i in range(20)) + "\n"
+        p = tmp_path / "dotenv.ts"
+        p.write_text(content, encoding="utf-8")
+
+        from tools.filesystem import read_file
+
+        read_file.invoke({"path": str(p)})
+        dd = ToolCallDedupe(max_repeats=9)
+        w = self._wrapped_edit(dd, tmp_path)
+        w.invoke({"path": str(p), "old_str": content, "new_str": "a"})
+        w.invoke({"path": str(p), "old_str": content, "new_str": "b"})
+        ww = wrap_tools_with_dedupe(
+            [write_file], dd, None, repo_path=str(tmp_path))[0]
+        out = ww.invoke({"path": str(p), "content": "const x = 1;\n"})
+        assert out.startswith("✅")
+        assert p.read_text() == "const x = 1;\n"
+        clear_write_overrides()

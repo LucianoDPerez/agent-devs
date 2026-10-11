@@ -1075,3 +1075,65 @@ def test_readonly_evidence_falso_sin_cache_ni_calls(tmp_path):
     s._read_cache.clear()
     resp = "DONE ```algo``` sin haber leído nada"
     assert s._readonly_evidence_turn(resp) is False
+
+
+def test_pool_frena_ante_primer_fallo(tmp_path):
+    """E2E T02: el turno falló sin escribir y el pool igual avanzó a T03
+    sobre base rota. Por defecto el pool FRENA y dice cómo reanudar."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    calls = []
+
+    def _fake_run_turn(prompt):
+        calls.append(prompt)
+        s._last_turn_failed = ("Tarea 2" in prompt)
+
+    s.run_turn = _fake_run_turn
+    summary = s.run_task_pool([1, 2, 3], tasks_file="deuda/tareas.json")
+    assert [c for c in calls] == [
+        "implementar Tarea 1 de deuda/tareas.json",
+        "implementar Tarea 2 de deuda/tareas.json",
+    ]
+    assert summary["ok"] == 1
+    assert summary["fallidas"] == [2]
+    assert summary["stopped_early"] is True
+
+
+def test_pool_continue_sigue_tras_fallo(tmp_path):
+    """--continue restaura el modo viejo: registra y sigue."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    calls = []
+
+    def _fake_run_turn(prompt):
+        calls.append(prompt)
+        s._last_turn_failed = ("Tarea 2" in prompt)
+
+    s.run_turn = _fake_run_turn
+    summary = s.run_task_pool([1, 2, 3], tasks_file="deuda/tareas.json",
+                              stop_on_fail=False)
+    assert len(calls) == 3
+    assert summary["ok"] == 2
+    assert summary["fallidas"] == [2]
+    assert summary["stopped_early"] is False
+
+
+def test_pool_excepcion_tambien_frena(tmp_path):
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+
+    def _boom(prompt):
+        s._last_turn_failed = False
+        if "Tarea 1" in prompt:
+            raise RuntimeError("llm caído")
+
+    s.run_turn = _boom
+    summary = s.run_task_pool([1, 2])
+    assert summary["fallidas"] == [1]
+    assert summary["stopped_early"] is True
