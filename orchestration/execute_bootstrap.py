@@ -41,6 +41,95 @@ _REL_FILE_RE = re.compile(
 _QUOTED_FILE_RE = re.compile(
     r"""['"]([^'"]+\.(?:md|txt|json|yml|yaml))['"]""",
 )
+# Paths absolutos SIN quotear pero CON espacios (E2E real:
+# "/tasks-pool T01-T06 ... /Users/lucho/PROYECTOS IA/Medicos/deuda/tareas.json"
+# se truncaba a "IA/Medicos/deuda/tareas.json" porque _ABS_FILE_RE corta en el
+# espacio y el pool construía "implementar Tarea 1 de IA/Medicos/..." que no
+# existe → preload vacío + banner engañoso + modelo a ciegas). Acepta todo
+# salvo saltos de línea y comillas/backticks; _try_add valida en disco
+# (is_file) así que los falsos positivos no cargan nada.
+_UNQUOTED_ABS_WITH_SPACES_RE = re.compile(
+    r"/[^\n'\"`]+?\.(?:md|txt|json|yml|yaml)",
+)
+
+# Sufijos de puntuación que el regex de arriba puede arrastrar al final de
+# una oración ("...tareas.json.", "...tasks.md,"): se recortan al validar.
+_TRAILING_PUNCT_RE = re.compile(r"[.,;:!?)\]]+$")
+
+# Fragmentos de sintaxis de comandos que NUNCA son parte de un path real:
+# si el candidato absoluto con espacios los contiene, es una fusión del
+# comando con el path ("/tasks-pool T001-T003 plans/tareas.md" — el path
+# real es el sufijo relativo "plans/tareas.md"). Se usa para no devolver
+# el gigante fusionado cuando el archivo no existe en disco.
+_COMMAND_FUSION_RE = re.compile(r"tasks-pool|--|\bT\d{1,4}\s*-\s*T?\d", re.IGNORECASE)
+
+
+def _looks_like_command_fusion(cand: str) -> bool:
+    """True si el candidato parece comando+path fusionados, no un path real."""
+    return bool(_COMMAND_FUSION_RE.search(cand or ""))
+
+
+def _clean_abs_candidate(raw: str) -> str:
+    """Recorta espacios y puntuación trailing de un candidato absoluto."""
+    return _TRAILING_PUNCT_RE.sub("", (raw or "").strip())
+
+
+def extract_tasks_file_path(text: str) -> str | None:
+    """Primer path de tareas (.md/.txt/.json/.yml/.yaml) citado en el texto.
+
+    Orden: quoteado (con espacios) → absoluto con espacios que EXISTA en
+    disco → fallback estricto sin espacios → absoluto con espacios sin
+    validar (último recurso). Fuente única para slash_task_pool y
+    _collect_cited_paths (antes cada uno tenía su regex y divergían: el pool
+    truncaba "PROYECTOS IA/..." a "IA/Medicos/..." mientras el preload no lo
+    encontraba).
+
+    La validación en disco evita que "/tasks-pool T001-T003 plans/tareas.md"
+    se devuelva como un path absoluto gigante (el regex con espacios come
+    desde el primer "/" hasta la extensión). Si ningún candidato existe,
+    se prefiere el estricto (relativo correcto) antes que el gigante.
+    """
+    if not text:
+        return None
+    m = _QUOTED_FILE_RE.search(text)
+    if m:
+        cand = (m.group(1) or "").strip()
+        if cand:
+            return cand
+    # Absolutos con espacios: juntar candidatos y preferir el más largo que
+    # EXISTA en disco. Sin validación, el match non-greedy desde el primer "/"
+    # fusiona comando + args + path en un solo string inexistente.
+    spaced: list[str] = []
+    for match in _UNQUOTED_ABS_WITH_SPACES_RE.finditer(text):
+        cand = _clean_abs_candidate(match.group(0))
+        if cand.startswith("/"):
+            spaced.append(cand)
+    if spaced:
+        # Fusión comando+path ("/tasks-pool T001-T003 plans/tareas.md"): el
+        # gigante contiene sintaxis de comando, nunca es un path real aunque
+        # sea el match más largo. Se descarta salvo que exista en disco
+        # (ya retornado arriba).
+        spaced_real = [c for c in spaced if not _looks_like_command_fusion(c)]
+        existing = [c for c in spaced_real if Path(c).is_file()]
+        if existing:
+            return max(existing, key=len)
+    m = re.search(r"([\w./-]+\.(?:md|txt|json|yml|yaml))", text)
+    strict = m.group(1) if m else None
+    if spaced:
+        candidates = [c for c in spaced if not _looks_like_command_fusion(c)]
+        if candidates:
+            longest = max(candidates, key=len)
+            # El path absoluto que el usuario tipeó no existe (todavía) en disco:
+            # si el fallback estricto es solo el sufijo del absoluto (típico
+            # truncado por espacios), devolver el absoluto completo que el
+            # usuario quiso decir, no el sufijo roto.
+            if strict and longest.endswith(strict) and longest != strict:
+                return longest
+    if strict:
+        return strict
+    if spaced:
+        return max(spaced, key=len)
+    return None
 
 # "Tarea 1", "tarea 2"
 _TASK_SINGULAR_RE = re.compile(r"\btarea\s+(\d+)\b", re.IGNORECASE)
@@ -625,6 +714,19 @@ def _collect_cited_paths(user_input: str, repo_path: str | None) -> list[Path]:
 
     for match in _QUOTED_FILE_RE.finditer(user_input):
         _try_add(Path(match.group(1)))
+        if len(cited) >= EXECUTE_PRELOAD_MAX_FILES:
+            return cited
+
+    # Absolutos sin quotear CON espacios (ver _UNQUOTED_ABS_WITH_SPACES_RE):
+    # el match más largo primero para no quedarse con un prefijo truncado.
+    # _try_add valida en disco, así que el ruido no carga nada.
+    _spaced: list[str] = []
+    for match in _UNQUOTED_ABS_WITH_SPACES_RE.finditer(user_input):
+        cand = _clean_abs_candidate(match.group(0))
+        if cand.startswith("/"):
+            _spaced.append(cand)
+    for cand in sorted(set(_spaced), key=len, reverse=True):
+        _try_add(Path(cand))
         if len(cited) >= EXECUTE_PRELOAD_MAX_FILES:
             return cited
 

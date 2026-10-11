@@ -987,3 +987,91 @@ def test_slash_task_pool_sin_numeros_muestra_uso(tmp_path):
     repo = _init_repo(tmp_path)
     s = Session(llm=None, repo_path=str(repo))
     assert s.slash_task_pool("hola") is None
+
+
+def test_verified_noop_turn_cierra_segundo_retry(tmp_path):
+    """E2E real T01 ya-hecha: intento 1 verificó en verde, intento 2 (retry
+    write-only sin verify tools) solo hizo git_status. El guard debe cerrar
+    sin otro retry aunque el intento actual no tenga verify."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    _old_commit(repo)
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools = {"git_status"}
+    s._turn_wrote = False
+    s._turn_saw_pass = True
+    s._turn_verify_results = {"run_verify": True}
+    s._turn_writes_after_pass = False
+    assert s._verified_noop_turn() is True
+
+
+def test_verified_noop_turn_falso_con_escrituras(tmp_path):
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    _old_commit(repo)
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools = {"git_status", "edit_file"}
+    s._turn_wrote = True
+    s._turn_saw_pass = True
+    s._turn_verify_results = {"run_verify": True}
+    assert s._verified_noop_turn() is False
+
+
+def test_verified_noop_turn_falso_con_cambios(tmp_path):
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    (repo / "README.md").write_text("# repo\n\nPENDIENTE\n")
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools = {"git_status"}
+    s._turn_wrote = False
+    s._turn_saw_pass = True
+    s._turn_verify_results = {"run_verify": True}
+    assert s._verified_noop_turn() is False
+
+
+def test_verified_noop_turn_falso_sin_verify(tmp_path):
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    _old_commit(repo)
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools = {"git_status"}
+    s._turn_wrote = False
+    s._turn_saw_pass = False
+    s._turn_verify_results = {}
+    assert s._verified_noop_turn() is False
+
+
+def test_readonly_evidence_cuenta_read_cache_tras_retry(tmp_path):
+    """E2E 4B: PASS1 leyó package.json (cache sobrevive), retry solo texto con
+    code block + path real. _called_tools del intento está vacío por el clear
+    del retry, pero el turno SÍ tiene evidencia → cerrar sin reintentar."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    (repo / "package.json").write_text('{"dependencies": {"dotenv": "^18.0.7"}}\n')
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools.clear()
+    s._read_cache["/tmp/pool-e2e/package.json"] = '{"dependencies": {"dotenv": "^18.0.7"}}'
+    resp = (
+        "Tarea 1 DONE. Evidencia: package.json muestra dotenv:\n"
+        "```json\n{\"dependencies\": {\"dotenv\": \"^18.0.7\"}}\n```\n"
+    )
+    assert s._readonly_evidence_turn(resp) is True
+
+
+def test_readonly_evidence_falso_sin_cache_ni_calls(tmp_path):
+    """Sin lecturas en el intento ni en caché, aunque el texto tenga code
+    block, no hay evidencia del turno → debe reintentar."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    s._called_tools.clear()
+    assert s._read_cache == {} or s._read_cache is not None
+    s._read_cache.clear()
+    resp = "DONE ```algo``` sin haber leído nada"
+    assert s._readonly_evidence_turn(resp) is False

@@ -1516,6 +1516,7 @@ class Session:
         from orchestration.execute_bootstrap import (
             extract_requested_task_numbers,
             extract_task_range,
+            extract_tasks_file_path,
         )
 
         text = (arg or "").strip()
@@ -1525,17 +1526,10 @@ class Session:
         tasks_file: str | None = None
         rng = extract_task_range(text)
         numbers = list(range(rng[0], rng[1] + 1)) if rng else extract_requested_task_numbers(text)
-        # Archivo de tareas: primer path .md/.txt/.json citado (o None).
-        # Soporta quoteados con espacios: '/Users/lucho/PROYECTOS IA/x/tasks.json'.
-        import re as _re
-
-        m = _re.search(r"""['"]([^'"]+\.(?:md|txt|json))['"]""", text)
-        if m:
-            tasks_file = m.group(1)
-        else:
-            m = _re.search(r"([\w./-]+\.(?:md|txt|json))", text)
-            if m:
-                tasks_file = m.group(1)
+        # Archivo de tareas: primer path .md/.txt/.json/.yml/.yaml citado.
+        # Fuente única (extract_tasks_file_path): soporta quoteados y
+        # absolutos con espacios sin quotear ("/Users/.../PROYECTOS IA/...").
+        tasks_file = extract_tasks_file_path(text)
         if not numbers:
             console.print(
                 "[yellow]Uso: /tasks-pool T001-T010 [archivo] [--commit][/yellow]\n"
@@ -2356,6 +2350,28 @@ class Session:
             return False
         return bool(self._commit_during_turn() or self._verify_tools_called())
 
+    def _verified_noop_turn(self) -> bool:
+        """True si el turno es un no-op ya verificado: árbol limpio, sin
+        escrituras en el intento actual NI acumuladas en el turno, y verify
+        en verde (actual o acumulada de un intento previo).
+
+        Cubre el 2º retry de una tarea ya-hecha: el intento actual solo hizo
+        git_status (sin verify disponible en BUDGET_RETRY_TOOLS) pero un
+        intento previo ya verificó en verde. Sin esto el guard
+        _nothing_pending_to_write (solo mira el intento actual) falla y el
+        pool entra en retry tras retry (E2E T01: 5× git_status por intento).
+        """
+        try:
+            if self._changed_files():
+                return False
+            if bool(self._called_tools & WRITE_TOOL_NAMES):
+                return False
+            if bool(getattr(self, "_turn_wrote", False)):
+                return False
+            return self._verify_all_passed() is True
+        except Exception:
+            return False
+
     def _readonly_evidence_turn(self, text: str) -> bool:
         """True si el turno fue SOLO lectura/verify con evidencia citada.
 
@@ -2371,16 +2387,44 @@ class Session:
         # Contar LLAMADAS (no nombres): 2 read_file a archivos distintos es
         # un turno de verificación legítimo (E2E real T006: tasks.json +
         # home-client.ts + veredicto con archivo:línea → cerrar sin retry).
+        # El retry limpia _called_tools (_enter_budget_retry): un veredicto
+        # con evidencia en el INTENTO 2+ quedaría con 0 llamadas aunque el
+        # PASS1 sí leyó (E2E 4B: PASS1 leyó package.json, retry solo texto
+        # con code block + path real → "fallido" tras 90s de texto). El
+        # read_cache SÍ sobrevive a los retries: sus entradas sustantivas
+        # cuentan como lecturas del turno.
+        try:
+            _cached_files = sum(
+                1 for _k, _v in (getattr(self, "_read_cache", None) or {}).items()
+                if not str(_k).startswith("[") and len(str(_v or "").strip()) > 30
+            )
+        except Exception:
+            _cached_files = 0
         counts = getattr(self._called_tools, "counts", None)
+        # Un bloque de código citado (contenido real pegado) + ≥1 lectura
+        # REAL de archivo basta: el PASS1 de un no-op suele ser 1 read del
+        # archivo de alcance + veredicto con code block (E2E 4B T01: el retry
+        # solo trae texto y _called_tools quedó vacío por el clear, pero el
+        # read_cache conserva la lectura). Sin code block vale la regla
+        # original ≥2 productivas (T006: 1 read + mención de path igual
+        # reintenta — una mención sin contenido no prueba nada).
+        _has_code = bool(_CODE_BLOCK_RE.search(text or ""))
         if counts is not None:
             productive_calls = self._called_tools.total_of(
                 READISH_TOOL_NAMES | VERIFY_TOOL_NAMES
-            )
-            if productive_calls < 2:
+            ) + _cached_files
+            if _has_code:
+                _file_reads = (
+                    self._called_tools.total_of({"read_file", "cm__get_code_snippet"})
+                    + _cached_files
+                )
+                if _file_reads < 1:
+                    return False
+            elif productive_calls < 2:
                 return False
         else:
             productive = self._called_tools & (READISH_TOOL_NAMES | VERIFY_TOOL_NAMES)
-            if len(productive) < 2:
+            if len(productive) + _cached_files < 2 and _cached_files < 1:
                 return False
         # Cita dura (archivo:línea o bloque de código): veredicto con respaldo.
         if _GROUNDED_EVIDENCE_RE.search(text or "") or _CODE_BLOCK_RE.search(text or ""):
@@ -3682,10 +3726,23 @@ class Session:
                     _task_header = ""
                 if _task_header:
                     console.print(f"[bold cyan]{_task_header}[/bold cyan]\n")
-                console.print(
-                    f"[dim]📎 Archivos de tareas pre-cargados{scope} "
-                    f"+ checklist AC{extra}.[/dim]\n"
-                )
+                # Banner honesto: "pre-cargados" SOLO si el contenido del
+                # archivo de tareas está inyectado de verdad. Con paths con
+                # espacios truncados (E2E /tasks-pool sin quotear) el CITED
+                # quedaba vacío pero igual se imprimía "pre-cargados",
+                # haciendo creer que la tarea estaba cargada.
+                if "CONTENIDO YA CARGADO DE" in agent_input:
+                    console.print(
+                        f"[dim]📎 Archivos de tareas pre-cargados{scope} "
+                        f"+ checklist AC{extra}.[/dim]\n"
+                    )
+                else:
+                    console.print(
+                        "[dim]📎 Sin archivo de tareas reconocido "
+                        "(solo hints de repo"
+                        f"{extra}). Si citaste un path con espacios, "
+                        "quotealo: \"/ruta/con espacios/tareas.json\".[/dim]\n"
+                    )
             # Correcciones pegadas (sin path a tasks.md): forzar escritura
             elif len(user_input) > 400 and any(
                 k in user_input.lower()
@@ -4286,6 +4343,24 @@ class Session:
                         continue
                     self._last_response = self._deterministic_close()
                     break
+                # Cierre honesto para tareas ya-hechas SIN retry: si el árbol
+                # está limpio y el turno ya verificó (o commiteó), forzar
+                # escritura solo produce loops de git_status (E2E real T01
+                # dotenv ya instalado: 2 reads + verify → retry write-only con
+                # force_tool_calls → 5× git_status → budget → retry...).
+                # Mismo contrato que el escape no-write de abajo.
+                # _verified_noop_turn cubre el 2º retry (verify acumulada +
+                # solo git_status en el intento actual).
+                if new_role == Role.EXECUTE and (
+                    self._nothing_pending_to_write() or self._verified_noop_turn()
+                ):
+                    self._last_response = self._deterministic_close()
+                    console.print(
+                        "\n[dim]✅ Nada pendiente por escribir (trabajo ya "
+                        "verificado o commiteado) — cerrando sin "
+                        "reintentar.[/dim]"
+                    )
+                    break
                 messages_for_agent = self._enter_budget_retry(
                     "Presupuesto de exploración agotado. Reintentando "
                     "con lectura acotada + escritura…"
@@ -4398,6 +4473,36 @@ class Session:
                             "razonando sin actuar: cerrando sin reintentar.[/dim]"
                         )
                         self._last_response = self._deterministic_close()
+                        break
+                    # Tarea ya-hecha con thinking-timeout: el modelo leyó +
+                    # verificó pero se colgó razonando sin emitir output
+                    # (E2E real T01: 2 reads + run_verify → 150s sin output →
+                    # retry write-only → loop git_status). Mismo cierre
+                    # honesto que el escape no-write: no hay nada que
+                    # escribir, reintentar solo produce no-ops.
+                    # _verified_noop_turn cubre retries tardíos (verify
+                    # acumulada + solo git_status en el intento actual).
+                    if new_role == Role.EXECUTE and (
+                        self._nothing_pending_to_write() or self._verified_noop_turn()
+                    ):
+                        self._last_response = self._deterministic_close()
+                        console.print(
+                            "\n[dim]✅ Nada pendiente por escribir (trabajo ya "
+                            "verificado o commiteado) — cerrando sin "
+                            "reintentar.[/dim]"
+                        )
+                        break
+                    if new_role == Role.EXECUTE and self._readonly_evidence_turn(
+                        e.reasoning_text or ""
+                    ):
+                        self._last_response = e.reasoning_text or ""
+                        console.print(
+                            "\n[dim]✅ Solo-lectura con evidencia — nada que "
+                            "escribir, cerrando sin reintentar.[/dim]"
+                        )
+                        _verdict = _closing_verdict_excerpt(self._last_response)
+                        if _verdict:
+                            console.print(f"\n[dim]📋 Veredicto del turno:\n{_verdict}[/dim]")
                         break
                     retry_msg = (
                         f"El modelo gastó {len(e.reasoning_text)} chars razonando. "

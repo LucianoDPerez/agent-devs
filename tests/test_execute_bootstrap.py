@@ -725,3 +725,62 @@ class TestPinnedTaskHeader:
         p.write_text('{"otro": 1}', encoding="utf-8")
         assert pinned_task_header(f"implementar T005 de {p}",
                                   repo_path=str(tmp_path)) == ""
+
+
+class TestExtractTasksFilePath:
+    """E2E real /tasks-pool con path con espacios sin quotear: se truncaba a
+    'IA/Medicos/...' y el preload quedaba vacío."""
+
+    def test_abs_con_espacios_sin_quotear(self, tmp_path):
+        from orchestration.execute_bootstrap import extract_tasks_file_path
+
+        base = tmp_path / "PROYECTOS IA" / "Medicos" / "deuda"
+        base.mkdir(parents=True)
+        tasks = base / "tareas.json"
+        tasks.write_text("{}", encoding="utf-8")
+        text = f"T01-T06 de este listado {tasks}"
+        assert extract_tasks_file_path(text) == str(tasks)
+
+    def test_relativo_no_fusiona_comando(self):
+        from orchestration.execute_bootstrap import extract_tasks_file_path
+
+        assert (
+            extract_tasks_file_path("/tasks-pool T001-T003 plans/tareas.md --commit")
+            == "plans/tareas.md"
+        )
+
+    def test_quoteado_gana(self, tmp_path):
+        from orchestration.execute_bootstrap import extract_tasks_file_path
+
+        p = tmp_path / "tareas.md"
+        p.write_text("# t", encoding="utf-8")
+        assert extract_tasks_file_path(f'pool de "{p}" dale') == str(p)
+
+    def test_abs_con_espacios_inexistente_devuelve_absoluto(self):
+        from orchestration.execute_bootstrap import extract_tasks_file_path
+
+        assert (
+            extract_tasks_file_path("implementar T1 de /tmp/con espacios/tasks.yaml")
+            == "/tmp/con espacios/tasks.yaml"
+        )
+
+    def test_ruido_da_none(self):
+        from orchestration.execute_bootstrap import extract_tasks_file_path
+
+        assert extract_tasks_file_path("hola como estas") is None
+
+    def test_preload_con_abs_con_espacios(self, tmp_path):
+        import json
+
+        from orchestration.execute_bootstrap import preload_cited_files
+
+        base = tmp_path / "PROYECTOS IA" / "Medicos" / "deuda"
+        base.mkdir(parents=True)
+        tasks = base / "tareas.json"
+        tasks.write_text(
+            json.dumps({"tareas": [{"id": "T01", "titulo": "Instalar dotenv"}]}),
+            encoding="utf-8",
+        )
+        out = preload_cited_files(f"implementar Tarea 1 de {tasks}", str(tmp_path))
+        assert "CONTENIDO YA CARGADO DE" in out
+        assert "T01" in out
