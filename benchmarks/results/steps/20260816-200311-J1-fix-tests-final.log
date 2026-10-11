@@ -1,6 +1,6 @@
 ╭───────────────────────────────── AgentDevs ──────────────────────────────────╮
 │ 🔌 LLM: http://localhost:8080/v1                                             │
-│ 📁 Repo: /Users/luchop/PROYECTOS IA/Medicos  🌿 new-frontend                 │
+│ 📁 Repo: /Users/<usuario>/PROYECTOS IA/Medicos  🌿 new-frontend                 │
 │ ⚡ Modelo: gemma-4-e4b | Temp: 0.2 | Max: 3584                               │
 │ 🛠️  Tools: 22 locales + 14 graph (cm__*)                                     │
 ╰──────────────────────────────────────────────────────────────────────────────╯

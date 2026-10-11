@@ -1,6 +1,6 @@
 {
   "suite": "eval-prod",
-  "repo": "/Users/luchop/PROYECTOS IA/Medicos",
+  "repo": "/Users/<usuario>/PROYECTOS IA/Medicos",
   "branch": "eval/agent-battery",
   "harness": "agent-lucho main (slash+evidence fixes)",
   "model": "agents-a1-4b (llama.cpp local, 4B)",

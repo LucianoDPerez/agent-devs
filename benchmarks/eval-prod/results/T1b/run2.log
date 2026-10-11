@@ -12,20 +12,20 @@ Voy a verificar las tareas contra el código del repositorio. Primero leo los ar
 
 
 
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/.gitignore"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/AGENTS.md"}
-  🔧 search_code{"path":"/Users/luchop/PROYECTOS IA/Medicos","pattern":"CreatePaciente.*nombre.*empty|nombre.*required|ValidationError.*nombre"}
-  🔧 search_code{"path":"/Users/luchop/PROYECTOS IA/Medicos","pattern":"DeletePaciente|soft.*delete|active.*field|isActive"}
-  🔧 search_code{"path":"/Users/luchop/PROYECTOS IA/Medicos","pattern":"JWT|jwt|jsonwebtoken|auth.*middleware"}
-  🔧 inspect_routes{"path":"/Users/luchop/PROYECTOS IA/Medicos"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/.gitignore"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/AGENTS.md"}
+  🔧 search_code{"path":"/Users/<usuario>/PROYECTOS IA/Medicos","pattern":"CreatePaciente.*nombre.*empty|nombre.*required|ValidationError.*nombre"}
+  🔧 search_code{"path":"/Users/<usuario>/PROYECTOS IA/Medicos","pattern":"DeletePaciente|soft.*delete|active.*field|isActive"}
+  🔧 search_code{"path":"/Users/<usuario>/PROYECTOS IA/Medicos","pattern":"JWT|jwt|jsonwebtoken|auth.*middleware"}
+  🔧 inspect_routes{"path":"/Users/<usuario>/PROYECTOS IA/Medicos"}
 Necesito verificar cada criterio con evidencia concreta. Leo los archivos clave:
 
 
 
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/application/pacientes/CreatePaciente.ts"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/application/pacientes/DeletePaciente.ts"}
-  🔧 search_code{"path":"/Users/luchop/PROYECTOS IA/Medicos","pattern":"auth.*middleware|jwt.*verify|authenticate|verifyToken"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/server.ts"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/application/pacientes/CreatePaciente.ts"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/application/pacientes/DeletePaciente.ts"}
+  🔧 search_code{"path":"/Users/<usuario>/PROYECTOS IA/Medicos","pattern":"auth.*middleware|jwt.*verify|authenticate|verifyToken"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/server.ts"}
 
 level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
 level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
@@ -40,12 +40,12 @@ clave y respondé con evidencia)…
 
 ────────────────────────────────────────
 
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/application/pacientes/CreatePaciente.ts"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/application/pacientes/DeletePaciente.ts"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/server.ts"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/application/pacientes/CreatePaciente.ts","start_line":1,"end_line":50}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/application/pacientes/DeletePaciente.ts","start_line":1,"end_line":50}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/server.ts","start_line":1,"end_line":50}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/application/pacientes/CreatePaciente.ts"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/application/pacientes/DeletePaciente.ts"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/server.ts"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/application/pacientes/CreatePaciente.ts","start_line":1,"end_line":50}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/application/pacientes/DeletePaciente.ts","start_line":1,"end_line":50}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/server.ts","start_line":1,"end_line":50}
 ## Resumen
 Verificación de 4 criterios de aceptación contra el código actual del repositorio.
 
@@ -73,7 +73,7 @@ escritura…
 No se pudo verificar el estado de las tareas porque `/tmp/eval-tareas.md` no existe en el repositorio (trace_component: "No se encontró..."). Sin este archivo, no hay criterios de aceptación para validar.
 
 ## Hallazgos CRITICAL
-- **[no-file:0]** El archivo `/tmp/eval-tareas.md` con la lista de tareas a verificar no existe en el repositorio `Users-luchop-PROYECTOS-IA-Medicos`. Sin este documento, no se puede determinar qué funcionalidades deben estar implementadas.
+- **[no-file:0]** El archivo `/tmp/eval-tareas.md` con la lista de tareas a verificar no existe en el repositorio `Users-<usuario>-PROYECTOS-IA-Medicos`. Sin este documento, no se puede determinar qué funcionalidades deben estar implementadas.
 
 ## Hallazgos WARNING
 - **[backend/src/application/pacientes/CreatePaciente.ts:0]** No se verificó la implementación de validaciones de negocio (síntomas requeridos, nombre requerido) - falta evidencia del contenido real del archivo.

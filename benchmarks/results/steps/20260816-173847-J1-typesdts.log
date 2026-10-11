@@ -1,6 +1,6 @@
 ╭───────────────────────────────── AgentDevs ──────────────────────────────────╮
 │ 🔌 LLM: http://localhost:8080/v1                                             │
-│ 📁 Repo: /Users/luchop/PROYECTOS IA/Medicos  🌿 new-frontend                 │
+│ 📁 Repo: /Users/<usuario>/PROYECTOS IA/Medicos  🌿 new-frontend                 │
 │ ⚡ Modelo: gemma-4-e4b | Temp: 0.2 | Max: 3584                               │
 │ 🛠️  Tools: 21 locales + 14 graph (cm__*)                                     │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -16,9 +16,9 @@
 ────────────────────────────────────────
 
   🔧 write_file{"path":"backend/src/tests/types.d.ts","content":"declare namespace Tests {\n  interface CreatePacienteDTO {\n    nombre: string;\n    telefono?: string;\n    email?: string;\n  }\n\n  interface CreateConsultaDTO {\n    pacienteId: number;\n    sintomas: string;\n    fecha?: Date;\n    diagnostico?: string;\n    recomendaciones?: string;\n  }\n\n  interface MigracionExtractDTO {\n    fotoBase64: string;\n  }\n\n  interface MigracionCreateDTO {\n    nombre: string;\n    documento: string;\n    fotoUrl: string;\n    telefono?: string;\n    email?: string;\n    edadMenarquia?: number;\n    paridad?: number;\n    ultimaMenstruacion?: Date;\n  }\n\n  interface MigracionListDTO {\n    page?: number;\n    limit?: number;\n  }\n\n  interface MigracionResponse {\n    id: number;\n    nombre: string;\n    documento: string;\n    telefono: string;\n    email: string;\n    edadMenarquia: number | null;\n    paridad: number | null;\n    ultimaMenstruacion: Date | null;\n    fotoUrl: string;\n    status: 'pending' | 'extracted';\n    createdAt: Date;\n  }\n\n  interface PaginationParams {\n    page: number;\n    limit: number;\n  }\n\n  interface Consulta {\n    id: number;\n    pacienteId: number;\n    fecha: Date;\n    sintomas: string;\n    diagnostico?: string;\n    recomendaciones?: string;\n    createdAt: Date;\n    updatedAt: Date;\n  }\n\n  interface CreateConsultaInput {\n    pacienteId: number;\n    sintomas: string;\n    fecha?: Date;\n    diagnostico?: string;\n    recomendaciones?: string;\n  }\n\n  interface Paciente {\n    id: number;\n    nombre: string;\n    telefono: string;\n    email: string;\n    documento: string;\n    edadMenarquia: number | null;\n    paridad: number | null;\n    ultimaMenstruacion: Date | null;\n    fotoTarjetaUrl: string;\n    createdAt: Date;\n    updatedAt: Date;\n  }\n\n  interface CreatePacienteInput {\n    nombre: string;\n    documento: string;\n    telefono?: string;\n    email?: string;\n    edadMenarquia?: number;\n    paridad?: number;\n    ultimaMenstruacion?: Date;\n    fotoTarjetaUrl?: string;\n  }\n\n  interface UpdatePacienteInput {\n    nombre?: string;\n    telefono?: string;\n    email?: string;\n    documento?: string;\n    edadMenarquia?: number;\n    paridad?: number;\n    ultimaMenstruacion?: Date;\n    fotoTarjetaUrl?: string;\n  }\n\n  interface Migracion {\n    id: number;\n    pacienteId: number;\n    nombre: string;\n    documento: string;\n    telefono: string;\n    email: string;\n    edadMenarquia: number | null;\n    paridad: number | null;\n    ultimaMenstruacion: Date | null;\n    fotoUrl: string;\n    status: 'pending' | 'extracted';\n    createdAt: Date;\n    updatedAt: Date;\n  }\n\n  interface MigracionCreateInput {\n    fotoUrl: string;\n    nombre: string;\n    documento: string;\n    telefono?: string;\n    email?: string;\n    edadMenarquia?: number;\n    paridad?: number;\n    ultimaMenstruacion?: Date;\n    status?: 'pending' | 'extracted';\n  }\n\n  interface MigracionReviewInput {\n    pacienteId?: number;\n  }\n\n  interface GetConsultasByPacienteInput {\n    pacienteId: number;\n    page: number;\n    limit: number;\n  }\n\n  interface ListPacientesInput {\n    page: number;\n    limit: number;\n    query?: string;\n  }\n\n  interface IAExtractedData {\n    nombre: string;\n    documento: string;\n    telefono: string;\n    email: string;\n    edadMenarquia: number | null;\n    paridad: number | null;\n    ultimaMenstruacion: Date | null;\n    fotoTarjetaUrl: string;\n  }\n\n  interface DashboardStats {\n    totalPacientes: number;\n    totalConsultas: number;\n    consultasEsteMes: number;\n    consultasHoy: number;\n    ultimosPacientes: Paciente[];\n    nombre: string;\n    createdAt: Date;\n  }\n\n  interface DashboardData {\n    totalPacientes: number;\n    totalConsultas: number;\n    consultasEsteMes: number;\n    consultasHoy: number;\n    ultimosPacientes: Paciente[];\n    nombre: string;\n    createdAt: Date;\n  }\n\n  interface UseMigracionReturn {\n    extracting: boolean;\n    extractedData: IAExtractedData | null;\n    error: Error | null;\n  }\n\n  interface UseRecentConsultasReturn {\n    consultas: Consulta[];\n    loading: boolean;\n    error: Error | null;\n  }\n\n  interface UseConsultasListReturn {\n    consultas: Consulta[];\n    total: number;\n    page: number;\n    totalPages: number;\n    loading: boolean;\n    error: Error | null;\n  }\n\n  interface UsePacientesReturn {\n    pacientes: Paciente[];\n    total: number;\n    page: number;\n    totalPages: number;\n    loading: boolean;\n    error: Error | null;\n  }\n}\n"}
-  🔧 run_lint{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/eslint.config.js"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/tests/types.d.ts"}
+  🔧 run_lint{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/eslint.config.js"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/tests/types.d.ts"}
 
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ ⚡ Pregunta: 920.4s | 9,847 tokens (in 8,140 + out 1,707, 6,758              │
@@ -32,9 +32,9 @@
 
 ────────────────────────────────────────
 
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/tests/types.d.ts"}## ✅ Archivo existente
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/tests/types.d.ts"}## ✅ Archivo existente
 
-El archivo `/Users/luchop/PROYECTOS IA/Medicos/backend/src/tests/types.d.ts` **ya existe** y contiene las interfaces TypeScript para todos los DTOs del proyecto:
+El archivo `/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/tests/types.d.ts` **ya existe** y contiene las interfaces TypeScript para todos los DTOs del proyecto:
 
 | Interface | Descripción |
 |-----------|-------------|

@@ -28,8 +28,8 @@ class TestParseLsof:
     def test_parses_rows(self):
         text = (
             "COMMAND   PID   USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME\n"
-            "com.docke 34242 luchop 160u  IPv6 0x6b45ecbaf55ab46      0t0  TCP *:3000 (LISTEN)\n"
-            "node    20086 luchop   16u  IPv4 0x184298b3f6cd7d8c      0t0  TCP *:5173 (LISTEN)\n"
+            "com.docke 34242 usuario 160u  IPv6 0x6b45ecbaf55ab46      0t0  TCP *:3000 (LISTEN)\n"
+            "node    20086 usuario   16u  IPv4 0x184298b3f6cd7d8c      0t0  TCP *:5173 (LISTEN)\n"
         )
         rows = _parse_lsof(text)
         assert len(rows) == 2

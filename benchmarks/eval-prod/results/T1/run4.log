@@ -7,13 +7,13 @@ level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
 
 ────────────────────────────────────────
 
-  🔧 cm__get_architecture{"project":"Users-luchop-PROYECTOS-IA-Medicos","aspects":["packages", "services", "dependencies", "project_structure"]}level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+  🔧 cm__get_architecture{"project":"Users-<usuario>-PROYECTOS-IA-Medicos","aspects":["packages", "services", "dependencies", "project_structure"]}level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
 
-  🔧 list_files{"path":"/Users/luchop/PROYECTOS IA/Medicos","recursive":false}
-  🔧 list_files{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend","recursive":true}
-  🔧 list_files{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend","recursive":false}
-  🔧 list_files{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src","recursive":false}
-  🔧 inspect_routes{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend"}
+  🔧 list_files{"path":"/Users/<usuario>/PROYECTOS IA/Medicos","recursive":false}
+  🔧 list_files{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend","recursive":true}
+  🔧 list_files{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend","recursive":false}
+  🔧 list_files{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src","recursive":false}
+  🔧 inspect_routes{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend"}
 
 level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
 level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
@@ -28,7 +28,7 @@ clave y respondé con evidencia)…
 
 ────────────────────────────────────────
 
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos"}
 ↻ Modelo pensando sin producir output (180s). Se corta aquí — el turno se 
 reintenta con lo ya leído.
 
@@ -52,4 +52,4 @@ reintenta con lo ya leído.
 │ 📊 Sesión: 772.3s | 12,184 tokens (in 9,068 + out 3,116)                     │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
-TRANSCRIPT OK /Users/luchop/agent-lucho/benchmarks/eval-prod/results/T1 elapsed=772s role=Role.ANALYZE tools=3
+TRANSCRIPT OK /Users/<usuario>/agent-lucho/benchmarks/eval-prod/results/T1 elapsed=772s role=Role.ANALYZE tools=3

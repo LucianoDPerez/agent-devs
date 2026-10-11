@@ -49,6 +49,61 @@ class TestReadFile:
         assert "line3" in result
 
 
+class TestResolveDoubled:
+    """El modelo pega root + fragmento duplicado (E2E pool: .../Medicos/IA/
+    Medicos/deuda/tareas.json en todos los arranques)."""
+
+    def _repo(self, tmp_path):
+        (tmp_path / "package.json").write_text("{}", encoding="utf-8")
+        real = tmp_path / "deuda" / "tareas.json"
+        real.parent.mkdir(parents=True, exist_ok=True)
+        real.write_text("HOLA", encoding="utf-8")
+        return real
+
+    def test_exact_exists_returns_none(self, tmp_path):
+        from tools.filesystem import _resolve_doubled
+
+        real = self._repo(tmp_path)
+        assert _resolve_doubled(str(real)) is None
+
+    def test_doubled_segment_resolves(self, tmp_path):
+        from tools.filesystem import _resolve_doubled
+
+        real = self._repo(tmp_path)
+        doubled = tmp_path / "IA" / "Medicos" / "deuda" / "tareas.json"
+        assert _resolve_doubled(str(doubled)) == str(real)
+
+    def test_missing_returns_none(self, tmp_path):
+        from tools.filesystem import _resolve_doubled
+
+        self._repo(tmp_path)
+        assert _resolve_doubled(str(tmp_path / "nope" / "nada.txt")) is None
+
+    def test_read_serves_corrected_with_notice(self, tmp_path):
+        from tools.filesystem import _was_read as was_read
+
+        real = self._repo(tmp_path)
+        doubled = tmp_path / "IA" / "Medicos" / "deuda" / "tareas.json"
+        result = read_file.invoke({"path": str(doubled)})
+        assert "HOLA" in result
+        assert "Path corregido" in result
+        assert was_read(str(real)) is True
+
+    def test_edit_hints_without_writing(self, tmp_path):
+        real = self._repo(tmp_path)
+        doubled = tmp_path / "IA" / "Medicos" / "deuda" / "tareas.json"
+        result = edit_file.invoke({"path": str(doubled), "old_str": "HOLA", "new_str": "X"})
+        assert "Quisiste decir" in result
+        assert str(real) in result
+        assert real.read_text(encoding="utf-8") == "HOLA"
+
+    def test_list_hints(self, tmp_path):
+        self._repo(tmp_path)
+        doubled = tmp_path / "IA" / "Medicos" / "deuda"
+        result = list_files.invoke({"path": str(doubled)})
+        assert "Quisiste decir" in result
+
+
 class TestWriteFile:
     def test_write_creates_file(self):
         repo = tempfile.mkdtemp()

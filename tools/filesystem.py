@@ -153,6 +153,12 @@ def list_files(path: str, recursive: bool = False) -> str:
     """
     root = Path(path)
     if not root.exists():
+        fixed = _resolve_doubled(path)
+        if fixed is not None:
+            return (
+                f"Path does not exist: {path}. Quisiste decir {fixed}? "
+                "Reintentá con ESE path exacto (era el root + un fragmento duplicado)."
+            )
         return (
             f"Path does not exist: {path}. "
             "Do not retry this path or search for name variants. Continue with another approach."
@@ -199,6 +205,48 @@ def list_files(path: str, recursive: bool = False) -> str:
         return f"Directory '{path}' is empty or all entries were filtered."
 
     return f"Contents of {path}:\n" + "\n".join(results)
+
+
+def _find_project_root(start: Path) -> Path | None:
+    """Sube desde `start` hasta un marcador de proyecto (.git, package.json…).
+    None si no hay (paths fuera de cualquier repo)."""
+    markers = (".git", "package.json", "go.mod", "pyproject.toml", "requirements.txt")
+    root = start if start.is_dir() else start.parent
+    while root != root.parent:
+        try:
+            if any((root / m).exists() for m in markers):
+                return root
+        except OSError:
+            return None
+        root = root.parent
+    return None
+
+
+def _resolve_doubled(path: str) -> str | None:
+    """Si `path` no existe pero un SUFIJO sí existe desde la raíz del repo,
+    retorna el path corregido. Típico: el modelo pega el root + un fragmento
+    que ya lo contenía (`.../Medicos/IA/Medicos/deuda/tareas.json`, E2E pool:
+    en TODOS los arranques de tarea, ~3 calls desperdiciadas por tarea).
+    Se prueba del sufijo MÁS LARGO al más corto: el primer hit es el más
+    específico. None si nada coincide (seguir con el flujo normal)."""
+    p = Path(path)
+    if p.exists():
+        return None
+    root = _find_project_root(p)
+    if root is None:
+        return None
+    parts = p.parts
+    for i in range(1, len(parts)):
+        try:
+            cand = root.joinpath(*parts[i:])
+        except Exception:
+            continue
+        try:
+            if cand.is_file() or cand.is_dir():
+                return str(cand)
+        except OSError:
+            continue
+    return None
 
 
 def _suggest_paths(path: str, limit: int = 5) -> str:
@@ -260,13 +308,27 @@ def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> st
             "git_status (rama + estado), current_branch, git_log, changed_files. "
             "No reimplementes git leyendo archivos internos."
         )
+    served_notice = ""
     if not p.exists():
-        return (
-            f"File does not exist: {path}. "
-            "Do not retry this path or search for name variants "
-            "(e.g. README.md / README / ENV.md). If documentation is required, create the file."
-            + _suggest_paths(path)
-        )
+        fixed = _resolve_doubled(path)
+        if fixed is not None:
+            # Lectura: se SIRVE el archivo corregido (0 calls extra) con aviso
+            # visible. El read queda registrado (_mark_read) así un edit
+            # posterior no choca con read-before-edit. Escritura (edit_file):
+            # jamás se re-rutea solo — ahí solo se sugiere (ver abajo).
+            served_notice = (
+                f"⚠️ Path corregido: `{path}` no existe (root + fragmento "
+                f"duplicado). Se sirve `{fixed}` — verificá que sea el "
+                f"correcto antes de citarlo.\n"
+            )
+            p = Path(fixed)
+        else:
+            return (
+                f"File does not exist: {path}. "
+                "Do not retry this path or search for name variants "
+                "(e.g. README.md / README / ENV.md). If documentation is required, create the file."
+                + _suggest_paths(path)
+            )
     if p.is_dir():
         return (
             f"'{path}' is a directory, not a file. Use list_files to browse it. "
@@ -290,13 +352,13 @@ def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> st
         content = raw_bytes[:MAX_FILE_READ_BYTES].decode("utf-8", errors="replace")
         truncated = True
 
-    header = f"📄 {path}"
+    header = f"📄 {p}"
     if truncated:
         header += f" [TRUNCATED at {MAX_FILE_READ_BYTES:,} bytes]"
     header += f"\n{'─' * 60}\n"
 
     _mark_read(str(p))
-    return header + content
+    return served_notice + header + content
 
 
 def _integrity_check(content: str) -> str | None:
@@ -736,6 +798,15 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
             )
     p = Path(path)
     if not p.exists():
+        fixed = _resolve_doubled(path)
+        if fixed is not None:
+            # Escritura: JAMÁS se re-rutea sola a otro path (podría pisar el
+            # archivo equivocado). Solo se sugiere el corregido.
+            return (
+                f"File does not exist: {path}. Quisiste decir {fixed}? "
+                "Reintentá el edit con ESE path exacto (era el root + un "
+                "fragmento duplicado). Do not write blindly elsewhere."
+            )
         return (
             f"File does not exist: {path}. "
             "Do not retry this path. Create it with write_file if you need to edit it."

@@ -304,6 +304,84 @@ def test_workspace_symlink_detected_by_package_name(tmp_path):
     assert _needs_node_install(tmp_path) is False
 
 
+def _node_repo(tmp_path, workspaces=None, lock=None):
+    pkg = {"name": "root", "private": True}
+    if workspaces is not None:
+        pkg["workspaces"] = workspaces
+    (tmp_path / "package.json").write_text(json.dumps(pkg))
+    if lock:
+        (tmp_path / lock).write_text("")
+    return tmp_path
+
+
+class TestInstallPackage:
+    """install_package: UNA dependencia, nombre validado, sin comandos libres."""
+
+    def test_rejects_shell_injection(self, tmp_path):
+        from tools.verify import install_package
+
+        _node_repo(tmp_path)
+        with patch("tools.verify._run_command") as mock_run:
+            for bad in ["zod; rm -rf /", "zod && whoami", "--save", "", "a b", "zod$(x)", "https://x/z.tgz"]:
+                r = install_package.invoke({"path": str(tmp_path), "package": bad})
+                assert "inválido" in r
+            mock_run.assert_not_called()
+
+    def test_rejects_non_node(self, tmp_path):
+        from tools.verify import install_package
+
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
+        assert "solo soporta" in install_package.invoke({"path": str(tmp_path), "package": "zod"})
+
+    def test_unknown_workspace_lists_available(self, tmp_path):
+        from tools.verify import install_package
+
+        _node_repo(tmp_path, workspaces=["backend"])
+        (tmp_path / "backend").mkdir()
+        (tmp_path / "backend" / "package.json").write_text(json.dumps({"name": "medica-backend"}))
+        r = install_package.invoke({"path": str(tmp_path), "package": "zod", "workspace": "nope"})
+        assert "desconocido" in r and "medica-backend" in r
+
+    @patch("tools.verify._run_command")
+    def test_npm_argv_with_workspace(self, mock_run):
+        from tools.verify import install_package
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _node_repo(root, workspaces=["backend"])
+            (root / "backend").mkdir()
+            (root / "backend" / "package.json").write_text(json.dumps({"name": "medica-backend"}))
+            mock_run.return_value = "[PASSED] exit=0"
+            install_package.invoke({"path": tmp, "package": "dotenv@16.4.5", "workspace": "backend"})
+        assert mock_run.call_args[0][1] == ["npm", "install", "dotenv@16.4.5", "-w", "medica-backend"]
+
+    @patch("tools.verify._run_command")
+    def test_pnpm_and_yarn_argv(self, mock_run):
+        from tools.verify import install_package
+
+        for lock, ws_args, plain in [
+            ("pnpm-lock.yaml", ["--filter", "backend"], ["pnpm", "add", "zod"]),
+            ("yarn.lock", None, ["yarn", "add", "zod"]),
+        ]:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                _node_repo(root, workspaces=["backend"], lock=lock)
+                (root / "backend").mkdir()
+                (root / "backend" / "package.json").write_text(json.dumps({"name": "backend"}))
+                mock_run.return_value = "[PASSED] exit=0"
+                if ws_args:
+                    install_package.invoke({"path": tmp, "package": "zod", "workspace": "backend"})
+                    assert mock_run.call_args[0][1] == ["pnpm", "add", "zod"] + ws_args
+                else:
+                    install_package.invoke({"path": tmp, "package": "zod"})
+                    assert mock_run.call_args[0][1] == plain
+
+    def test_executor_has_install_package(self):
+        from tools import EXECUTOR_TOOLS
+
+        assert "install_package" in [t.name for t in EXECUTOR_TOOLS]
+
+
 def test_needs_install_when_declared_dep_missing(tmp_path):
     """Dep declarada en package.json pero ausente de node_modules → stale."""
     import json

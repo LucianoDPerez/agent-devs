@@ -15,7 +15,7 @@ Necesito agregar una funcionalidad de auditoría a este proyecto. Antes de modif
 No es posible generar un plan de implementación de auditoría con citación de archivos específicos (`archivo:línea`) porque el contexto proporcionado indica que la estructura del código no fue accesible para el análisis.
 
 **Evidencia de Falta de Datos:**
-- La herramienta `trace_component` ejecutada en el intento anterior devolvió un resultado negativo: "No se encontró 'Necesito agregar una funcionalidad de auditoría...' ni ninguna componente relacionada en 'Users-luchop-PROYECTOS-IA-Medicos'".
+- La herramienta `trace_component` ejecutada en el intento anterior devolvió un resultado negativo: "No se encontró 'Necesito agregar una funcionalidad de auditoría...' ni ninguna componente relacionada en 'Users-<usuario>-PROYECTOS-IA-Medicos'".
 - **Cita:** `HECHOS: trace:sistema` (Resultado de `trace_component`).
 
 **Conclusión:**

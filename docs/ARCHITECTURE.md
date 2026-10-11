@@ -1,33 +1,39 @@
-# AgentDevs — Agente de Desarrollo (LLM Local)
+# AgentDevs — Agente de Desarrollo (LLM local o nube)
 
-Agente conversacional impulsado por tu LLM local (`llama-server` en `http://localhost:8080/v1`) para **analizar, planificar, ejecutar y revisar** repositorios de código.
+Agente conversacional impulsado por tu LLM (`llama-server` local en `http://localhost:8080/v1`, u OpenCode Zen en la nube) para **analizar, planificar, ejecutar y revisar** repositorios de código.
 
 El agente **clasifica automáticamente la intención del usuario** y delega al rol correspondiente, cargando solo las tools y el system prompt necesarios para cada tarea. **Recuerda la conversación** entre turnos, **persiste el historial en SQLite**, y **gestiona el contexto automáticamente** con summaries cuando se llena.
 
 ## Arquitectura (Clean Architecture + SOLID)
 
 ```
-agent-lucho/
-├── main.py                       # 🎯 Entry point delgado (~90 líneas)
+agent-devs/
+├── main.py                       # 🎯 Entry point delgado
 ├── config.py                     # Configuración centralizada (recursion, tokens, judge, budgets)
+├── llm_config.py                 # Proveedor LLM (local/opencode), modelos, reasoning, conectividad
 ├── cache.py                      # Persistencia SQLite (análisis + historial de sesión)
-├── llm_wrapper.py                # Wrapper de BaseChatModel (reasoning_content)
+├── llm_wrapper.py                # Wrapper de BaseChatModel (reasoning_content + Responses API)
 ├── analyzer.py                   # Generación del análisis cacheado
 ├── business_logic.py             # 📋 Reglas de negocio deterministas (campos requeridos, validaciones)
 │
 ├── core/                         # 🧠 Capa de dominio
 │   ├── intents.py                #   Enum Intent (analyze/plan/execute/review/chat)
-│   └── roles.py                  #   Enum Role + mapping Intent→Role + tools + prompts
+│   ├── roles.py                  #   Enum Role + mapping Intent→Role + tools + prompts
+│   └── model_profiles.py         #   Perfiles por modelo (thinking, temps, budgets nube/local)
 │
 ├── orchestration/                # ⚙️ Capa de aplicación
 │   ├── router.py                 #   Clasificador keyword-based de intención
 │   ├── agent_builder.py          #   Factory: construye agente LangChain por rol
 │   ├── session.py                #   Sesión con memoria, persistencia, summary auto, judge
 │   ├── execute_bootstrap.py      #   Preload tasks, hints, repo layout, review→correction
+│   ├── evidence.py               #   Validador determinístico de citas archivo:línea
 │   └── tool_dedupe.py            #   Explore budget, ToolBudgetExceeded, dedupe, write enforcement
 │
 ├── display/                      # 🖥️ Adaptador de presentation
 │   ├── console.py                #   Streaming con rich + paneles
+│   ├── fullscreen_tui.py         #   TUI Textual (header fijo, panel, toolbar)
+│   ├── status_bar.py             #   Barra de estado del turno
+│   ├── commands.py               #   Registro central de slash commands
 │   └── tui.py                    #   Input con prompt_toolkit + status bar
 │
 ├── prompts/                      # 📝 Prompts externos (editables sin tocar código)
@@ -39,18 +45,18 @@ agent-lucho/
 │   ├── judge.md                  #   System prompt del Judge LLM (valida reviews)
 │   └── chat.md                   #   System prompt del rol Charla
 │
-├── tools/                        # 🔧 Capa de infraestructura (tools)
-│   ├── __init__.py               #   Pool completo (21 tools) + subsets por rol
+├── tools/                        # 🔧 Capa de infraestructura (28 tools locales + MCP graph)
+│   ├── __init__.py               #   Pool completo (28 tools) + subsets por rol
 │   ├── filesystem.py             #   list/read/write/edit/delete files
 │   ├── git.py                    #   Git + GitHub PRs
 │   ├── routes.py                 #   Detección de endpoints multi-lenguaje
 │   ├── search.py                 #   Búsqueda regex en código
-│   ├── verify.py                 #   run_install / run_lint / run_tests / run_build
+│   ├── verify.py                 #   run_install / install_package / run_lint / run_tests / run_build
 │   ├── mcp_client.py             #   Cliente MCP (codebase-memory-mcp)
 │   ├── graph_trace.py            #   Tool compuesta: traza un componente en UNA llamada
 │   └── _helpers.py               #   Helpers compartidos
 │
-├── tests/                        # 🧪 Pruebas (147 unit + 43 e2e)
+├── tests/                        # 🧪 Pruebas (785 tests — ver suite con pytest)
 │   ├── test_cache_snapshot.py    #   snapshot cache invalidation
 │   ├── test_execute_bootstrap.py #   task preload, hints, review correction, minimal plan
 │   ├── test_filesystem.py        #   filesystem tools
@@ -112,10 +118,10 @@ main.py (thin)
 
 | Rol | Tools | Capacidad |
 |-----|-------|-----------|
-| **🔍 Análisis** (analyzer) | 10 | Read-only: explorar, preguntar, entender. No codea. |
-| **📋 Planificación** (planner) | 11 | Read-only + write_file: diseña solución en .md. No codea. |
-| **🛠️ Ejecución** (executor) | 12 | Rol autónomo: analiza (trace_component), implementa (edit/write), verifica (lint/tests/build) e itera hasta que compile. |
-| **🔎 Revisión** (reviewer) | 14 | Read-only + lint/tests/build: revisa PRs, busca bugs, audita. Budget anti-loop. |
+| **🔍 Análisis** (analyzer) | 15 | Read-only: explorar, preguntar, entender. No codea. |
+| **📋 Planificación** (planner) | 13 | Read-only + write_file: diseña solución en .md. No codea. |
+| **🛠️ Ejecución** (executor) | 29 | Rol autónomo: analiza (trace_component), implementa (edit/write), instala (install_package), verifica (lint/tests/build) e itera hasta que compile. |
+| **🔎 Revisión** (reviewer) | 20 | Read-only + lint/tests/build: revisa PRs, busca bugs, audita. Budget anti-loop. |
 | **💬 Charla** (chat) | 0 | Sin tools: conversación general. |
 
 ### Classifier keyword-based
@@ -322,13 +328,13 @@ pip install pytest  # para correr tests
 
 ```bash
 # Clonar el proyecto (si no lo tenés)
-git clone <tu-repo> ~/agent-lucho
+git clone <tu-repo> ~/.agent-devs
 
 # Crear el symlink en tu PATH (macOS/Homebrew)
-ln -s "$HOME/agent-lucho/agentdevs" /opt/homebrew/bin/agentdevs
+ln -s "$HOME/.agent-devs/agentdevs" /opt/homebrew/bin/agentdevs
 
 # Asegurar permisos de ejecución
-chmod +x ~/agent-lucho/agentdevs
+chmod +x ~/.agent-devs/agentdevs
 ```
 
 ### Uso
@@ -381,16 +387,18 @@ El orquestador **detecta automáticamente** la intención y carga el rol adecuad
 >>> exit           # cierra la sesión
 ```
 
-## Herramientas disponibles (30 tools)
+## Herramientas disponibles (28 locales + 14 graph MCP)
 
-### Filesystem (4)
+### Filesystem (6)
 
 | Tool | Descripción |
 |---|---|
 | `list_files(path, recursive)` | Lista archivos en un directorio |
-| `read_file(path, start_line, end_line)` | Lee contenido de archivo (trunca > 50KB) |
-| `write_file(path, content)` | Crea o sobrescribe un archivo |
-| `edit_file(path, old_str, new_str)` | Reemplaza texto exacto en un archivo |
+| `read_file(path, start_line, end_line)` | Lee contenido de archivo (trunca > 50KB; corrige segmento duplicado) |
+| `write_file(path, content)` | Crea archivos nuevos (bloqueado para existentes) |
+| `edit_file(path, old_str, new_str)` | Reemplaza bloque exacto en un archivo (previo read_file) |
+| `delete_file(path)` | Borra un archivo |
+| `make_dir(path)` | Crea un directorio |
 
 ### Search (1)
 
@@ -404,7 +412,25 @@ El orquestador **detecta automáticamente** la intención y carga el rol adecuad
 |---|---|
 | `inspect_routes(path)` | Detecta endpoints multi-lenguaje (Next.js/Express/Fastify/NestJS, FastAPI/Flask/Django, Go, Rust, Java/Kotlin, PHP, C#, Ruby) |
 
-### Git (10)
+### Models (1)
+
+| Tool | Descripción |
+|---|---|
+| `inspect_models(path)` | Modelos/tablas de datos con relaciones y archivo |
+
+### Verify (7)
+
+| Tool | Descripción |
+|---|---|
+| `run_install(path)` | Instala dependencias del proyecto (npm/uv/go) |
+| `install_package(path, package, workspace?)` | Agrega UNA dependencia (nombre validado, sin comandos arbitrarios) |
+| `run_lint(path)` | Linter del stack detectado |
+| `run_tests(path)` | Tests del stack detectado |
+| `run_build(path)` | Build del stack detectado |
+| `run_verify(path)` | Batería lint+tests+build con veredicto |
+| `run_npm_script(path, script)` | Script declarado en package.json (solo existentes) |
+
+### Git (12)
 
 | Tool | Descripción |
 |---|---|
@@ -415,10 +441,11 @@ El orquestador **detecta automáticamente** la intención y carga el rol adecuad
 | `stage_files(path, files)` | Stagea archivos antes de commitear |
 | `create_branch(path, name)` | Crea rama y se cambia (idempotente); flujo diario antes de implementar |
 | `create_commit(path, message)` | Commitea staged (conventional commits) |
-| `push(path, remote, branch)` | Pusha la rama (setea upstream) |
-| `create_pr(path, title, body, base)` | Pusha + abre PR con `gh` |
+| `push(path, remote, branch)` | Pusha la rama (setea upstream; con confirmación del usuario) |
+| `create_pr(path, title, body, base)` | Pusha + abre PR con `gh` (con confirmación del usuario) |
 | `read_pr(path, number?)` | Lee PR (metadata + diff) para review |
 | `list_prs(path, state)` | Lista PRs para review |
+| `git_restore(path, files)` | Restaura archivos al estado commiteado |
 
 ### Knowledge Graph (14, codebase-memory-mcp)
 
@@ -495,7 +522,7 @@ Cubren: core domain (15), classifier (15), session flow con LLM real (13):
 | 1 | 💬 chat | Saludo | Agente responde 226 tokens |
 | 2 | 🔍 analyze | `cm__list_projects` | Lista 7 proyectos indexados |
 | 3 | 📋 plan | Explora + plan 3 pasos | 1,158 tokens, identifica Spring Boot + WebFlux |
-| 4 | 🔎 review | `read_pr` PR #343 | Encuentra 4 code smells (Dockerfile, nested vars, regex, CODEOWNERS) |
+| 4 | 🔎 review | `read_pr` sobre un PR | Encuentra 4 code smells (Dockerfile, nested vars, regex, CODEOWNERS) |
 | 5 | 🛠️ execute | `write_file` | Crea `/tmp/test_e2e.md` con contenido correcto |
 
 > Última ejecución: **43/43 (100%)** — ver `tests/TEST_REPORT.md`
@@ -512,7 +539,7 @@ Cubren: core domain (15), classifier (15), session flow con LLM real (13):
 
 - El modelo local **piensa en voz alta** antes de cada acción — esa salida se muestra en vivo (streaming) como `💭 Razonando…`
 - **Con `--reasoning-budget` en el server (4B)**: el thinking se corta, el resto va a content/tool_calls
-- **Sin `--reasoning-budget`**: el modelo puede gastar todos los tokens en reasoning → el agente detecta esto, corta a los `MAX_REASONING_SECONDS` (300s) y reintenta con contexto recortado
+- **Sin `--reasoning-budget`**: el modelo puede gastar todos los tokens en reasoning → el agente detecta esto, corta a los `MAX_REASONING_SECONDS` (180s) y reintenta con contexto recortado
 - El análisis inicial puede tardar **1-2 minutos** (el modelo razona mucho)
 - El clasificador keyword-based es **instantáneo** (no gasta tokens del LLM)
 - La memoria entre turnos **acumula tokens** — el contexto crece con cada mensaje

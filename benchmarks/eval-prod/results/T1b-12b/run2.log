@@ -7,15 +7,15 @@ level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
 
 ────────────────────────────────────────
 
-  🔧 run_lint{"path":"/Users/luchop/PROYECTOS IA/Medicos"}
-  🔧 run_tests{"path":"/Users/luchop/PROYECTOS IA/Medicos"}
-  🔧 run_build{"path":"/Users/luchop/PROYECTOS IA/Medicos"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/interfaces/http/controllers/PacienteController.ts"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/application/pacientes/CreatePaciente.ts"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/application/pacientes/DeletePaciente.ts"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/infrastructure/database/repositories/PrismaPacienteRepository.ts"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/interfaces/http/middlewares/validate.ts"}
-  🔧 inspect_routes{"path":"/Users/luchop/PROYECTOS IA/Medicos"}
+  🔧 run_lint{"path":"/Users/<usuario>/PROYECTOS IA/Medicos"}
+  🔧 run_tests{"path":"/Users/<usuario>/PROYECTOS IA/Medicos"}
+  🔧 run_build{"path":"/Users/<usuario>/PROYECTOS IA/Medicos"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/interfaces/http/controllers/PacienteController.ts"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/application/pacientes/CreatePaciente.ts"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/application/pacientes/DeletePaciente.ts"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/infrastructure/database/repositories/PrismaPacienteRepository.ts"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/interfaces/http/middlewares/validate.ts"}
+  🔧 inspect_routes{"path":"/Users/<usuario>/PROYECTOS IA/Medicos"}
 ## Resumen
 Se verificó el cumplimiento de los criterios de aceptación en el repositorio Medicos, analizando la lógica de creación de pacientes, borrado suave, autenticación y endpoints de salud.
 

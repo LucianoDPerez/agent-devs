@@ -30,12 +30,12 @@ from .models import inspect_models
 from .routes import inspect_routes
 from .runtime_probe import capture_dev_server, probe_http, probe_tcp
 from .search import search_code
-from .verify import run_build, run_install, run_lint, run_npm_script, run_tests, run_verify
+from .verify import run_build, run_install, install_package, run_lint, run_npm_script, run_tests, run_verify
 
 ALL_TOOLS = [
     list_files, read_file, write_file, edit_file, delete_file, make_dir, search_code, inspect_routes,
     inspect_models,
-    run_install, run_lint, run_tests, run_build, run_verify, run_npm_script,
+    run_install, install_package, run_lint, run_tests, run_build, run_verify, run_npm_script,
     current_branch, changed_files, git_status, git_log,
     stage_files, create_branch, create_commit, push, create_pr, pr_comment, read_pr, list_prs,
 ]
@@ -53,7 +53,7 @@ PLANNER_TOOLS = [list_files, read_file, search_code, inspect_routes, inspect_mod
 EXECUTOR_TOOLS = [
     read_file, write_file, edit_file, apply_patch, delete_file, make_dir,
     search_code, inspect_routes,
-    run_lint, run_tests, run_build, run_verify, run_npm_script,
+    run_install, install_package, run_lint, run_tests, run_build, run_verify, run_npm_script,
     # git de LECTURA: 'hacer commit de los modificados' exige VER qué cambió
     # (E2E real: sin git_status el modelo intentó leer .git/HEAD con read_file).
     current_branch, changed_files, git_status, git_log,

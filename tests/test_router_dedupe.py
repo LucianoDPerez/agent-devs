@@ -634,6 +634,53 @@ class TestConfirmImminent:
         assert "✅" in r
 
 
+class TestConfirmPushPR:
+    """push/create_pr exigen confirmación igual que escribir (README lo
+    promete). El rechazo ocurre ANTES de invocar: sin red en tests."""
+
+    def test_push_rechazado_pide_permiso(self, tmp_path):
+        from tools.git import push
+
+        seen: list = []
+        (tool,) = wrap_tools_with_dedupe(
+            [push], ToolCallDedupe(),
+            confirm_callback=lambda n, k: seen.append(n) or False,
+        )
+        r = tool.invoke({"path": str(tmp_path)})
+        assert seen == ["push"]
+        assert "RECHAZÓ" in r
+
+    def test_create_pr_rechazado_pide_permiso(self, tmp_path):
+        from tools.git import create_pr
+
+        (tool,) = wrap_tools_with_dedupe(
+            [create_pr], ToolCallDedupe(),
+            confirm_callback=lambda n, k: False,
+        )
+        r = tool.invoke({"path": str(tmp_path), "title": "t"})
+        assert "RECHAZÓ" in r
+
+    def test_push_aprobado_pasa_al_hook(self, tmp_path):
+        import subprocess
+
+        import pytest
+        from langchain_core.tools import ToolException
+
+        from tools.git import push
+
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        order: list = []
+        (tool,) = wrap_tools_with_dedupe(
+            [push], ToolCallDedupe(),
+            confirm_callback=lambda n, k: order.append(n) or True,
+        )
+        # Repo vacío sin remote: el push falla DESPUÉS del confirm (ToolException
+        # del runner git). Lo que se prueba es que llegó hasta ahí.
+        with pytest.raises(ToolException):
+            tool.invoke({"path": str(tmp_path)})
+        assert order == ["push"]
+
+
 class TestFirstFailure:
     """Trampa del primer fallo: excerpt enfocado para el gate-retry."""
 

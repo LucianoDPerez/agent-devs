@@ -1,7 +1,7 @@
 # eval-prod — Batería de producción sobre Medicos
 
 Batería de 5 tests reales con `agents-a1-4b` (4B local, llama-server) sobre
-`/Users/luchop/PROYECTOS IA/Medicos` (rama `eval/agent-battery`).
+`/Users/<usuario>/PROYECTOS IA/Medicos` (rama `eval/agent-battery`).
 Regla: si un test falla por causa del harness, se corrige, se re-corre y el
 ciclo queda registrado acá.
 

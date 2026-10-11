@@ -15,9 +15,9 @@ Primero, leamos el archivo para ver la validación actual del nombre:
 
 
 
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/application/pacientes/CreatePaciente.ts"}
-  🔧 edit_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/application/pacientes/CreatePaciente.ts","old_str":"  async execute(input: CreatePacienteInput): Promise<Paciente> {\n    if (!input.nombre || input.nombre.trim().length === 0) {\n      throw new ValidationError(\"El nombre del paciente es requerido\");\n    }\n    return this.pacienteRepository.create(input);\n  }","new_str":"  async execute(input: CreatePacienteInput): Promise<Paciente> {\n    // Validar que el nombre del paciente sea requerido\n    if (!input.nombre || input.nombre.trim().length === 0) {\n      throw new ValidationError(\"El nombre del paciente es requerido\");\n    }\n    return this.pacienteRepository.create(input);\n  }"}
-  🔧 run_build{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/application/pacientes/CreatePaciente.ts"}
+  🔧 edit_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/application/pacientes/CreatePaciente.ts","old_str":"  async execute(input: CreatePacienteInput): Promise<Paciente> {\n    if (!input.nombre || input.nombre.trim().length === 0) {\n      throw new ValidationError(\"El nombre del paciente es requerido\");\n    }\n    return this.pacienteRepository.create(input);\n  }","new_str":"  async execute(input: CreatePacienteInput): Promise<Paciente> {\n    // Validar que el nombre del paciente sea requerido\n    if (!input.nombre || input.nombre.trim().length === 0) {\n      throw new ValidationError(\"El nombre del paciente es requerido\");\n    }\n    return this.pacienteRepository.create(input);\n  }"}
+  🔧 run_build{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend"}
 
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ ⚡ Pregunta: 170.1s | 8,214 tokens (in 7,766 + out 448, 7,670 reutilizados)  │

@@ -13,7 +13,7 @@ Sistema de gestión médica para consultorios, enfocado en la separación de rol
 
 ╭───────────────────────────────── AgentDevs ──────────────────────────────────╮
 │ 🔌 LLM: http://localhost:8080/v1                                             │
-│ 📁 Repo: /Users/luchop/PROYECTOS IA/Medicos  🌿 new-frontend                 │
+│ 📁 Repo: /Users/<usuario>/PROYECTOS IA/Medicos  🌿 new-frontend                 │
 │ ⚡ Modelo: gemma-4-e4b | Temp: 0.2 | Max: 3584                               │
 │ 🛠️  Tools: 21 locales + 14 graph (cm__*)                                     │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -32,12 +32,12 @@ Voy a seguir el plan paso a paso:
 **Paso 1:** Revertir cambios que no eran parte de la tarea (`.env.example` y `PrismaMigracionRepository.ts`).
 
 
-  🔧 git_restore{"path":"/Users/luchop/PROYECTOS IA/Medicos","files":".env.example backend/src/infrastructure/database/repositories/PrismaMigracionRepository.ts"}
-  🔧 delete_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/run_install.sh"}
-  🔧 delete_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/scripts/install.sh"}
-  🔧 delete_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/scripts/dev.sh"}
-  🔧 delete_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/.eslintrc.cjs"}
-  🔧 git_restore{"path":"/Users/luchop/PROYECTOS IA/Medicos","files":"backend/jest.config.js backend/src/tests/ frontend/src/tests/ frontend/vitest.config.ts package-lock.json scripts/ run_install.sh"}
+  🔧 git_restore{"path":"/Users/<usuario>/PROYECTOS IA/Medicos","files":".env.example backend/src/infrastructure/database/repositories/PrismaMigracionRepository.ts"}
+  🔧 delete_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/run_install.sh"}
+  🔧 delete_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/scripts/install.sh"}
+  🔧 delete_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/scripts/dev.sh"}
+  🔧 delete_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/.eslintrc.cjs"}
+  🔧 git_restore{"path":"/Users/<usuario>/PROYECTOS IA/Medicos","files":"backend/jest.config.js backend/src/tests/ frontend/src/tests/ frontend/vitest.config.ts package-lock.json scripts/ run_install.sh"}
 
 
 

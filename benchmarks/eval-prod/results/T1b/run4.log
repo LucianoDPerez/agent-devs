@@ -13,14 +13,14 @@ Revisión de 4 criterios de aceptación contra el código actual en la rama `eva
 
 
 
-  🔧 list_files{"path":"/Users/luchop/PROYECTOS IA/Medicos","recursive":false}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/.gitignore"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/AGENTS.md"}
-  🔧 list_files{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend","recursive":true}
-  🔧 list_files{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend","recursive":false}
-  🔧 list_files{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src","recursive":false}
-  🔧 list_files{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/prisma","recursive":false}
-  🔧 inspect_routes{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend"}
+  🔧 list_files{"path":"/Users/<usuario>/PROYECTOS IA/Medicos","recursive":false}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/.gitignore"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/AGENTS.md"}
+  🔧 list_files{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend","recursive":true}
+  🔧 list_files{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend","recursive":false}
+  🔧 list_files{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src","recursive":false}
+  🔧 list_files{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/prisma","recursive":false}
+  🔧 inspect_routes{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend"}
 
 level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
 level=info msg=mem.init budget_mb=8192 total_ram_mb=16384

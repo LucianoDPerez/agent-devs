@@ -140,7 +140,12 @@ PRODUCTIVE_TOOL_NAMES = READISH_TOOL_NAMES | VERIFY_TOOL_NAMES
 # (EXECUTE_CONFIRM_WRITES): el harness pausa la tool hasta que el usuario
 # aprueba. stage_files/create_commit NO van acá: el commit ya tiene su propio
 # prompt post-turno (EXECUTE_ASK_COMMIT).
-CONFIRM_TOOL_NAMES = frozenset({"write_file", "edit_file", "apply_patch", "delete_file", "make_dir"})
+CONFIRM_TOOL_NAMES = frozenset({
+    "write_file", "edit_file", "apply_patch", "delete_file", "make_dir",
+    # Publicar sale de la máquina: push/PR exigen confirmación igual que
+    # escribir (el README lo promete). Con /autoapprove se aprueban solos.
+    "push", "create_pr",
+})
 
 
 class ToolCallDedupe:

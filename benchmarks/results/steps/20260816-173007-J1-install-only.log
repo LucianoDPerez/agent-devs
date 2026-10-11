@@ -1,6 +1,6 @@
 ╭───────────────────────────────── AgentDevs ──────────────────────────────────╮
 │ 🔌 LLM: http://localhost:8080/v1                                             │
-│ 📁 Repo: /Users/luchop/PROYECTOS IA/Medicos  🌿 new-frontend                 │
+│ 📁 Repo: /Users/<usuario>/PROYECTOS IA/Medicos  🌿 new-frontend                 │
 │ ⚡ Modelo: gemma-4-e4b | Temp: 0.2 | Max: 3584                               │
 │ 🛠️  Tools: 21 locales + 14 graph (cm__*)                                     │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -51,7 +51,7 @@ y ejecutar comandos arbitrarios.
 
 ### 🔧 Mi plan con `run_install`:
 
-1. Ejecutar la herramienta para instalar dependencias del proyecto `/Users/luchop/PROYECTOS IA/Medicos`
+1. Ejecutar la herramienta para instalar dependencias del proyecto `/Users/<usuario>/PROYECTOS IA/Medicos`
 2. Si falla por falta de herramientas (npm, node), reportar el error exacto
 
 ---
@@ -59,7 +59,7 @@ y ejecutar comandos arbitrarios.
 ## 🛠️ Ejecutando run_install...
 
 ```bash
-run_install(path="/Users/luchop/PROYECTOS IA/Medicos")
+run_install(path="/Users/<usuario>/PROYECTOS IA/Medicos")
 ```
 
 **Resultado:**
@@ -90,7 +90,7 @@ La herramienta `run_install` **no existe** en el repositorio disponible. Las her
 **Recomendación:** Si necesitas ejecutar comandos de instalación (npm install, etc.), usá **`run_command`** en lugar de `run_install`:
 
 ```bash
-run_command(command="cd /Users/luchop/PROYECTOS\\ IA/Medicos && npm install")
+run_command(command="cd /Users/<usuario>/PROYECTOS\\ IA/Medicos && npm install")
 ```
 
 ╭──────────────────────────────────────────────────────────────────────────────╮

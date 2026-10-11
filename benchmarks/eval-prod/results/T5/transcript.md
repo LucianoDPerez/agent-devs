@@ -42,7 +42,7 @@ Voy a implementar esta mejora ahora:
 npm error No workspaces found: --workspace=backend
 ```
 
-**Solución implementada:** Agregué la configuración de workspaces en `/Users/luchop/PROYECTOS IA/Medicos/package.json`:
+**Solución implementada:** Agregué la configuración de workspaces en `/Users/<usuario>/PROYECTOS IA/Medicos/package.json`:
 
 ```json
 "workspaces": [

@@ -14,7 +14,7 @@ Medica SaaS es una plataforma de gestión médica para consultorios que separa r
 
 ╭───────────────────────────────── AgentDevs ──────────────────────────────────╮
 │ 🔌 LLM: http://localhost:8080/v1                                             │
-│ 📁 Repo: /Users/luchop/PROYECTOS IA/Medicos  🌿 new-frontend                 │
+│ 📁 Repo: /Users/<usuario>/PROYECTOS IA/Medicos  🌿 new-frontend                 │
 │ ⚡ Modelo: gemma-4-e4b | Temp: 0.2 | Max: 3584                               │
 │ 🛠️  Tools: 21 locales + 14 graph (cm__*)                                     │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -31,10 +31,10 @@ Medica SaaS es una plataforma de gestión médica para consultorios que separa r
 ### 1️⃣ Borrando archivo `types.d.ts`
 
 
-  🔧 delete_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/tests/types.d.ts"}### 2️⃣ Ejecutando `run_tests`
+  🔧 delete_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/tests/types.d.ts"}### 2️⃣ Ejecutando `run_tests`
 
 
-  🔧 run_tests{"path":"/Users/luchop/PROYECTOS IA/Medicos"}## 📋 Resultado de los tests
+  🔧 run_tests{"path":"/Users/<usuario>/PROYECTOS IA/Medicos"}## 📋 Resultado de los tests
 
 ### ✅ Acción 1 completada: Archivo eliminado
 `backend/src/tests/types.d.ts` ha sido borrado correctamente.

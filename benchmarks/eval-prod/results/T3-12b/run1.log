@@ -178,4 +178,4 @@ Traceback (most recent call last):
   File "/tmp/eval_run2.py", line 34, in <module>
     with open(f"{outdir}/transcript.md", "w") as f:
          ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-FileNotFoundError: [Errno 2] No such file or directory: '/Users/luchop/agent-lucho/benchmarks/eval-prod/results/12b-T3/transcript.md'
+FileNotFoundError: [Errno 2] No such file or directory: '/Users/<usuario>/agent-lucho/benchmarks/eval-prod/results/12b-T3/transcript.md'

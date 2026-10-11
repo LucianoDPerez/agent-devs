@@ -75,7 +75,7 @@ También podés re-correr el one-liner de instalación: detecta la instalación 
 **1. Levantá el modelo** (llama-server escuchando en `http://localhost:8080`, el default):
 
 ```bash
-llama-server -hf unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M --port 8080
+llama-server -hf bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M --port 8080
 ```
 
 El doctor (`agent-devs --doctor`) detecta tu RAM y te marca tu liga. Resumen (siempre `--port 8080`):

@@ -9,16 +9,16 @@ level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
 
 ────────────────────────────────────────
 
-  🔧 git_status{"path":"/Users/luchop/PROYECTOS IA/Medicos"}
-  🔧 changed_files{"path":"/Users/luchop/PROYECTOS IA/Medicos"}
-  🔧 search_code{"path":"/Users/luchop/PROYECTOS IA/Medicos","pattern":"CreatePaciente|DeletePaciente|middleware.*JWT|/api/health"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/application/pacientes/CreatePaciente.ts"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/application/pacientes/DeletePaciente.ts"}
-  🔧 search_code{"path":"/Users/luchop/PROYECTOS IA/Medicos","pattern":"jwt|JWT|jsonwebtoken|bearer"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/server.ts"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/.gitignore"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/domain/repositories/IPacienteRepository.ts"}
-  🔧 git_log{"path":"/Users/luchop/PROYECTOS IA/Medicos","limit":5}
+  🔧 git_status{"path":"/Users/<usuario>/PROYECTOS IA/Medicos"}
+  🔧 changed_files{"path":"/Users/<usuario>/PROYECTOS IA/Medicos"}
+  🔧 search_code{"path":"/Users/<usuario>/PROYECTOS IA/Medicos","pattern":"CreatePaciente|DeletePaciente|middleware.*JWT|/api/health"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/application/pacientes/CreatePaciente.ts"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/application/pacientes/DeletePaciente.ts"}
+  🔧 search_code{"path":"/Users/<usuario>/PROYECTOS IA/Medicos","pattern":"jwt|JWT|jsonwebtoken|bearer"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/server.ts"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/.gitignore"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/domain/repositories/IPacienteRepository.ts"}
+  🔧 git_log{"path":"/Users/<usuario>/PROYECTOS IA/Medicos","limit":5}
 ## Resumen
 Revisión de 4 criterios de aceptación contra el código actual en la rama `eval/agent-battery`.
 

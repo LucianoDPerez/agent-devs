@@ -516,6 +516,107 @@ def run_verify(path: str) -> str:
     return body
 
 
+_PKG_RE = re.compile(
+    r"^(@[a-z0-9-~][a-z0-9-._~]*/)?[a-z0-9~][a-z0-9-._~]*(@[^ \t;|&$`'\"\\]+)?$"
+)
+
+
+def _workspace_names(root: Path) -> list[str]:
+    """Nombres de workspaces npm (para -w/--filter). Acepta entradas directas
+    (`"backend"`) y globs (`"packages/*"`): el nombre sale del package.json
+    del subdir, o del dirname si no declara nombre."""
+    names: list[str] = []
+
+    def _add(d: Path) -> None:
+        try:
+            if not d.is_dir():
+                return
+            sub_pkg = _read_package_json(d)
+            if sub_pkg is not None:
+                if sub_pkg.get("name"):
+                    names.append(str(sub_pkg["name"]))
+                elif (d / "package.json").is_file():
+                    names.append(d.name)
+        except OSError:
+            pass
+
+    pkg = _read_package_json(root) or {}
+    patterns = pkg.get("workspaces") or []
+    if isinstance(patterns, dict):
+        patterns = patterns.get("packages") or []
+    if not isinstance(patterns, list):
+        return names
+    for pat in patterns:
+        base = str(pat).split("*")[0].rstrip("/")
+        if not base:
+            continue
+        target = root / base
+        if (target / "package.json").is_file():
+            _add(target)  # entrada directa: el workspace ES ese dir
+            continue
+        if target.is_dir():
+            for sub in target.iterdir():  # glob: cada subdir es un workspace
+                _add(sub)
+    return names
+
+
+@tool
+def install_package(path: str, package: str, workspace: str = "") -> str:
+    """Add ONE dependency to a Node project (npm/pnpm/yarn auto-detected).
+
+    Runs `<pm> install <package>` (npm) / `<pm> add <package>` (pnpm/yarn),
+    with `-w/--filter/workspace` when `workspace` names a declared workspace.
+    Use it when a task says to install a LIBRARY (zod, dotenv) — NOT for
+    plain missing node_modules (that's run_install). The package name is
+    strictly validated (exact npm name + optional @version; no flags,
+    no commands, no URLs) and the workspace must exist in the repo.
+    Usage: install_package(path="/repo", package="zod", workspace="backend")
+    """
+    error = _validate_cwd(path)
+    if error:
+        return error
+    m = _PKG_RE.match((package or "").strip())
+    if not m:
+        return (
+            f"⛔ Nombre de paquete inválido: {package!r}. Pasá el nombre npm "
+            "exacto + @versión opcional (ej. zod, dotenv@16.4.5). Sin comandos, "
+            "sin flags, sin URLs."
+        )
+    pkg = m.group(0)
+    root = _find_stack_root(path) or Path(path)
+    if _detect_stack(root) != "node":
+        return f"install_package solo soporta proyectos Node (stack no-Node en {root})."
+    pm = _node_package_manager(root)
+    ws_name = ""
+    if (workspace or "").strip():
+        names = _workspace_names(root)
+        want = workspace.strip()
+        # Aceptar nombre declarado o subdir con package.json.
+        hit = want if want in names else ""
+        if not hit:
+            for n in names:
+                if n.split("/")[-1] == want or n == want:
+                    hit = n
+                    break
+        if not hit and ((root / want / "package.json").is_file()):
+            sub_pkg = _read_package_json(root / want) or {}
+            hit = str(sub_pkg.get("name") or want)
+        if not hit:
+            avail = ", ".join(names) if names else "(sin workspaces declarados)"
+            return (
+                f"⛔ Workspace desconocido: {workspace!r}. Disponibles: {avail}. "
+                "Pasá el nombre tal cual figura en workspaces."
+            )
+        ws_name = hit
+    if pm == "npm":
+        cmd = ["npm", "install", pkg] + (["-w", ws_name] if ws_name else [])
+    elif pm == "pnpm":
+        cmd = ["pnpm", "add", pkg] + (["--filter", ws_name] if ws_name else [])
+    else:
+        cmd = ["yarn", "workspace", ws_name, "add", pkg] if ws_name else ["yarn", "add", pkg]
+    return _run_command(str(root), cmd)
+
+
 @tool
 def run_install(path: str) -> str:
     """

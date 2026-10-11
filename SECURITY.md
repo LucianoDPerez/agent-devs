@@ -28,8 +28,11 @@ Es especialmente relevante todo lo que implique:
   *(prompt injection / escape de sandbox)*.
 - Escalada de privilegios o ejecución de comandos arbitrarios más allá de las
   tools declaradas.
-- Fugas de información local hacia servicios remotos (el proyecto promete
-  funcionar 100% offline salvo la conexión al LLM local).
+- Fugas de información local hacia servicios remotos. Por default el proyecto
+  funciona 100% offline salvo la conexión al LLM local; con proveedor nube
+  (`provider: opencode`) los prompts y el contexto del repo viajan a la API
+  configurada, y la API key vive en `~/.config/agent-devs/config.json`
+  (permiso 600, nunca en el repo).
 - Bypasses de los guards de seguridad interna: límites de tool calls,
   protecciones anti-sobrescritura, compuerta de verificación, rutas
   protegidas (`PROTECTED_TASK_DIRS`, etc.).
@@ -38,5 +41,6 @@ Es especialmente relevante todo lo que implique:
 
 - Corré AgentDevs sobre repos donde un write inesperado no sea catastrófico y
   con git limpio (el propio harness te lo avisa al arrancar).
-- Revisá siempre el diff antes de commitear; el agente nunca pushea sin que
-  se lo pidas explícitamente.
+- Revisá siempre el diff antes de commitear; el agente nunca pushea ni abre
+  PRs sin que se lo pidas explícitamente (`push`/`create_pr` exigen tu
+  confirmación igual que las escrituras, salvo `/autoapprove`).

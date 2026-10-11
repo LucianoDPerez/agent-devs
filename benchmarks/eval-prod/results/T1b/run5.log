@@ -9,19 +9,19 @@ level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
 
 ────────────────────────────────────────
 
-  🔧 changed_files{"path":"/Users/luchop/PROYECTOS IA/Medicos"}
-  🔧 list_files{"path":"/Users/luchop/PROYECTOS IA/Medicos","recursive":true}
-  🔧 inspect_routes{"path":"/Users/luchop/PROYECTOS IA/Medicos"}
-  🔧 inspect_models{"path":"/Users/luchop/PROYECTOS IA/Medicos"}
-  🔧 search_code{"path":"/Users/luchop/PROYECTOS IA/Medicos","pattern":"CreatePaciente|nombre.*required|ValidationError"}
-  🔧 search_code{"path":"/Users/luchop/PROYECTOS IA/Medicos","pattern":"DeletePaciente|active|soft.*delete|activo"}
-  🔧 search_code{"path":"/Users/luchop/PROYECTOS IA/Medicos","pattern":"JWT|jwt|auth.*middleware|bearer"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/application/pacientes/CreatePaciente.ts"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/application/pacientes/DeletePaciente.ts"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/interfaces/http/middlewares/validate.ts"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/server.ts"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/domain/repositories/IPacienteRepository.ts"}
-  🔧 list_files{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/interfaces/http/middlewares"}
+  🔧 changed_files{"path":"/Users/<usuario>/PROYECTOS IA/Medicos"}
+  🔧 list_files{"path":"/Users/<usuario>/PROYECTOS IA/Medicos","recursive":true}
+  🔧 inspect_routes{"path":"/Users/<usuario>/PROYECTOS IA/Medicos"}
+  🔧 inspect_models{"path":"/Users/<usuario>/PROYECTOS IA/Medicos"}
+  🔧 search_code{"path":"/Users/<usuario>/PROYECTOS IA/Medicos","pattern":"CreatePaciente|nombre.*required|ValidationError"}
+  🔧 search_code{"path":"/Users/<usuario>/PROYECTOS IA/Medicos","pattern":"DeletePaciente|active|soft.*delete|activo"}
+  🔧 search_code{"path":"/Users/<usuario>/PROYECTOS IA/Medicos","pattern":"JWT|jwt|auth.*middleware|bearer"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/application/pacientes/CreatePaciente.ts"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/application/pacientes/DeletePaciente.ts"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/interfaces/http/middlewares/validate.ts"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/server.ts"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/domain/repositories/IPacienteRepository.ts"}
+  🔧 list_files{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/interfaces/http/middlewares"}
 
 level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
 level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
@@ -36,9 +36,9 @@ clave y respondé con evidencia)…
 
 ────────────────────────────────────────
 
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/server.ts"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/application/pacientes/CreatePaciente.ts"}
-  🔧 read_file{"path":"/Users/luchop/PROYECTOS IA/Medicos/backend/src/domain/repositories/IPacienteRepository.ts"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/server.ts"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/application/pacientes/CreatePaciente.ts"}
+  🔧 read_file{"path":"/Users/<usuario>/PROYECTOS IA/Medicos/backend/src/domain/repositories/IPacienteRepository.ts"}
 ## Resumen
 Revisión de 4 criterios de aceptación contra el código actual en la rama `eval/agent-battery`.
 

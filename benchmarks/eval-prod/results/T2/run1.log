@@ -9,15 +9,15 @@ level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
 
   🔧 cm__list_projects{}level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
 
-  🔧 cm__search_graph{"project":"Users-luchop-PROYECTOS-IA-Medicos","query":"CreatePaciente","limit":20}level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+  🔧 cm__search_graph{"project":"Users-<usuario>-PROYECTOS-IA-Medicos","query":"CreatePaciente","limit":20}level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
 
-  🔧 cm__get_graph_schema{"project":"Users-luchop-PROYECTOS-IA-Medicos"}level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+  🔧 cm__get_graph_schema{"project":"Users-<usuario>-PROYECTOS-IA-Medicos"}level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
 
-  🔧 cm__search_graph{"project":"Users-luchop-PROYECTOS-IA-Medicos","query":"createPaciente","limit":20}level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+  🔧 cm__search_graph{"project":"Users-<usuario>-PROYECTOS-IA-Medicos","query":"createPaciente","limit":20}level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
 
-  🔧 cm__search_code{"project":"Users-luchop-PROYECTOS-IA-Medicos","pattern":"CreatePaciente","mode":"full","limit":20}level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+  🔧 cm__search_code{"project":"Users-<usuario>-PROYECTOS-IA-Medicos","pattern":"CreatePaciente","mode":"full","limit":20}level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
 
-  🔧 cm__get_code_snippet{"qualified_name":"Users-luchop-PROYECTOS-IA-Medicos.backend.src.application.pacientes.CreatePaciente.CreatePaciente","project":"Users-luchop-PROYECTOS-IA-Medicos"}level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
+  🔧 cm__get_code_snippet{"qualified_name":"Users-<usuario>-PROYECTOS-IA-Medicos.backend.src.application.pacientes.CreatePaciente.CreatePaciente","project":"Users-<usuario>-PROYECTOS-IA-Medicos"}level=info msg=mem.init budget_mb=8192 total_ram_mb=16384
 
   🔧 cm__list_projects{}
 
@@ -82,4 +82,4 @@ Sin los archivos backend, no es posible confirmar la causa exacta ni implementar
 │ 📊 Sesión: 683.6s | 15,706 tokens (in 10,658 + out 5,048)                    │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
-TRANSCRIPT OK /Users/luchop/agent-lucho/benchmarks/eval-prod/results/T2 elapsed=684s role=Role.PLAN tools=5
+TRANSCRIPT OK /Users/<usuario>/agent-lucho/benchmarks/eval-prod/results/T2 elapsed=684s role=Role.PLAN tools=5
