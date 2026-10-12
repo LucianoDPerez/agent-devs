@@ -615,3 +615,37 @@ def test_run_lint_subpath_usa_raiz_y_avisa(tmp_path):
     assert "se ejecuta en" in out
     # el comando corrió en la raíz (donde está el package.json)
     assert Path(m.call_args[0][0]).resolve() == tmp_path.resolve()
+
+
+class TestMissingScriptSkipped:
+    """E2E T06: backend sin scripts lint/test → la batería quedaba FAILED
+    aunque el build (lo único pedido) estaba verde. Sin comando ejecutable
+    es N/A ([SKIPPED]), no fallo."""
+
+    def test_run_lint_sin_script_es_skipped(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from tools.verify import run_lint
+
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "package.json").write_text(
+                json.dumps({"scripts": {"build": "tsc"}}), encoding="utf-8")
+            out = run_lint.invoke({"path": tmp})
+            assert out.startswith("[SKIPPED]")
+            assert "No 'lint' script" in out
+
+    def test_run_verify_con_solo_build_no_es_failed(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from tools.verify import run_verify
+
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "package.json").write_text(
+                json.dumps({"scripts": {"build": "echo ok"}}), encoding="utf-8")
+            out = run_verify.invoke({"path": tmp})
+            assert "[FAILED]" not in out.splitlines()[0]
+            assert "⏭️ lint" in out and "⏭️ test" in out

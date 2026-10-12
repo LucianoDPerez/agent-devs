@@ -406,7 +406,14 @@ def _run_verify(path: str, action: str) -> str:
         pass
     command = _resolve_command(stack_root, action)
     if isinstance(command, str):
-        return command + note
+        # Sin comando ejecutable (sin script 'lint'/'test' declarado, sin
+        # stack detectable, sin ruff...): NO es un fallo, es NO APLICA.
+        # Antes se devolvía el texto crudo y run_verify() lo contaba como
+        # FAILED (E2E T06: backend sin scripts lint/test → batería "roja"
+        # aunque el build —lo único que pedía la tarea— estaba verde).
+        # Con prefijo [SKIPPED] el registro lo guarda como N/A y el cierre
+        # lo muestra como tal en vez de envenenar el veredicto.
+        return f"[SKIPPED] {action}: {command}" + note
 
     result = _run_command(str(stack_root), command)
 
@@ -499,15 +506,19 @@ def run_verify(path: str) -> str:
         f"  {marks[ok]} {name}: {first}" for name, ok, first in parts
     )
     states = {ok for _, ok, _ in parts}
-    if states == {True}:
-        header = "[PASSED] batería completa verde"
+    if False in states:
+        header = "[FAILED] batería con rojos"
     elif states == {None}:
         header = (
             "[SKIPPED] batería no aplicable: sin stack verificable "
             f"en {path} (docs/infra) — vale verificación documental con citas"
         )
+    elif states == {True}:
+        header = "[PASSED] batería completa verde"
     else:
-        header = "[FAILED] batería con rojos"
+        # Mezcla verde + N/A (ej. build ✅ con lint/test sin script
+        # declarado): lo ejecutable pasó, lo demás no aplica. NO es fallo.
+        header = "[PASSED] batería verde en lo aplicable (resto N/A)"
     body = f"{header}\n{report}"
     if details:
         body += "\n\n" + "\n\n".join(details)

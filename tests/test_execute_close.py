@@ -1182,3 +1182,88 @@ def test_writes_all_failed_sin_intentos_no_falla(tmp_path):
     repo = _init_repo(tmp_path)
     s = Session(llm=None, repo_path=str(repo))
     assert s._turn_writes_all_failed() is False
+
+
+def test_exact_contents_detecta_parafraseo(tmp_path):
+    """E2E T02: disco con paráfrasis vs pegar_contenido → mismatch."""
+    import json
+
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    (repo / "backend").mkdir()
+    (repo / "backend" / "dotenv.ts").write_text("PARAFRASIS\n", encoding="utf-8")
+    tasks = repo / "tareas.json"
+    tasks.write_text(json.dumps({"tareas": [
+        {"id": "T02", "archivo": "backend/dotenv.ts",
+         "pegar_contenido": "EXACTO\n"}]}), encoding="utf-8")
+    s = Session(llm=None, repo_path=str(repo))
+    bad = s._check_pinned_exact_contents(f"implementar Tarea 2 de {tasks}")
+    assert bad == ["backend/dotenv.ts"]
+
+
+def test_exact_contents_pasa_con_contenido_exacto(tmp_path):
+    import json
+
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    (repo / "backend").mkdir()
+    (repo / "backend" / "dotenv.ts").write_text("EXACTO\n", encoding="utf-8")
+    tasks = repo / "tareas.json"
+    tasks.write_text(json.dumps({"tareas": [
+        {"id": "T02", "archivo": "backend/dotenv.ts",
+         "pegar_contenido": "EXACTO"}]}), encoding="utf-8")
+    s = Session(llm=None, repo_path=str(repo))
+    assert s._check_pinned_exact_contents(f"implementar Tarea 2 de {tasks}") == []
+
+
+def test_verify_red_es_fallo_de_cierre(tmp_path):
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    _old_commit(repo)
+    s = Session(llm=None, repo_path=str(repo))
+    s._verify_results = {"run_build": False}
+    s._called_tools = {"run_build"}
+    assert s._turn_verify_is_red() is True
+    s._verify_results = {"run_build": True}
+    assert s._turn_verify_is_red() is False
+    s._verify_results = {}
+    s._called_tools = set()
+    assert s._turn_verify_is_red() is False
+
+
+def test_own_files_detecta_reescritura_de_pre_dirty(tmp_path):
+    """E2E T02: archivo ya-dirty al abrir y reescrito en el turno → propio."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    f = repo / "a.ts"
+    f.write_text("v1\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "init")
+    f.write_text("v2-previa\n", encoding="utf-8")  # dirty previo
+    s = Session(llm=None, repo_path=str(repo))
+    pre = frozenset(s._filter_porcelain(s._porcelain_lines()))
+    assert "a.ts" in pre
+    s._turn_start_diffs = s._snapshot_path_states(pre)
+    f.write_text("v3-turno\n", encoding="utf-8")  # reescritura del turno
+    own = s._turn_own_files(s._changed_files(), pre)
+    assert "a.ts" in own
+
+
+def test_own_files_previo_intacto_sigue_previo(tmp_path):
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    f = repo / "a.ts"
+    f.write_text("v1\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "init")
+    f.write_text("v2-previa\n", encoding="utf-8")
+    s = Session(llm=None, repo_path=str(repo))
+    pre = frozenset(s._filter_porcelain(s._porcelain_lines()))
+    s._turn_start_diffs = s._snapshot_path_states(pre)
+    own = s._turn_own_files(s._changed_files(), pre)
+    assert own == []

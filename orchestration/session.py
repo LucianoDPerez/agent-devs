@@ -1279,6 +1279,13 @@ class Session:
         # Snapshot del dirty tree al inicio del turno (cierre honesto).
         # None = snapshot fallido (sin claim de atribución).
         self._turn_start_dirty: frozenset[str] | None = frozenset()
+        # Estado por archivo del snapshot: path → ("diff", texto de git diff)
+        # para tracked o ("hash", sha256) para untracked, None si falló ese
+        # path. Permite detectar REESCRITURAS en el turno de archivos que ya
+        # venían dirty (comparar conjuntos no alcanza — E2E T02: dotenv.ts
+        # venía modificado y el turno lo reescribió, pero el cierre lo listó
+        # como "previo / no son de este turno").
+        self._turn_start_diffs: dict[str, tuple[str, str] | None] = {}
         # Timestamp (epoch) de inicio del turno: distingue un commit hecho
         # DURANTE el turno de un commit previo (setup/benchmark). Sin esto el
         # cierre confunde "setup commiteado hace segundos" con "trabajo hecho"
@@ -2413,6 +2420,47 @@ class Session:
         except Exception:
             return False
 
+    def _check_pinned_exact_contents(self, user_input: str) -> list[str]:
+        """Archivos pinnados cuyo contenido EXACTO no coincide con lo exigido.
+
+        Para tareas con `pegar_contenido`: compara el archivo en disco contra
+        el esperado (tolerando solo el newline final). Retorna la lista de
+        paths que DIFIEREN (vacía = todo exacto o sin exigencia). Fail-open:
+        cualquier error → [] (nunca romper el cierre).
+        """
+        try:
+            from orchestration.execute_bootstrap import pinned_exact_contents
+
+            expected = pinned_exact_contents(user_input, self.repo_path)
+        except Exception:
+            return []
+        if not expected:
+            return []
+        root = Path(self.repo_path)
+        bad: list[str] = []
+        for rel, want in expected:
+            try:
+                p = Path(rel) if Path(rel).is_absolute() else root / rel
+                actual = p.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                bad.append(f"{rel} (no existe en disco)")
+                continue
+            if actual.rstrip("\n") != want.rstrip("\n"):
+                bad.append(rel)
+        return bad
+
+    def _turn_verify_is_red(self) -> bool:
+        """True si se corrió verificación en el turno y quedó en rojo.
+
+        Distinto de "no se corrió" (None → la compuerta de verificación ya
+        tuvo su chance durante el turno). Un rojo al cerrar significa que el
+        fix no está: cerrar como éxito finge avance (E2E T02/T04).
+        """
+        try:
+            return self._verify_all_passed() is False
+        except Exception:
+            return False
+
     def _turn_writes_all_failed(self) -> bool:
         """True si el turno intentó escribir pero NINGUNA escritura se aplicó
         y tampoco hay verificación en verde.
@@ -2835,6 +2883,72 @@ class Session:
         except Exception:
             pass
 
+    def _snapshot_path_states(self, paths: frozenset[str]) -> dict[str, tuple[str, str] | None]:
+        """Foto por-archivo del dirty inicial: tracked → git diff, untracked → hash.
+
+        Acotado (máx 30 paths, 100KB por diff, 1MB por hash) para no colgar el
+        inicio del turno en repos grandes. Fail-open por path: None.
+        """
+        states: dict[str, tuple[str, str] | None] = {}
+        try:
+            import hashlib
+
+            for f in sorted(paths)[:30]:
+                try:
+                    code, cur = self._git_cmd(["diff", "--", f], timeout=15)
+                    if code == 0 and cur.strip():
+                        states[f] = ("diff", cur[:100_000])
+                        continue
+                    p = Path(self.repo_path) / f
+                    if p.is_file():
+                        h = hashlib.sha256(
+                            p.read_bytes()[:1_000_000]).hexdigest()
+                        states[f] = ("hash", h)
+                    else:
+                        states[f] = ("diff", "")
+                except Exception:
+                    states[f] = None
+        except Exception:
+            pass
+        return states
+
+    def _turn_own_files(self, files: list[str], pre_dirty: frozenset[str]) -> list[str]:
+        """Archivos modificados POR este turno.
+
+        Los que no estaban dirty al abrir, MÁS los ya-dirty cuyo contenido
+        cambió durante el turno (reescritura — E2E T02). Comparación por
+        hunks/hash contra el snapshot inicial, no por conjuntos.
+        """
+        own = [f for f in files if f not in pre_dirty]
+        diffs = getattr(self, "_turn_start_diffs", None) or {}
+        for f in files:
+            if f in own or f not in pre_dirty:
+                continue
+            state = diffs.get(f)
+            if state is None:
+                continue  # snapshot fallido para ese path: se lista como previo
+            try:
+                kind, old = state
+                if kind == "diff":
+                    code, cur = self._git_cmd(["diff", "--", f], timeout=15)
+                    if code == 0 and cur[:100_000] != old:
+                        own.append(f)
+                else:
+                    p = Path(self.repo_path) / f
+                    if not p.is_file():
+                        continue
+                    import hashlib
+
+                    cur_h = hashlib.sha256(
+                        p.read_bytes()[:1_000_000]).hexdigest()
+                    # Hash distinto = contenido reescrito en el turno (siga
+                    # untracked o haya pasado a tracked).
+                    if cur_h != old and f not in own:
+                        own.append(f)
+            except Exception:
+                continue
+        return own
+
     def _deterministic_close(self) -> str:
         """Resumen de cierre determinístico del SISTEMA (no del modelo).
 
@@ -2860,7 +2974,7 @@ class Session:
         except Exception:
             unknown_start = True
             pre_dirty = frozenset()
-        own_files = files if unknown_start else [f for f in files if f not in pre_dirty]
+        own_files = files if unknown_start else self._turn_own_files(files, pre_dirty)
         turn_suffix = "" if unknown_start else " en este turno"
         scope_line = ""
         try:
@@ -3968,6 +4082,8 @@ class Session:
             None if _snap_lines is None
             else frozenset(self._filter_porcelain(_snap_lines))
         )
+        self._turn_start_diffs = self._snapshot_path_states(
+            self._turn_start_dirty or frozenset())
         self._turn_start_raw = (
             None if _snap_lines is None
             else set(_porcelain_paths(_snap_lines))
@@ -4781,6 +4897,35 @@ class Session:
                     "se aplicó (bloqueadas por guards o fallidas) y no hay "
                     "verificación en verde. Se marca fallido para no fingir "
                     "avance: revisá los ⛔ de arriba y reintentá.[/red]"
+                )
+        # Contenido EXACTO pinnado incumplido: la tarea exigía pegar un
+        # contenido byte-exacto (`pegar_contenido`) y el archivo en disco
+        # difiere (E2E T02: el modelo parafraseó con `__dirname + ...` —
+        # compilaba igual así que ni el build lo atrapó). Ni el éxito del
+        # write ni el verde del build valen si el AC exacto no se cumple.
+        if new_role == Role.EXECUTE and not interrupted and not turn_failed:
+            _inexact = self._check_pinned_exact_contents(user_input)
+            if _inexact:
+                turn_failed = True
+                console.print(
+                    "\n[red]⛔ Contenido EXACTO incumplido en: "
+                    + ", ".join(_inexact)
+                    + ". La tarea pedía pegar el contenido tal cual "
+                    "(sin parafrasear ni 'simplificar'). Corregilo con "
+                    "edit_file/write_file copiando LITERAL el "
+                    "`pegar_contenido` de la tarea.[/red]"
+                )
+        # Verificación en rojo al cerrar: si se corrió lint/tests/build y
+        # FALLÓ, el turno no puede cerrar como éxito aunque haya escrito
+        # (E2E T02/T04: verify FALLÓ + text-loop → cierre "ok" y el pool
+        # siguió sobre base rota). Con verde o sin correr, no aplica.
+        if new_role == Role.EXECUTE and not interrupted and not turn_failed:
+            if self._turn_verify_is_red():
+                turn_failed = True
+                console.print(
+                    "\n[red]⛔ La verificación terminó en rojo y el turno no "
+                    "la dejó verde. Se marca fallido para no fingir avance: "
+                    "corregí los errores de arriba y re-verificá.[/red]"
                 )
         # Commit preguntado: tras un turno EXECUTE EXITOSO, si hay cambios
         # sin commitear y el usuario no interrumpió, ofrecer commitear.

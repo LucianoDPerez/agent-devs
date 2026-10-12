@@ -784,3 +784,40 @@ class TestExtractTasksFilePath:
         out = preload_cited_files(f"implementar Tarea 1 de {tasks}", str(tmp_path))
         assert "CONTENIDO YA CARGADO DE" in out
         assert "T01" in out
+
+
+class TestPinnedExactContents:
+    """E2E T02: la tarea exigía pegar contenido byte-exacto y el modelo
+    parafraseó (compilaba igual). La sesión debe detectarlo al cerrar."""
+
+    def _tasks(self, tmp_path):
+        import json
+
+        p = tmp_path / "tareas.json"
+        p.write_text(json.dumps({"tareas": [
+            {"id": "T02", "titulo": "Dotenv",
+             "archivo": "backend/dotenv.ts",
+             "pegar_contenido": "EXACTO\n"},
+            {"id": "T03", "titulo": "Zod", "archivo": "backend/package.json"},
+        ]}), encoding="utf-8")
+        return p
+
+    def test_extrae_solo_con_pegar_contenido(self, tmp_path):
+        from orchestration.execute_bootstrap import pinned_exact_contents
+
+        p = self._tasks(tmp_path)
+        out = pinned_exact_contents(f"implementar Tarea 2 de {p}", str(tmp_path))
+        assert out == [("backend/dotenv.ts", "EXACTO\n")]
+        assert pinned_exact_contents(f"implementar Tarea 3 de {p}", str(tmp_path)) == []
+        assert pinned_exact_contents("implementar algo", str(tmp_path)) == []
+
+    def test_soporta_archivos_plural(self, tmp_path):
+        import json
+
+        from orchestration.execute_bootstrap import pinned_exact_contents
+
+        p = tmp_path / "t.json"
+        p.write_text(json.dumps([{"id": "T05", "archivos": ["a.ts", "b.ts"],
+                                          "pegar_contenido": "X"}]), encoding="utf-8")
+        out = pinned_exact_contents(f"implementar Tarea 5 de {p}", str(tmp_path))
+        assert out == [("a.ts", "X"), ("b.ts", "X")]

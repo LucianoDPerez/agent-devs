@@ -291,6 +291,69 @@ def _task_id_matches(entry_id: object, nums: set[int]) -> bool:
     return False
 
 
+def pinned_exact_contents(user_input: str, repo_path: str | None) -> list[tuple[str, str]]:
+    """Contenido EXACTO exigido por las tareas pinnadas: [(path, esperado)].
+
+    Para entradas de tasks.json con `pegar_contenido` (+ `archivo` o
+    `archivos`): el AC es byte-exacto y ni el build lo verifica (E2E T02: el
+    modelo parafraseó con `__dirname + ...`, compilaba igual, el turno cerró
+    "ok"). La sesión lo chequea al cerrar y marca fallido si difiere.
+    Solo .json (los .md no tienen el campo). Fail-open: sin pin, sin json o
+    sin el campo → [].
+    """
+    nums = extract_requested_task_numbers(user_input)
+    if not nums or not repo_path:
+        return []
+    wanted = set(nums)
+    out: list[tuple[str, str]] = []
+    try:
+        import json
+
+        for p in _collect_cited_paths(user_input, repo_path):
+            if p.suffix.lower() != ".json":
+                continue
+            try:
+                data = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+            except (OSError, ValueError):
+                continue
+            entries: list[dict] = []
+            if isinstance(data, dict):
+                for val in data.values():
+                    if isinstance(val, list) and val and all(isinstance(e, dict) for e in val):
+                        entries = val
+                        break
+                else:
+                    if data.get("id"):
+                        entries = [data]
+            elif isinstance(data, list):
+                entries = [e for e in data if isinstance(e, dict)]
+            for entry in entries:
+                if not _task_id_matches(entry.get("id"), wanted):
+                    continue
+                expected = entry.get("pegar_contenido")
+                if not isinstance(expected, str) or not expected.strip():
+                    continue
+                targets: list[str] = []
+                for key in ("archivo", "archivos"):
+                    val = entry.get(key)
+                    if isinstance(val, str) and val.strip():
+                        targets.append(val.strip())
+                    elif isinstance(val, list):
+                        targets.extend(s for s in val if isinstance(s, str) and s.strip())
+                for t in targets:
+                    out.append((t, expected))
+    except Exception:
+        return []
+    # Deduplicar preservando orden.
+    seen: set[tuple[str, str]] = set()
+    uniq: list[tuple[str, str]] = []
+    for item in out:
+        if item not in seen:
+            seen.add(item)
+            uniq.append(item)
+    return uniq
+
+
 def filter_json_task_sections(raw: str, task_numbers: list[int]) -> str:
     """Filtra un tasks.json a las entradas pinnadas (T002), como
     filter_task_sections hace para markdown.
