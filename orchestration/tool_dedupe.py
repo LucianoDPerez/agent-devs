@@ -175,6 +175,11 @@ class ToolCallDedupe:
         # (E2E real T02: PASS1 juntó 1 rechazo + compuerta 2 más, siempre
         # desde cero). La sesión lo limpia por TURNO en _reset_turn_state.
         self.edit_reject_counts: dict[str, int] = {}
+        # Escrituras del turno: intentadas vs EFECTIVAS (ver
+        # _count_write_outcome). El cierre las usa para no fingir éxito
+        # cuando todo fue bloqueado. Limpieza por turno en _reset_turn_state.
+        self.turn_write_attempts: int = 0
+        self.turn_write_ok: int = 0
         # Guía dinámica ante fallos POR (tool, path): vive en el dedupe por
         # la misma razón (los retries reconstruyen el closure). La sesión lo
         # limpia por turno (run_turn), no reset().
@@ -889,6 +894,28 @@ def _write_succeeded(result: Any) -> bool:
     return isinstance(result, str) and result.strip().startswith("✅")
 
 
+def _count_write_outcome(dedupe: ToolCallDedupe | None, name: str, result: Any) -> None:
+    """Contador por TURNO de escrituras intentadas vs EFECTIVAS.
+
+    Vive en el dedupe compartido (sobrevive a rebuilds del agente entre
+    retries; la sesión lo limpia por turno en _reset_turn_state). Permite al
+    cierre distinguir "no había nada que escribir" (0 intentos → cierre
+    honesto) de "intentó escribir y TODO falló" (turno fallido — E2E T02:
+    edit+write bloqueados por guards; el stream solo vio tool CALLS así que
+    require_write no saltó y el turno cerró como éxito sin cambiar nada).
+    Solo cuentan invocaciones REALES (post-confirmación y post-no-op): el
+    sitio de llamada va justo tras tool.invoke()/ainvoke().
+    """
+    if dedupe is None or name not in WRITE_TOOL_NAMES:
+        return
+    try:
+        dedupe.turn_write_attempts = int(getattr(dedupe, "turn_write_attempts", 0) or 0) + 1
+        if _write_succeeded(result):
+            dedupe.turn_write_ok = int(getattr(dedupe, "turn_write_ok", 0) or 0) + 1
+    except Exception:
+        pass
+
+
 def _guide_on_failure(name: str, kwargs: dict[str, Any], result: Any,
                       dedupe: ToolCallDedupe | None) -> Any:
     """Intervención dinámica: ante un resultado FALLIDO, agrega una línea de
@@ -1390,6 +1417,7 @@ def _wrap_one(
             if _eff_log is not None and _eff_log != name:
                 tool_call_logger.add(_eff_log)
         result = tool.invoke(kwargs)
+        _count_write_outcome(dedupe, name, result)
         # Mal uso de verify (mensaje de validación, sin veredicto): no cuenta
         # como verificación del turno (T005: run_lint sobre un archivo
         # envenenó el cierre). Se descarta del logger y de los resultados.
@@ -1521,6 +1549,7 @@ def _wrap_one(
             if _eff_log_a is not None and _eff_log_a != name:
                 tool_call_logger.add(_eff_log_a)
         result = await tool.ainvoke(kwargs)
+        _count_write_outcome(dedupe, name, result)
         # Mal uso de verify (mensaje de validación): no cuenta como
         # verificación del turno (ver _invoke).
         _bad_verify_call_a = (

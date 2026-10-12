@@ -803,3 +803,57 @@ class TestEditEscalationAcrossRebuilds:
         assert out.startswith("✅")
         assert p.read_text() == "const x = 1;\n"
         clear_write_overrides()
+
+
+class TestTurnWriteOutcome:
+    """E2E T02: edit+write bloqueados por guards cerraban como éxito porque
+    el stream solo ve tool CALLS. El contador intentos-vs-efectivas permite
+    marcar el turno fallido."""
+
+    def test_rechazo_cuenta_intento_sin_exito(self, tmp_path):
+        from orchestration.tool_dedupe import ToolCallDedupe, wrap_tools_with_dedupe
+        from tools.filesystem import edit_file, read_file
+
+        content = "\n".join(f"const line_{i} = {i};" for i in range(20)) + "\n"
+        p = tmp_path / "a.ts"
+        p.write_text(content, encoding="utf-8")
+        read_file.invoke({"path": str(p)})
+        dd = ToolCallDedupe(max_repeats=9)
+        w = wrap_tools_with_dedupe([edit_file], dd, None,
+                                   repo_path=str(tmp_path))[0]
+        r = w.invoke({"path": str(p), "old_str": content, "new_str": "x"})
+        assert "QUIRÚRGICAS" in r
+        assert dd.turn_write_attempts == 1
+        assert dd.turn_write_ok == 0
+
+    def test_escritura_ok_cuenta_ambos(self, tmp_path):
+        from orchestration.tool_dedupe import ToolCallDedupe, wrap_tools_with_dedupe
+        from tools.filesystem import edit_file, read_file
+
+        p = tmp_path / "b.ts"
+        p.write_text("const x = 1;\n", encoding="utf-8")
+        read_file.invoke({"path": str(p)})
+        dd = ToolCallDedupe(max_repeats=9)
+        w = wrap_tools_with_dedupe([edit_file], dd, None,
+                                   repo_path=str(tmp_path))[0]
+        r = w.invoke({"path": str(p), "old_str": "const x = 1;",
+                      "new_str": "const x = 2;"})
+        assert r.startswith("✅")
+        assert dd.turn_write_attempts == 1
+        assert dd.turn_write_ok == 1
+
+    def test_noop_pre_detectado_no_cuenta_intento(self, tmp_path):
+        """El no-op se frena ANTES de invocar: no es un intento fallido."""
+        from orchestration.tool_dedupe import ToolCallDedupe, wrap_tools_with_dedupe
+        from tools.filesystem import edit_file, read_file
+
+        p = tmp_path / "c.ts"
+        p.write_text("const x = 1;\n", encoding="utf-8")
+        read_file.invoke({"path": str(p)})
+        dd = ToolCallDedupe(max_repeats=9)
+        w = wrap_tools_with_dedupe([edit_file], dd, None,
+                                   repo_path=str(tmp_path))[0]
+        r = w.invoke({"path": str(p), "old_str": "const x = 1;",
+                      "new_str": "const x = 1;"})
+        assert "NO-OP" in r
+        assert dd.turn_write_attempts == 0

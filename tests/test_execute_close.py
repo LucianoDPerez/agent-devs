@@ -1137,3 +1137,48 @@ def test_pool_excepcion_tambien_frena(tmp_path):
     summary = s.run_task_pool([1, 2])
     assert summary["fallidas"] == [1]
     assert summary["stopped_early"] is True
+
+
+def test_writes_all_failed_sin_verify_es_fallo(tmp_path):
+    """E2E T02: intentos de escritura todos bloqueados + build rojo."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    _old_commit(repo)
+    s = Session(llm=None, repo_path=str(repo))
+    s._dedupe.turn_write_attempts = 3
+    s._dedupe.turn_write_ok = 0
+    assert s._turn_writes_all_failed() is True
+
+
+def test_writes_all_failed_con_verify_verde_no_falla(tmp_path):
+    """Si verificó en verde, el archivo ya cumplía: no es fallo."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    _old_commit(repo)
+    s = Session(llm=None, repo_path=str(repo))
+    s._dedupe.turn_write_attempts = 2
+    s._dedupe.turn_write_ok = 0
+    s._verify_results = {"run_build": True}
+    s._called_tools = {"run_build"}
+    assert s._turn_writes_all_failed() is False
+
+
+def test_writes_all_failed_con_exito_no_falla(tmp_path):
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    s._dedupe.turn_write_attempts = 2
+    s._dedupe.turn_write_ok = 1
+    assert s._turn_writes_all_failed() is False
+
+
+def test_writes_all_failed_sin_intentos_no_falla(tmp_path):
+    """T01 (solo lectura) nunca debe marcarse fallido por esta regla."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    assert s._turn_writes_all_failed() is False

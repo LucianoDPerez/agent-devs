@@ -2407,6 +2407,26 @@ class Session:
         except Exception:
             return False
 
+    def _turn_writes_all_failed(self) -> bool:
+        """True si el turno intentó escribir pero NINGUNA escritura se aplicó
+        y tampoco hay verificación en verde.
+
+        Distingue "no había nada que escribir" (0 intentos → cierre honesto,
+        caso T01) de "quiso escribir y todo fue bloqueado/falló" (E2E T02:
+        2 edit + 1 write rechazados por guards; el stream contó tool CALLS,
+        require_write no saltó y el turno cerró como éxito sin cambiar una
+        línea ni verificar). Con verify en verde no falla: el archivo ya
+        cumplía el AC aunque el rewrite fuera innecesario.
+        """
+        try:
+            attempts = int(getattr(self._dedupe, "turn_write_attempts", 0) or 0)
+            ok = int(getattr(self._dedupe, "turn_write_ok", 0) or 0)
+        except Exception:
+            return False
+        if attempts <= 0 or ok > 0:
+            return False
+        return self._verify_all_passed() is not True
+
     def _readonly_evidence_turn(self, text: str) -> bool:
         """True si el turno fue SOLO lectura/verify con evidencia citada.
 
@@ -3464,6 +3484,8 @@ class Session:
         self._dedupe.protected_rejects = {}
         self._dedupe.noop_rejects = {}
         self._dedupe.edit_reject_counts = {}
+        self._dedupe.turn_write_attempts = 0
+        self._dedupe.turn_write_ok = 0
         self._dedupe.fail_guides = {}
         # Primer fallo de verify del turno (lo llena el wrapper): el gate lo
         # usa para enfocar el fix. Se limpia por turno, no por retry.
@@ -4696,13 +4718,6 @@ class Session:
                 tokens_used=turn_tokens,
             )
         self._flush_evidence()
-        # Resultado del turno para consumidores programáticos (pool de
-        # tareas): run_turn no retorna nada ni lanza ante un turno fallido,
-        # así que el pool no podía distinguir "ok" de "fallido" y seguía con
-        # la siguiente tarea sobre una base rota (E2E T02 falló sin escribir
-        # y el pool igual avanzó a T03).
-        self._last_turn_failed = bool(turn_failed)
-        self._last_turn_interrupted = bool(interrupted)
 
         # Summary del turno: en modo --tui (full-screen) se omite — el panel
         # queda limpio solo con "vos ›" + respuesta del LLM; el summary era
@@ -4745,6 +4760,22 @@ class Session:
                     )
                     self._bulk_task_hash = ""
 
+        # Escrituras todas fallidas: el turno intentó escribir (invocaciones
+        # reales tras confirmación) pero NINGUNA se aplicó y no hay verify en
+        # verde. Sin esto el turno cerraba como éxito: el stream cuenta tool
+        # CALLS (require_write satisfecho) aunque los guards las hayan
+        # bloqueado todas (E2E T02: edit+write rechazados, archivo intacto,
+        # build rojo → "éxito" y el pool avanzó a T03). Va ANTES del cierre
+        # determinístico para que el pool lo vea como fallido y frene.
+        if new_role == Role.EXECUTE and not interrupted and not turn_failed:
+            if self._turn_writes_all_failed():
+                turn_failed = True
+                console.print(
+                    "\n[red]⛔ El turno intentó escribir pero ninguna escritura "
+                    "se aplicó (bloqueadas por guards o fallidas) y no hay "
+                    "verificación en verde. Se marca fallido para no fingir "
+                    "avance: revisá los ⛔ de arriba y reintentá.[/red]"
+                )
         # Commit preguntado: tras un turno EXECUTE EXITOSO, si hay cambios
         # sin commitear y el usuario no interrumpió, ofrecer commitear.
         # Turnos FALLIDOS (loop/recursion/error) pueden dejar el árbol roto
@@ -4844,6 +4875,14 @@ class Session:
             )
         elif ctx_status == "summary":
             self._maybe_summarize()
+        # Resultado FINAL del turno para consumidores programáticos (pool de
+        # tareas): va al CIERRE del método porque turn_failed puede cambiar
+        # después del stream (compuertas, bulk, escrituras-todas-fallidas).
+        # run_turn no retorna nada ni lanza ante un turno fallido; sin esto
+        # el pool no distinguía "ok" de "fallido" y seguía sobre base rota
+        # (E2E T02 falló sin escribir y el pool igual avanzó a T03).
+        self._last_turn_failed = bool(turn_failed)
+        self._last_turn_interrupted = bool(interrupted)
 
     def _maybe_judge_review(self, user_input: str) -> None:
         """Si el review dice APROBADO, llama al judge LLM para validar."""
