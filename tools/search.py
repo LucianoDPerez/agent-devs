@@ -15,6 +15,10 @@ def search_code(path: str, pattern: str) -> str:
     """
     Search for a regex pattern in all files under a directory.
     Returns matching file paths and line numbers with context.
+    Equivale a `grep -q` / `grep -rn` (no hay shell): el criterio
+    `grep -q 'simbolo' path` se verifica con
+    search_code(path=".../path", pattern="simbolo"). Acepta un ARCHIVO
+    como path para buscar dentro de un solo archivo.
     Usage: search_code(path="/Users/me/repo", pattern="TODO|FIXME")
     """
     root = Path(path)

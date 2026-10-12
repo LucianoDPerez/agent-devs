@@ -866,6 +866,35 @@ def _resolve_relative_path(path: str, repo_path: str | None) -> str:
     return str(Path(repo_path) / path)
 
 
+# Tools de verificación con alcance al repo del turno: un path fuera del repo
+# es confusión de checkouts, no verificación (E2E venture: run_verify sobre
+# venture-api-ulab cuando la tarea era de venture-ueno-ads → rojos ajenos que
+# fallaron el turno con el entregable correcto). Las lecturas (read/list/
+# search/copy) SÍ pueden cruzar repos (pools contra otro checkout, assets del
+# producto): no se tocan.
+_VERIFY_PATH_SCOPED = VERIFY_TOOL_NAMES | {"run_npm_script"}
+
+
+def _is_within_repo(path: str, repo_path: str | None) -> bool:
+    """True si `path` está dentro de `repo_path`.
+
+    realpath en ambos lados (en macOS /tmp es symlink a /private/tmp).
+    Fail-open: ante cualquier duda devuelve True (nunca bloquear por un
+    error de resolución — el STOP solo muerde con evidencia de checkout
+    ajeno).
+    """
+    if not repo_path or not path:
+        return True
+    try:
+        import os
+
+        root = os.path.realpath(repo_path)
+        target = os.path.realpath(path)
+        return target == root or target.startswith(root.rstrip(os.sep) + os.sep)
+    except Exception:
+        return True
+
+
 def _apply_adaptive_read_limit(budget: ExploreBudget, path: str) -> None:
     """Archivos > MAX_FILE_READ_BYTES: sube el tope de lecturas por-path.
 
@@ -1136,6 +1165,26 @@ def _wrap_one(
         (GraphBubbleUp) se re-lanza siempre: es la única forma de frenar el 4B.
         """
         kwargs = _resolve_kwargs(kwargs)
+        # Verify fuera del repo del turno: STOP sin ejecutar (ver
+        # _VERIFY_PATH_SCOPED). Un rojo de otro checkout no dice nada del
+        # cambio y falla el turno en vano. El STOP no se loguea como verify
+        # corrida (vuelve antes del logger).
+        if name in _VERIFY_PATH_SCOPED and repo_path:
+            _vpath = (kwargs or {}).get("path", "")
+            if isinstance(_vpath, str) and _vpath and not _is_within_repo(_vpath, repo_path):
+                return (
+                    "return",
+                    (
+                        f"⛔ '{_vpath}' está FUERA del repo de este turno "
+                        f"({repo_path}). Las tools de verificación "
+                        "(lint/tests/build) solo corren DENTRO del repo: un "
+                        "rojo de otro checkout no dice nada de tu cambio y "
+                        "falla el turno en vano. Si quisiste verificar ESTE "
+                        f"repo, pasá path='{repo_path}' (o el subdirectorio "
+                        "con su package.json). No reintentes con otro path "
+                        "externo."
+                    ),
+                )
         # Fail-fast para archivos de PLANIFICACIÓN protegidos (tasks/plan/PRD):
         # el guard de filesystem devuelve string y el modelo reintenta variando
         # los bloques (objeto entero → línea suelta → micro-bloque), así que el
