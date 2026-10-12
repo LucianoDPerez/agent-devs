@@ -83,6 +83,115 @@ def _opencode_missing_exit() -> None:
     sys.exit(1)
 
 
+class _UseLocalFallback(Exception):
+    """Señal interna: OpenCode falló pero hay llama.cpp vivo → reintentar en local."""
+
+    def __init__(self, reason: str = ""):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _describe_opencode_failure(exc: BaseException | None) -> str:
+    """Resumen corto del fallo de OpenCode para el aviso de fallback (sin traceback)."""
+    if exc is None:
+        return "sin detalle"
+    raw = str(exc).strip()
+    msg = raw.splitlines()[-1].strip() if raw else type(exc).__name__
+    low = msg.lower()
+    if "401" in low or "unauthorized" in low:
+        return "key rechazada (401)"
+    if "429" in low or "quota" in low or "balance" in low or "credit" in low or "rate" in low:
+        return "límite/saldo (429)"
+    if "ssl" in low or "certificate" in low:
+        return f"SSL ({msg[-120:]})"
+    if "timeout" in low or "timed out" in low:
+        return "timeout de red"
+    return (msg[-160:] or type(exc).__name__)
+
+
+def _is_opencode_failure(exc: BaseException) -> bool:
+    """True si la excepción parece un fallo de la nube (red/SSL/auth/cuota/protocolo/http).
+
+    Cubre lo que el wrapper de OpenAI levanta: APIConnectionError (incluye
+    fallos SSL como el CERTIFICATE_VERIFY_FAILED visto en campo),
+    timeouts, errores de estado HTTP y errores de protocolo chat vs responses.
+    """
+    if _is_llama_connection_error(exc):
+        return True
+    try:
+        from llm_wrapper import is_protocol_error
+
+        if is_protocol_error(exc):
+            return True
+    except Exception:
+        pass
+    names: set[str] = set()
+    msgs: list[str] = []
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        names.add(type(cur).__name__)
+        try:
+            msgs.append(str(cur).lower())
+        except Exception:
+            pass
+        nxt = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+        cur = nxt if isinstance(nxt, BaseException) else None
+    if names & {
+        "APIConnectionError", "APITimeoutError", "APIStatusError",
+        "AuthenticationError", "PermissionDeniedError", "RateLimitError",
+        "BadRequestError", "InternalServerError", "TimeoutError",
+        "SSLError", "SSLCertVerificationError", "CertificateError",
+        "URLError", "HTTPError", "MaxRetriesExceeded",
+        "ConnectTimeout", "ReadTimeout",
+    }:
+        return True
+    blob = " ".join(msgs)
+    keywords = (
+        "ssl", "certificate verify", "tls", "handshake",
+        "timeout", "timed out",
+        "401", "403", "429", "500", "502", "503", "504",
+        "unauthorized", "forbidden", "rate limit", "quota",
+        "balance", "credit", "free-tier", "freetier",
+        "network", "unreachable", "dns", "connection",
+        "temporarily", "service unavailable", "internal server error",
+    )
+    return any(k in blob for k in keywords)
+
+
+def _local_fallback_resolved() -> dict | None:
+    """Resolved local si hay un llama-server vivo; si no, None (no bloquea)."""
+    alive, _ = _llama_server_alive(timeout=1.5)
+    if not alive:
+        return None
+    try:
+        from llm_config import resolve_llm
+
+        return resolve_llm(provider_override="local")
+    except Exception:
+        return None
+
+
+def _announce_opencode_fallback(reason: str) -> None:
+    """Aviso de que se sigue en local aunque el config diga opencode."""
+    print(f"\n⚠️  OpenCode falló ({reason}) — usando modelo local (llama.cpp) como fallback.",
+          flush=True)
+    print("   (tu config sigue en provider=opencode; es solo esta sesión.", flush=True)
+    print("    Resolvé la key/red y reintentá en la nube.)\n", flush=True)
+
+
+def _both_down_exit(op_reason: str) -> None:
+    """Salida final cuando NI la nube NI el local responden. Nunca hace traceback."""
+    print(f"\n❌ Ni OpenCode ({op_reason}) ni llama.cpp están disponibles.", flush=True)
+    print(f"   · llama.cpp: nadie en {LLM_BASE_URL} — levantalo, por ejemplo:", flush=True)
+    print("       llama-server -hf bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M --port 8080",
+          flush=True)
+    print("   · OpenCode: revisá key/red con agent-devs --doctor y --list-models", flush=True)
+    print("   Verificá el estado con: agent-devs --doctor\n", flush=True)
+    sys.exit(1)
+
+
 def _cached_analysis_valid(cached: dict) -> bool:
     """True si el summary cacheado es usable (no eco del prompt ni vacío)."""
     analysis = (cached.get("analysis") or "").strip()
@@ -123,6 +232,8 @@ def _ensure_analysis(llm: LocalLLM, repo_path: str, status: str | None = None) -
                 return load_analysis(repo_path) or cached
     # Chequeo rápido según el LLM que SE VA A USAR (no el de config.py):
     # local → ping al server; nube → solo exigir key (el turno reporta el resto).
+    # Si la nube falla pero hay llama vivo, se levanta _UseLocalFallback para
+    # que el caller reintente en local (el config sigue en opencode).
     from llm_config import is_local_url
 
     if is_local_url(getattr(llm, "base_url", "") or ""):
@@ -130,6 +241,9 @@ def _ensure_analysis(llm: LocalLLM, repo_path: str, status: str | None = None) -
         if not alive:
             _llama_down_exit()
     elif not (getattr(llm, "api_key", "") or ""):
+        if _local_fallback_resolved() is not None:
+            _announce_opencode_fallback("sin API key")
+            raise _UseLocalFallback("sin API key")
         _opencode_missing_exit()
     if status:
         print(status, flush=True)
@@ -138,9 +252,22 @@ def _ensure_analysis(llm: LocalLLM, repo_path: str, status: str | None = None) -
     except FileNotFoundError as e:
         print(f"❌ {e}")
         sys.exit(1)
-    except (KeyboardInterrupt, SystemExit):
+    except (KeyboardInterrupt, SystemExit, _UseLocalFallback):
         raise
     except BaseException as e:
+        try:
+            from llm_config import is_local_url as _is_local
+
+            _is_op = not _is_local(getattr(llm, "base_url", "") or "")
+        except Exception:
+            _is_op = False
+        if _is_op and _is_opencode_failure(e):
+            if _local_fallback_resolved() is not None:
+                _announce_opencode_fallback(_describe_opencode_failure(e))
+                raise _UseLocalFallback(_describe_opencode_failure(e)) from e
+            # Sin local vivo no hay fallback: mensaje final combinado
+            # (según el LLM en uso, no según el config global).
+            _both_down_exit(_describe_opencode_failure(e))
         _llm_down_exit(e)
         raise
     save_analysis(repo_path, snapshot=result["snapshot"], language=result["language"],
@@ -683,7 +810,13 @@ def run_setup_opencode() -> int:
     """Pide la API key y la guarda en el config de usuario (600). Nunca la imprime."""
     import getpass
 
-    from llm_config import active_config_file, load_file_config, save_config
+    from llm_config import (
+        OPENCODE_DEFAULT_BASE_URL,
+        DEFAULT_REASONING_EFFORT,
+        active_config_file,
+        load_file_config,
+        save_config,
+    )
 
     current = load_file_config()
     print("🔑 Setup de OpenCode Zen")
@@ -707,8 +840,11 @@ def run_setup_opencode() -> int:
     current["provider"] = "opencode"
     current["opencode_api_key"] = key
     current.setdefault("opencode_model", "deepseek-v4.1-flash")
+    current.setdefault("opencode_reasoning", DEFAULT_REASONING_EFFORT)
+    current.setdefault("opencode_base_url", OPENCODE_DEFAULT_BASE_URL)
     saved = save_config(current)
-    print(f"✅ Guardado en {saved} (provider=opencode, model={current['opencode_model']}).")
+    print(f"✅ Guardado en {saved} (provider=opencode, model={current['opencode_model']}, "
+          f"reasoning={current['opencode_reasoning']}).")
     print("   Probá con: agent-devs --list-models")
     print("   Usalo con: agent-devs --provider opencode .")
     return 0
@@ -792,14 +928,15 @@ def _llm_down_exit(exc: BaseException) -> None:
     """Mensaje amigable según el proveedor activo. Si el error no es del LLM,
     retorna sin hacer nada para que el caller lo re-lance (nunca traceback)."""
     from llm_config import resolve_llm
-    from llm_wrapper import is_protocol_error
 
     try:
         provider = resolve_llm()["provider"]
     except Exception:
         provider = "local"
     if provider == "opencode":
-        if _is_llama_connection_error(exc) or is_protocol_error(exc):
+        # Cualquier fallo de la nube (conexión, SSL, auth, cuota, HTTP,
+        # protocolo) merece el mensaje de OpenCode — no un traceback.
+        if _is_opencode_failure(exc):
             _opencode_down_exit(exc)
     elif _is_llama_connection_error(exc):
         _llama_down_exit()
@@ -1116,9 +1253,14 @@ def main():
         do_list()
         return
     if args.analyze:
-        do_analyze(_make_llm(max_tokens=1024, temperature=0.4,
-                             provider=args.provider, model=args.model,
-                             reasoning=args.reasoning), args.analyze)
+        try:
+            do_analyze(_make_llm(max_tokens=1024, temperature=0.4,
+                                 provider=args.provider, model=args.model,
+                                 reasoning=args.reasoning), args.analyze)
+        except _UseLocalFallback:
+            # _ensure_analysis ya anunció el motivo del fallback.
+            do_analyze(_make_llm(max_tokens=1024, temperature=0.4,
+                                 provider="local"), args.analyze)
         return
 
     # Normalizar a ABSOLUTO siempre: 'agent-devs .' dejaba repo_path='.'
@@ -1128,19 +1270,53 @@ def main():
     repo_path = str(Path(args.repo or os.getcwd()).expanduser().resolve()).strip()
 
     # Fail-fast según proveedor (evita el traceback de httpx/openai).
+    # Si la nube está mal configurada pero hay llama vivo, se sigue en local
+    # (el config sigue en opencode; es solo esta sesión). Solo se bloquea si
+    # NINGUNO de los dos responde.
     from llm_config import needs_messages_api, resolve_llm
 
     _resolved = resolve_llm(provider_override=args.provider, model_override=args.model,
                             reasoning_override=args.reasoning)
+    _eff_provider, _eff_model, _eff_reasoning = args.provider, args.model, args.reasoning
     if _resolved["provider"] == "opencode":
+        _fb_reason = None
         if not _resolved["api_key"]:
-            _opencode_missing_exit()
-        if needs_messages_api(_resolved["model"]):
-            _messages_api_exit(_resolved["model"])
+            _fb_reason = "sin API key"
+        elif needs_messages_api(_resolved["model"]):
+            _fb_reason = f"modelo '{_resolved['model']}' sin soporte (Messages API)"
+        if _fb_reason is not None:
+            _fb = _local_fallback_resolved()
+            if _fb is not None:
+                _announce_opencode_fallback(_fb_reason)
+                _resolved = _fb
+                _eff_provider, _eff_model, _eff_reasoning = "local", None, None
+            else:
+                if not _resolved["api_key"]:
+                    _opencode_missing_exit()
+                else:
+                    _messages_api_exit(_resolved["model"])
     else:
         alive, _ = _llama_server_alive(timeout=1.5)
         if not alive:
             _llama_down_exit()
+
+    def _build_analysis_llm() -> LocalLLM:
+        return _make_llm(max_tokens=1024, temperature=0.4,
+                         provider=_eff_provider, model=_eff_model,
+                         reasoning=_eff_reasoning)
+
+    def _build_session_llm() -> LocalLLM:
+        return _make_llm(provider=_eff_provider, model=_eff_model,
+                         reasoning=_eff_reasoning)
+
+    def _switch_effective_to_local() -> None:
+        nonlocal _resolved, _eff_provider, _eff_model, _eff_reasoning
+        _fb = _local_fallback_resolved()
+        if _fb is not None:
+            _resolved = _fb
+        else:
+            _resolved = resolve_llm(provider_override="local")
+        _eff_provider, _eff_model, _eff_reasoning = "local", None, None
 
     reset_turn_usage()
     try:
@@ -1148,45 +1324,87 @@ def main():
             print("📚 Modo --no-analysis: contexto determinista (~1s, sin LLM).")
             cached = deterministic_analysis(repo_path)
         else:
-            cached = _ensure_analysis(
-                _make_llm(max_tokens=1024, temperature=0.4,
-                          provider=args.provider, model=args.model,
-                          reasoning=args.reasoning),
-                repo_path,
-                status="🤔 Analizando el repositorio... (puede tardar 1-2 min). Ctrl+C para cancelar.",
-            )
+            try:
+                cached = _ensure_analysis(
+                    _build_analysis_llm(),
+                    repo_path,
+                    status="🤔 Analizando el repositorio... (puede tardar 1-2 min). Ctrl+C para cancelar.",
+                )
+            except _UseLocalFallback:
+                # _ensure_analysis ya anunció el motivo.
+                _switch_effective_to_local()
+                cached = _ensure_analysis(
+                    _build_analysis_llm(),
+                    repo_path,
+                    status="🤔 Analizando el repositorio... (puede tardar 1-2 min). Ctrl+C para cancelar.",
+                )
     except SystemExit:
         raise
     except BaseException as e:
+        # Fallback tardío: el error no se clasificó adentro pero igual es un
+        # fallo de la nube y hay local vivo → reintentar una vez en local.
+        if _resolved.get("provider") == "opencode" and _is_opencode_failure(e):
+            if _local_fallback_resolved() is not None:
+                _announce_opencode_fallback(_describe_opencode_failure(e))
+                _switch_effective_to_local()
+                try:
+                    if args.no_analysis:
+                        cached = deterministic_analysis(repo_path)
+                    else:
+                        cached = _ensure_analysis(
+                            _build_analysis_llm(),
+                            repo_path,
+                            status="🤔 Analizando el repositorio... (puede tardar 1-2 min). Ctrl+C para cancelar.",
+                        )
+                except _UseLocalFallback:
+                    _switch_effective_to_local()
+                    cached = _ensure_analysis(
+                        _build_analysis_llm(),
+                        repo_path,
+                        status="🤔 Analizando el repositorio... (puede tardar 1-2 min). Ctrl+C para cancelar.",
+                    )
+            else:
+                _both_down_exit(_describe_opencode_failure(e))
         if _is_llama_connection_error(e):
-            if _resolved["provider"] == "opencode":
+            if _resolved.get("provider") == "opencode":
                 _opencode_down_exit(e)
             else:
                 _llama_down_exit()
         else:
             from llm_wrapper import is_protocol_error
 
-            if _resolved["provider"] == "opencode" and is_protocol_error(e):
+            if _resolved.get("provider") == "opencode" and is_protocol_error(e):
                 _opencode_down_exit(e)
         raise
 
-    session = Session(_make_llm(provider=args.provider, model=args.model,
-                                reasoning=args.reasoning),
+    session = Session(_build_session_llm(),
                       repo_path, cached_analysis=_format_cached_context(cached))
     try:
         session.start()
     except BaseException as e:
-        if _is_llama_connection_error(e):
-            if _resolved["provider"] == "opencode":
-                _opencode_down_exit(e)
+        if _resolved.get("provider") == "opencode" and _is_opencode_failure(e):
+            if _local_fallback_resolved() is not None:
+                _announce_opencode_fallback(_describe_opencode_failure(e))
+                _switch_effective_to_local()
+                # Recrear la sesión en local (budgets/ safe, sin persistir el
+                # config: la nube sigue siendo la preferida para la próxima).
+                session = Session(_build_session_llm(),
+                                  repo_path, cached_analysis=_format_cached_context(cached))
+                session.start()
             else:
-                _llama_down_exit()
+                _both_down_exit(_describe_opencode_failure(e))
         else:
-            from llm_wrapper import is_protocol_error
+            if _is_llama_connection_error(e):
+                if _resolved.get("provider") == "opencode":
+                    _opencode_down_exit(e)
+                else:
+                    _llama_down_exit()
+            else:
+                from llm_wrapper import is_protocol_error
 
-            if _resolved["provider"] == "opencode" and is_protocol_error(e):
-                _opencode_down_exit(e)
-        raise
+                if _resolved.get("provider") == "opencode" and is_protocol_error(e):
+                    _opencode_down_exit(e)
+            raise
 
     # TUI siempre que haya terminal interactiva. Sin tty (pipe/script) el
     # fallback al input simple evita que Textual reviente — no es un modo
