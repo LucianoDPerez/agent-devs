@@ -93,6 +93,42 @@ def _window_has_signal(window: str, min_alnum: int = 24) -> bool:
     return sum(1 for ch in bare if ch.isalnum()) >= min_alnum
 
 
+# Progreso mínimo para NO cortar: líneas de contenido nuevas desde la
+# última ocurrencia de la ventana repetida (ver _has_progress_since).
+_PROGRESS_MIN_NEW_LINES = 3
+_PROGRESS_MIN_ALNUM = 12
+_PROGRESS_MAX_LINES = 40
+
+
+def _has_progress_since(text: str, window: str) -> bool:
+    """True si el modelo aportó contenido NUEVO desde la última ocurrencia.
+
+    La repetición exacta no alcanza para declarar loop: tablas legítimas
+    con el mismo esquema repiten filas enteras calcadas (`eventType`,
+    `os`, `hostname`, `timestamp` en cada tabla) y el informe sigue
+    avanzando. Loop = repetición SIN progreso: ninguna línea de contenido
+    del tramo posterior aparece por primera vez. Un loop real (T004 ×12,
+    misma fila ×N) no aporta nada nuevo y sigue cortándose.
+    """
+    prev = text[:-len(window)].rfind(window)
+    if prev < 0:
+        return False
+    before, segment = text[:prev], text[prev + len(window):]
+    new = 0
+    for raw in segment.splitlines()[:_PROGRESS_MAX_LINES]:
+        bare = (raw.replace("|", "").replace("-", "").replace("*", "")
+                    .replace("#", "").replace(">", "").strip())
+        if sum(1 for ch in bare if ch.isalnum()) < _PROGRESS_MIN_ALNUM:
+            continue
+        # La línea cruda (no la normalizada: sin guiones no matchea el
+        # texto original y todo loop real parecería 'progreso').
+        if raw.strip() not in before:
+            new += 1
+            if new >= _PROGRESS_MIN_NEW_LINES:
+                return True
+    return False
+
+
 def _text_loop_detected(text: str) -> bool:
     """True si el final de `text` repite un bloque ya emitido (loop del modelo).
 
@@ -102,8 +138,9 @@ def _text_loop_detected(text: str) -> bool:
     y no atrapaba párrafos cuya longitud no es múltiplo de 256. Acá se
     detecta por sufijo: si los últimos N chars ya aparecieron ≥2 veces
     antes, es repetición sin importar la alineación. Ventanas sin señal
-    (andamiaje de tablas) se saltean: tablas legítimas con filas distintas
-    no disparan.
+    (andamiaje de tablas) se saltean, y ante repetición exacta con
+    contenido nuevo posterior (_has_progress_since) no se corta: tablas
+    legítimas con filas distintas no disparan.
     """
     if len(text) < _TEXT_LOOP_MIN_LEN:
         return False
@@ -112,6 +149,8 @@ def _text_loop_detected(text: str) -> bool:
         if not _window_has_signal(window):
             continue
         if text[:-w].count(window) >= 2:
+            if _has_progress_since(text, window):
+                continue
             return True
     return False
     if len(text) < _TEXT_LOOP_MIN_LEN:

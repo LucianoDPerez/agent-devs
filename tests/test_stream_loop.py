@@ -151,6 +151,42 @@ def test_detecta_fila_de_tabla_repetida():
     assert _detect_loop(texto)
 
 
+def test_no_corta_tablas_con_filas_comunes_repetidas():
+    """Regresión (telemetría NR, 2do corte): tablas del mismo esquema con
+    filas enteras calcadas (`eventType`, `os`, `hostname`, `timestamp` en
+    cada tabla). Hay repetición exacta, pero el informe avanza con filas
+    nuevas → NO es loop y no se corta."""
+    h = "| Campo | Tipo | Descripción |\n"
+    s = "|---|---|---|\n"
+    comunes = (
+        "| `eventType` | string | `\"SpecKittiCommand\"` |\n"
+        "| `os` | string | sistema operativo |\n"
+        "| `hostname` | string | hostname de la máquina |\n"
+        "| `timestamp` | int64 | Unix timestamp en segundos |\n"
+    )
+
+    def tabla(titulo, propias):
+        return f"\n{titulo}\n" + h + s + comunes + "".join(propias)
+
+    texto = "El sistema escribe en **dos tablas** de New Relic:\n"
+    texto += tabla("### Eventos `install`:", [
+        "| `event` | string | `\"install\"` |\n",
+        "| `command` | string | `\"install\"` |\n",
+        "| `version` | string | version semver pasada con flag |\n",
+    ])
+    texto += tabla("### Eventos `rule`:", [
+        "| `event` | string | `\"rule\"` |\n",
+        "| `command` | string | `\"rules_\" + action` |\n",
+        "| `action` | string | acción a ejecutar ahora |\n",
+        "| `tokens` | int | cantidad de tokens del template |\n",
+        "| `ruleIds` | string | IDs de reglas separados |\n",
+    ])
+    # Tercera tabla a medio escribir (momento del corte real).
+    texto += '\n## 2. Tabla: `"SpecKittiCursor"`\n' + h + s + "| `eventType` | string"
+    assert len(texto) > 512
+    assert not _detect_loop(texto)
+
+
 def test_texto_corto_no_se_evalua():
     """Menos de 512 chars: sin loop (la respuesta corta es legítima)."""
     assert not _detect_loop("hola " * 20)
