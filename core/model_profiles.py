@@ -124,6 +124,56 @@ def _tier_for(ctx_limit: int | float | None) -> tuple[int, int]:
     return _BUDGET_TIGHT
 
 
+def is_cloud_llm(llm) -> bool:
+    """True si el LLM habla con la nube (OpenCode Zen), no llama.cpp local."""
+    try:
+        from llm_config import is_cloud_url
+
+        return is_cloud_url(getattr(llm, "base_url", "") or "")
+    except Exception:
+        return False
+
+
+def execute_budget_for(llm, _ctx_limit: int | float | None = None) -> tuple[int, int]:
+    """(explores, reads) de EXECUTE según proveedor (firma compatible con
+    analyze/plan_budget_for; el contexto no limita escritura, solo lectura).
+    """
+    from config import (
+        CLOUD_EXECUTE_EXPLORE_BUDGET,
+        CLOUD_EXECUTE_MAX_READS_AFTER_EXPLORE,
+        EXECUTE_EXPLORE_BUDGET,
+        EXECUTE_MAX_READS_AFTER_EXPLORE,
+    )
+
+    if is_cloud_llm(llm):
+        return (CLOUD_EXECUTE_EXPLORE_BUDGET, CLOUD_EXECUTE_MAX_READS_AFTER_EXPLORE)
+    return (EXECUTE_EXPLORE_BUDGET, EXECUTE_MAX_READS_AFTER_EXPLORE)
+
+
+def max_tool_calls_for(llm) -> int:
+    """Tope duro de tool calls por turno según proveedor."""
+    from config import CLOUD_MAX_TOOL_CALLS_PER_TURN, MAX_TOOL_CALLS_PER_TURN
+
+    if is_cloud_llm(llm):
+        return CLOUD_MAX_TOOL_CALLS_PER_TURN
+    return MAX_TOOL_CALLS_PER_TURN
+
+
+def recursion_limit_for(llm, is_execute: bool) -> int:
+    """Límite de recursión langgraph según proveedor y rol."""
+    from config import (
+        AGENT_RECURSION_LIMIT,
+        CLOUD_EXECUTE_RECURSION_LIMIT,
+        EXECUTE_RECURSION_LIMIT,
+    )
+
+    if is_execute:
+        if is_cloud_llm(llm):
+            return CLOUD_EXECUTE_RECURSION_LIMIT
+        return EXECUTE_RECURSION_LIMIT
+    return AGENT_RECURSION_LIMIT
+
+
 def analyze_budget_for(llm, ctx_limit: int | float | None = None) -> tuple[int, int]:
     """(max_calls, max_reads) de ANALYZE según proveedor, modelo y contexto.
 

@@ -1077,6 +1077,35 @@ def test_readonly_evidence_falso_sin_cache_ni_calls(tmp_path):
     assert s._readonly_evidence_turn(resp) is False
 
 
+def test_readonly_evidence_ignora_cache_de_turno_anterior(tmp_path):
+    """E2E cloud: turno 2 con 0 tools cerraba como 'solo-lectura con
+    evidencia' con lecturas prestadas del turno 1 (caché de sesión). Solo
+    cuentan lecturas NUEVAS del turno."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    s._read_cache["/old/package.json"] = '{"dependencies": {"x": "^1"}}'
+    s._reset_turn_state()  # arranca turno nuevo: snapshot del caché
+    resp = "veredicto: todo bien en src/old.ts:10 según lo leído"
+    assert s._readonly_evidence_turn(resp) is False
+
+
+def test_readonly_evidence_cuenta_lecturas_del_turno(tmp_path):
+    """Control positivo: 2 lecturas NUEVAS + mención con archivo:línea sí
+    es evidencia del turno."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    s._read_cache["/old/package.json"] = '{"a": 1}'
+    s._reset_turn_state()
+    s._read_cache["src/a.ts"] = "const a = 1;\n" * 10
+    s._read_cache["src/b.ts"] = "const b = 2;\n" * 10
+    resp = "veredicto: cumple en src/a.ts:1 y src/b.ts:1"
+    assert s._readonly_evidence_turn(resp) is True
+
+
 def test_pool_frena_ante_primer_fallo(tmp_path):
     """E2E T02: el turno falló sin escribir y el pool igual avanzó a T03
     sobre base rota. Por defecto el pool FRENA y dice cómo reanudar."""

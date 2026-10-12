@@ -986,6 +986,28 @@ def _is_infra_failure_text(text: str) -> bool:
     return any(rx.search(str(text)) for rx in _INFRA_FAILURE_RES)
 
 
+# Sin batería posible y sin riesgo de ejecución: nunca exigen verificación.
+_DOCS_SKIP_EXTS = frozenset({"md", "markdown", "txt", "rst"})
+
+
+def _split_written_by_kind(paths: list[str]) -> tuple[list[str], list[str], list[str]]:
+    """(code, json, other) por extensión.
+
+    Desconocida o sin extensión → code (conservador: ante la duda se exige
+    batería, nunca se relaja). Solo json y docs conocidas relajan.
+    """
+    code, js, other = [], [], []
+    for f in paths or []:
+        ext = Path(f).suffix.lower().lstrip(".")
+        if ext == "json":
+            js.append(f)
+        elif ext in _DOCS_SKIP_EXTS:
+            other.append(f)
+        else:
+            code.append(f)
+    return code, js, other
+
+
 def _git_branch(repo_path: str) -> str:
     try:
         result = subprocess.run(
@@ -1265,9 +1287,13 @@ class Session:
         # Reporte completo del runtime (para la evidencia del cierre).
         self._runtime_report: str | None = None
         self._dedupe = ToolCallDedupe(max_repeats=1)
+        # EXECUTE: montos por proveedor (nube holgado, local ajustado).
+        from core.model_profiles import analyze_budget_for, execute_budget_for
+
+        _ex_calls, _ex_reads = execute_budget_for(self.llm)
         self._explore_budget = ExploreBudget(
-            max_calls=EXECUTE_EXPLORE_BUDGET,
-            max_reads_after_explore=EXECUTE_MAX_READS_AFTER_EXPLORE,
+            max_calls=_ex_calls,
+            max_reads_after_explore=_ex_reads,
             max_tools_before_write=EXECUTE_MAX_TOOLS_BEFORE_WRITE,
             productive_names=VERIFY_TOOL_NAMES,
             max_writes_before_verify=EXECUTE_MAX_WRITES_BEFORE_VERIFY,
@@ -1295,6 +1321,12 @@ class Session:
         # Cache de archivos leídos (read_file) durante el turno: el retry
         # write-only lo inyecta como anclaje para reescribir sin leer.
         self._read_cache: dict[str, str] = {}
+        # Claves del caché al ARRANCAR el turno: la evidencia "ya leído" del
+        # cierre honesto cuenta SOLO lecturas de ESTE turno. El caché es de
+        # sesión (sobrevive turnos): sin acotar, un turno con 0 tools cerraba
+        # como "solo-lectura con evidencia" con lecturas prestadas del turno
+        # anterior (E2E: turno 2 con 0 calls citó paths + caché del turno 1).
+        self._turn_start_cache_keys: set[str] = set()
         # Retry de solo-lectura en curso (ANALYZE/PLAN con solo read_file):
         # el guard PLAN-EXPLORA no debe exigir exploración imposible.
         self._readonly_retry = False
@@ -1739,7 +1771,26 @@ class Session:
             return {}
 
     def _profile_thinking(self, role: Role) -> int:
-        """Presupuesto de thinking por bloque según profile (fallback config)."""
+        """Presupuesto de thinking por bloque según proveedor y profile.
+
+        Nube primero: el thinking llega rápido y el cap chico garantiza el
+        fracaso en tareas que piden planificar+escribir (reintentos
+        idénticos). Los profiles por familia calibran solo el local.
+        """
+        try:
+            from core.model_profiles import is_cloud_llm
+
+            if is_cloud_llm(getattr(self, "llm", None)):
+                from config import (
+                    CLOUD_EXECUTE_MAX_REASONING_CHARS,
+                    CLOUD_MAX_REASONING_CHARS,
+                )
+
+                if role == Role.EXECUTE:
+                    return int(CLOUD_EXECUTE_MAX_REASONING_CHARS)
+                return int(CLOUD_MAX_REASONING_CHARS)
+        except Exception:
+            pass
         try:
             if role == Role.EXECUTE:
                 return int(self._model_profile.get(
@@ -2642,10 +2693,16 @@ class Session:
         # con code block + path real → "fallido" tras 90s de texto). El
         # read_cache SÍ sobrevive a los retries: sus entradas sustantivas
         # cuentan como lecturas del turno.
+        # PERO solo las NUEVAS de este turno (_turn_start_cache_keys): el caché
+        # es de SESIÓN y sobrevive turnos — sin acotar, un turno con 0 tools
+        # cerraba como "solo-lectura con evidencia" con lecturas prestadas del
+        # turno anterior (E2E: turno 2 con 0 calls + mención de paths).
         try:
+            _prev_keys = getattr(self, "_turn_start_cache_keys", None) or set()
             _cached_files = sum(
                 1 for _k, _v in (getattr(self, "_read_cache", None) or {}).items()
-                if not str(_k).startswith("[") and len(str(_v or "").strip()) > 30
+                if _k not in _prev_keys
+                and not str(_k).startswith("[") and len(str(_v or "").strip()) > 30
             )
         except Exception:
             _cached_files = 0
@@ -3135,6 +3192,51 @@ class Session:
             except Exception:
                 continue
         return own
+
+    def _turn_scope_kinds(self) -> tuple[bool, list[str]] | None:
+        """Clasifica lo escrito POR el turno: (hay_codigo, jsons).
+
+        None si no se puede atribuir (snapshot fallido) o no hay nada
+        atribuible → flujo normal (nunca relaja). Solo json/docs (sin
+        código) habilitan la verificación por alcance.
+        """
+        try:
+            files = self._changed_files()
+            snap = getattr(self, "_turn_start_dirty", frozenset())
+            if snap is None:
+                return None
+            own = self._turn_own_files(files, frozenset(snap or ()))
+        except Exception:
+            return None
+        if not own:
+            return None
+        code, js, _other = _split_written_by_kind(own)
+        return (bool(code), js)
+
+    def _check_written_json(self, files: list[str]) -> tuple[bool, str]:
+        """Valida sintaxis de los .json escritos (barato, determinístico).
+
+        Un JSON roto (coma colgando) rompe al consumidor (pool/tasks) igual
+        que código roto rompe el build: esto ES la verificación que aplica.
+        """
+        import json as _json
+
+        bad: list[str] = []
+        n = 0
+        for rel in files or []:
+            if Path(rel).suffix.lower() != ".json":
+                continue
+            p = Path(self.repo_path) / rel
+            if not p.is_file():
+                continue  # borrado en el turno: nada que validar
+            n += 1
+            try:
+                _json.loads(p.read_text(encoding="utf-8"))
+            except Exception as e:
+                bad.append(f"{rel}: {e}")
+        if bad:
+            return False, "JSON inválido en " + "; ".join(bad[:3])
+        return True, f"JSON válido ({n} archivo(s))"
 
     def _deterministic_close(self) -> str:
         """Resumen de cierre determinístico del SISTEMA (no del modelo).
@@ -3756,6 +3858,10 @@ class Session:
         self._dedupe.reset()
         self._explore_budget.reset()
         self._analyze_budget.reset()
+        try:
+            self._turn_start_cache_keys = set((self._read_cache or {}).keys())
+        except Exception:
+            self._turn_start_cache_keys = set()
         self._called_tools.clear()
         self._verify_results.clear()
         self._explore_budget.clear_failure_tails()
@@ -3900,8 +4006,11 @@ class Session:
         self._analyze_preloaded = False
         self._dedupe.max_repeats = 1
         if new_role == Role.EXECUTE:
-            self._explore_budget.max_calls = EXECUTE_EXPLORE_BUDGET
-            self._explore_budget.max_reads_after_explore = EXECUTE_MAX_READS_AFTER_EXPLORE
+            from core.model_profiles import execute_budget_for
+
+            _xec, _xer = execute_budget_for(self.llm)
+            self._explore_budget.max_calls = _xec
+            self._explore_budget.max_reads_after_explore = _xer
             self._explore_budget.max_tools_before_write = EXECUTE_MAX_TOOLS_BEFORE_WRITE
             self._explore_budget.max_writes_before_verify = EXECUTE_MAX_WRITES_BEFORE_VERIFY
             self._explore_budget.max_verify_before_write = EXECUTE_MAX_VERIFY_BEFORE_WRITE
@@ -4269,9 +4378,9 @@ class Session:
 
         reset_turn_usage()
         start = time.monotonic()
-        recursion = (
-            EXECUTE_RECURSION_LIMIT if new_role == Role.EXECUTE else AGENT_RECURSION_LIMIT
-        )
+        from core.model_profiles import max_tool_calls_for, recursion_limit_for
+
+        recursion = recursion_limit_for(self.llm, new_role == Role.EXECUTE)
         if self._bulk_scope >= EXECUTE_BULK_MIN_FILES:
             recursion = max(recursion, 2 * _bulk_budget(self._bulk_scope)["tool_calls_per_turn"] + 2)
         config = {
@@ -4355,7 +4464,7 @@ class Session:
                     max_tool_calls=(
                         _bulk_budget(self._bulk_scope)["tool_calls_per_turn"]
                         if new_role == Role.EXECUTE and self._bulk_scope >= EXECUTE_BULK_MIN_FILES
-                        else MAX_TOOL_CALLS_PER_TURN
+                        else max_tool_calls_for(self.llm)
                     ),
                     require_write=require_write,
                     max_content_seconds=(
@@ -4646,6 +4755,53 @@ class Session:
                 )
                 break
             except VerifyRequired:
+                # Alcance: turno sin código (solo json/docs) — la batería no
+                # valida esos artefactos; exigirla quema compuertas y falla
+                # trabajo correcto (E2E: solo tasks.json en repo sin stack →
+                # 3 compuertas → fallo). Validación barata en vez.
+                _scope = self._turn_scope_kinds()
+                if _scope is not None and not _scope[0]:
+                    _, _js = _scope
+                    if _js:
+                        _ok, _msg = self._check_written_json(_js)
+                        if _ok:
+                            try:
+                                self._explore_budget._writes_since_verify = 0
+                            except Exception:
+                                pass
+                            console.print(
+                                f"\n[dim]✅ {_msg} — la batería no aplica "
+                                "(sin código).[/dim]"
+                            )
+                            continue
+                        verify_injections += 1
+                        if verify_injections >= VERIFY_GATE_MAX_INJECTIONS:
+                            turn_failed = True
+                            interrupted = True
+                            auto_stopped = True
+                            print(
+                                self._closing_message(
+                                    f"\n\n⛔ {_msg}. Corregilo con edit_file "
+                                    "y reintentá."
+                                ),
+                                flush=True,
+                            )
+                            break
+                        self._messages.append(HumanMessage(
+                            f"⛔ {_msg}. Corregilo con edit_file (quirúrgico, "
+                            "sin reescribir) y seguí."
+                        ))
+                        messages_for_agent = list(self._messages)
+                        continue
+                    try:
+                        self._explore_budget._writes_since_verify = 0
+                    except Exception:
+                        pass
+                    console.print(
+                        "\n[dim]↻ Solo docs/datos (sin código): la batería no "
+                        "aplica — se sigue.[/dim]"
+                    )
+                    continue
                 # El modelo escribió N veces sin verificar: inyectar la
                 # compuerta de verificación AHORA (GATE_RETRY_TOOLS tiene
                 # run_lint/run_tests/run_build). El retry write-only NO tiene
@@ -4906,6 +5062,22 @@ class Session:
                         "Reintentando con lectura acotada + escritura…"
                     )
                 messages_for_agent = self._enter_budget_retry(retry_msg)
+                # En nube el thinking NO se puede apagar por API (el flag solo
+                # viaja a llama.cpp): repetir idéntico garantiza el mismo corte
+                # (E2E deepseek: 3×12.010 chars). Lo que sí viaja es una
+                # instrucción: razonamiento mínimo, actuar ya con tools.
+                try:
+                    from core.model_profiles import is_cloud_llm
+
+                    if is_cloud_llm(getattr(self, "llm", None)):
+                        self._messages.append(HumanMessage(
+                            "Razonamiento mínimo en este intento: no deliberes "
+                            "más, actuá ya con tool calls (leer lo puntual y "
+                            "escribir). Nada de planes en texto."
+                        ))
+                        messages_for_agent = list(self._messages)
+                except Exception:
+                    pass
                 continue
             except Exception as e:
                 if _is_llama_connection_error(e):
@@ -4969,8 +5141,11 @@ class Session:
                     self._called_tools.clear()
                     self._verify_results.clear()
                     self._dedupe.reset()
+                    from core.model_profiles import execute_budget_for
+
                     self._explore_budget.max_calls = 0
-                    self._explore_budget.max_reads_after_explore = EXECUTE_MAX_READS_AFTER_EXPLORE
+                    self._explore_budget.max_reads_after_explore = \
+                        execute_budget_for(self.llm)[1]
                     self._explore_budget.reset()
                     self._explore_budget.limit_reads_now()
                     self._rebuild_agent_write_only()
@@ -4979,11 +5154,9 @@ class Session:
                     )
                     continue
                 if "Recursion" in name or "recursion" in err_text.lower():
-                    lim = (
-                        EXECUTE_RECURSION_LIMIT
-                        if new_role == Role.EXECUTE
-                        else AGENT_RECURSION_LIMIT
-                    )
+                    from core.model_profiles import recursion_limit_for
+
+                    lim = recursion_limit_for(self.llm, new_role == Role.EXECUTE)
                     if attempt + 1 >= max_attempts:
                         turn_failed = True
                         print(
@@ -5156,6 +5329,25 @@ class Session:
                         "la dejó verde. Se marca fallido para no fingir avance: "
                         "corregí los errores de arriba y re-verificá.[/red]"
                     )
+        # Verificación por alcance: turno sin código (solo json/docs) donde
+        # la batería nunca corrió en verde — validar barato en vez de fallar
+        # trabajo correcto (E2E: tasks.json válido cerraba fallido "sin
+        # verificación"). Con batería verde o rojos reales no interviene.
+        if new_role == Role.EXECUTE and not interrupted and not turn_failed:
+            if self._verify_all_passed() is not True:
+                _scope_c = self._turn_scope_kinds()
+                if _scope_c is not None and not _scope_c[0] and _scope_c[1]:
+                    _ok_c, _msg_c = self._check_written_json(_scope_c[1])
+                    if _ok_c:
+                        console.print(
+                            f"\n[dim]✅ {_msg_c} — verificación por alcance "
+                            "(sin código).[/dim]"
+                        )
+                    else:
+                        turn_failed = True
+                        console.print(
+                            f"\n[red]⛔ {_msg_c}. Corregilo y re-verificá.[/red]"
+                        )
         # Commit preguntado: tras un turno EXECUTE EXITOSO, si hay cambios
         # sin commitear y el usuario no interrumpió, ofrecer commitear.
         # Turnos FALLIDOS (loop/recursion/error) pueden dejar el árbol roto

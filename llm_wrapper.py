@@ -44,6 +44,20 @@ _PARAM_XML_RE = re.compile(
     r"<parameter=(?P<key>[\w.-]+)>\s*(?P<val>.*?)\s*</parameter>",
     re.DOTALL,
 )
+# DSML (DeepSeek Markup Language): el dialecto interno de DeepSeek filtrado
+# como texto (<｜DSML｜ invoke name="write_file"> + bloques <｜DSML｜ parameter
+# name="k">v</｜DSML｜ parameter>). Visto en vivo: el modelo emite el call
+# COMPLETO y bien formado pero con pipes fullwidth, y el harness lo pierde
+# (E2E: tasks.json entero evaporado tras agotar exploración). Se acepta
+# variante fullwidth (｜, la observada) y ASCII (|).
+_DSML_INVOKE_RE = re.compile(
+    r"<[｜|]DSML[｜|]\s*invoke\s+name=[\"'](?P<name>[\w.-]+)[\"']\s*>",
+)
+_DSML_PARAM_RE = re.compile(
+    r"<[｜|]DSML[｜|]\s*parameter\s+name=[\"'](?P<key>[\w.-]+)[\"'][^>]*>"
+    r"(?P<val>.*?)</[｜|]DSML[｜|]\s*parameter\s*>",
+    re.DOTALL,
+)
 # e.g. 🔧 read_file{"path":"..."}  or  read_file{"path":"..."}
 _INLINE_JSON_RE = re.compile(
     r"(?:🔧\s*)?(?P<name>[a-zA-Z_][\w]*)\{(?P<args>[^{}]*)\}",
@@ -161,6 +175,24 @@ def parse_text_tool_calls(content: str) -> list[dict[str, Any]]:
         calls.append({
             "id": f"call_xml_{uuid.uuid4().hex[:8]}",
             "name": name,
+            "args": args,
+            "type": "tool_call",
+        })
+
+    if calls:
+        return calls
+
+    # Bloques DSML (ver _DSML_*_RE): cada invoke con sus parameters hasta el
+    # próximo invoke (o fin del texto: el cierre </invoke> suele faltar).
+    _invokes = list(_DSML_INVOKE_RE.finditer(content))
+    for i, match in enumerate(_invokes):
+        end = _invokes[i + 1].start() if i + 1 < len(_invokes) else len(content)
+        args: dict[str, Any] = {}
+        for pm in _DSML_PARAM_RE.finditer(content, match.end(), end):
+            args[pm.group("key")] = _coerce_value(pm.group("val"))
+        calls.append({
+            "id": f"call_dsml_{uuid.uuid4().hex[:8]}",
+            "name": match.group("name"),
             "args": args,
             "type": "tool_call",
         })

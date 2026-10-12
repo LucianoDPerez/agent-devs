@@ -293,7 +293,7 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                     console.print(
                         f"\n[dim]↻ Razonamiento excedió presupuesto "
                         f"({reasoning_chars:,} chars). Se corta aquí — el turno se "
-                        f"reintenta con thinking desactivado.[/dim]"
+                        f"reintenta con instrucciones de actuar directo.[/dim]"
                     )
                     break
             else:

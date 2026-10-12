@@ -262,6 +262,21 @@ CLOUD_ANALYZE_MAX_READS_AFTER_EXPLORE = 12
 CLOUD_PLAN_EXPLORE_BUDGET = 10
 CLOUD_PLAN_MAX_READS_AFTER_EXPLORE = 12
 
+# Techos NUBE (modelos fuertes por API): el constraint es costo, no hangs —
+# el thinking llega rápido y los techos solo muerden en loops (que atrapan
+# los guards inteligentes: dedupe, text-loop con progreso, write-pressure).
+# Un cap chico en nube GARANTIZA el fracaso en tareas que piden
+# planificar+escribir: reintentos idénticos hasta agotar intentos (E2E
+# deepseek: 3 cortes idénticos de 12.010 chars). El backstop de tiempo
+# (EXECUTE_MAX_CONTENT_SECONDS, TURN_IDLE_TIMEOUT) sigue acotando.
+# Detección por base_url (is_cloud_url) en los mismos choke points.
+CLOUD_EXECUTE_MAX_REASONING_CHARS = 36000
+CLOUD_MAX_REASONING_CHARS = 12000
+CLOUD_EXECUTE_EXPLORE_BUDGET = 5
+CLOUD_EXECUTE_MAX_READS_AFTER_EXPLORE = 8
+CLOUD_MAX_TOOL_CALLS_PER_TURN = 45
+CLOUD_EXECUTE_RECURSION_LIMIT = 100
+
 # Compuerta post-escritura (EXECUTE): tras escribir código, corre el build/lint
 # y si falla por un archivo que acabamos de tocar, reintenta inyectando el error.
 # Es la red de seguridad clave para LLM chicos que escriben código que no compila.

@@ -60,7 +60,7 @@ EXPLORE_TOOL_NAMES = (
     | MCP_EXPLORE_TOOL_NAMES
 )
 WRITE_TOOL_NAMES = frozenset({
-    "write_file", "edit_file", "apply_patch", "delete_file", "make_dir", "stage_files", "create_commit", "push", "create_pr",
+    "write_file", "edit_file", "apply_patch", "delete_file", "make_dir", "copy_file", "stage_files", "create_commit", "push", "create_pr",
 })
 # Tools de lectura (no son "write" pero son acción productiva)
 READISH_TOOL_NAMES = frozenset(
@@ -142,7 +142,7 @@ PRODUCTIVE_TOOL_NAMES = READISH_TOOL_NAMES | VERIFY_TOOL_NAMES
 # aprueba. stage_files/create_commit NO van acá: el commit ya tiene su propio
 # prompt post-turno (EXECUTE_ASK_COMMIT).
 CONFIRM_TOOL_NAMES = frozenset({
-    "write_file", "edit_file", "apply_patch", "delete_file", "make_dir",
+    "write_file", "edit_file", "apply_patch", "delete_file", "make_dir", "copy_file",
     # Publicar sale de la máquina: push/PR exigen confirmación igual que
     # escribir (el README lo promete). Con /autoapprove se aprueban solos.
     "push", "create_pr",
@@ -1196,8 +1196,8 @@ def _wrap_one(
         # schema) pasan en silencio; al superar el tope se levanta excepción
         # (E2E real: T002 de infra/sqs.tf → 5 writes de T003). El cierre
         # determinístico reporta la lista.
-        if name in ("write_file", "edit_file", "apply_patch", "delete_file", "make_dir"):
-            _tp = (kwargs or {}).get("path", "")
+        if name in ("write_file", "edit_file", "apply_patch", "delete_file", "make_dir", "copy_file"):
+            _tp = (kwargs or {}).get("path", "") or (kwargs or {}).get("destination_path", "")
             _scope = getattr(dedupe, "scope_files", None)
             if _tp and _scope and not _in_scope(_tp, _scope):
                 from config import SCOPE_MAX_OUT_OF_SCOPE_WRITES

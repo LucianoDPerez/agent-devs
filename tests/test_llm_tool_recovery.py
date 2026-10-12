@@ -101,3 +101,42 @@ class TestParseNewFormats:
         calls = parse_text_tool_calls(text)
         assert len(calls) == 1
         assert calls[0]["name"] == "read_file"
+
+
+class TestParseDSML:
+    """DSML fullwidth de DeepSeek (E2E: write_file completo evaporado tras
+    agotar exploración — el contenido venía bien formado)."""
+
+    _DSML_WRITE = (
+        '<｜DSML｜ invoke name="write_file"> '
+        '<｜DSML｜ parameter name="path" string="true">/tmp/tasks.json</｜DSML｜ parameter> '
+        '<｜DSML｜ parameter name="content" string="true">{"a": 1}</｜DSML｜ parameter>'
+    )
+
+    def test_dsml_fullwidth(self):
+        calls = parse_text_tool_calls("Voy a escribir: " + self._DSML_WRITE)
+        assert len(calls) == 1
+        assert calls[0]["name"] == "write_file"
+        assert calls[0]["args"]["path"] == "/tmp/tasks.json"
+        assert calls[0]["args"]["content"] == '{"a": 1}'
+
+    def test_dsml_ascii_variant(self):
+        text = self._DSML_WRITE.replace("｜", "|")
+        calls = parse_text_tool_calls(text)
+        assert len(calls) == 1
+        assert calls[0]["name"] == "write_file"
+        assert calls[0]["args"]["path"] == "/tmp/tasks.json"
+
+    def test_dsml_multiple_invokes(self):
+        text = (
+            '<｜DSML｜ invoke name="read_file">'
+            '<｜DSML｜ parameter name="path">/a.md</｜DSML｜ parameter> '
+            '<｜DSML｜ invoke name="read_file">'
+            '<｜DSML｜ parameter name="path">/b.md</｜DSML｜ parameter>'
+        )
+        calls = parse_text_tool_calls(text)
+        assert len(calls) == 2
+        assert [c["args"]["path"] for c in calls] == ["/a.md", "/b.md"]
+
+    def test_dsml_prosa_con_pipes_no_dispara(self):
+        assert parse_text_tool_calls("uso pipes | así | en texto") == []

@@ -827,3 +827,71 @@ class TestReadBeforeEdit:
         assert r1.startswith("✅")
         r2 = edit_file.invoke({"path": str(p), "old_str": "hola", "new_str": "chau"})
         assert r2.startswith("✅")
+
+
+class TestCopyFile:
+    """copy_file: copiar UN archivo (texto o binario) sin shell."""
+
+    def test_copia_binario_identico(self, tmp_path):
+        from tools.filesystem import copy_file
+
+        src = tmp_path / "a.png"
+        src.write_bytes(bytes(range(256)) * 4)
+        dst = tmp_path / "sub"
+        dst.mkdir()
+        out = copy_file.invoke({
+            "source_path": str(src),
+            "destination_path": str(dst / "a.png"),
+        })
+        assert out.startswith("✅"), out
+        assert (dst / "a.png").read_bytes() == src.read_bytes()
+
+    def test_no_sobrescribe(self, tmp_path):
+        from tools.filesystem import copy_file
+
+        src = tmp_path / "a.txt"
+        src.write_text("nuevo")
+        dst = tmp_path / "b.txt"
+        dst.write_text("existente")
+        out = copy_file.invoke({
+            "source_path": str(src), "destination_path": str(dst)})
+        assert "already exists" in out
+        assert dst.read_text() == "existente"
+
+    def test_origen_inexistente(self, tmp_path):
+        from tools.filesystem import copy_file
+
+        out = copy_file.invoke({
+            "source_path": str(tmp_path / "nope.png"),
+            "destination_path": str(tmp_path / "x.png")})
+        assert "does not exist" in out
+
+    def test_directorio_rechazado(self, tmp_path):
+        from tools.filesystem import copy_file
+
+        out = copy_file.invoke({
+            "source_path": str(tmp_path),
+            "destination_path": str(tmp_path / "x")})
+        assert "directory" in out
+
+    def test_padre_inexistente_pide_make_dir(self, tmp_path):
+        from tools.filesystem import copy_file
+
+        src = tmp_path / "a.txt"
+        src.write_text("x")
+        out = copy_file.invoke({
+            "source_path": str(src),
+            "destination_path": str(tmp_path / "nodir" / "a.txt")})
+        assert "make_dir" in out
+
+    def test_nunca_imprime_contenido(self, tmp_path):
+        from tools.filesystem import copy_file
+
+        src = tmp_path / "secret.bin"
+        src.write_bytes(b"SECRETO" * 100)
+        (tmp_path / "d").mkdir()
+        out = copy_file.invoke({
+            "source_path": str(src),
+            "destination_path": str(tmp_path / "d" / "secret.bin")})
+        assert out.startswith("✅")
+        assert "SECRETO" not in out

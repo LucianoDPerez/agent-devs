@@ -56,6 +56,12 @@ class TestBudgetTiers:
         return SimpleNamespace(base_url="http://localhost:9999/v1",
                                model_name=model_name)
 
+    def _cloud(self, model_name="deepseek-v4.1-flash"):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(base_url="https://opencode.ai/zen/v1",
+                               model_name=model_name)
+
     def _no_live(self, monkeypatch):
         import llm_wrapper
 
@@ -86,6 +92,78 @@ class TestBudgetTiers:
 
         self._no_live(monkeypatch)
         assert analyze_budget_for(self._llm("mimodelo"), 65_000) == (4, 8)
+
+
+class TestCloudBudgets:
+    """Perfiles por proveedor: en nube los techos suben (el constraint es
+    costo, no hangs; los fuertes se auto-terminan)."""
+
+    def test_is_cloud_llm(self):
+        from core.model_profiles import is_cloud_llm
+        from types import SimpleNamespace
+
+        assert is_cloud_llm(SimpleNamespace(
+            base_url="https://opencode.ai/zen/v1")) is True
+        assert is_cloud_llm(SimpleNamespace(
+            base_url="http://localhost:8080/v1")) is False
+        assert is_cloud_llm(None) is False
+        assert is_cloud_llm(SimpleNamespace(base_url="")) is False
+
+    def test_execute_budget_cloud(self):
+        from core.model_profiles import execute_budget_for
+        from types import SimpleNamespace
+
+        assert execute_budget_for(SimpleNamespace(
+            base_url="https://opencode.ai/zen/v1")) == (5, 8)
+        assert execute_budget_for(SimpleNamespace(
+            base_url="http://localhost:8080/v1")) == (3, 5)
+        assert execute_budget_for(None) == (3, 5)
+
+    def test_max_tool_calls_cloud(self):
+        from core.model_profiles import max_tool_calls_for
+        from types import SimpleNamespace
+
+        assert max_tool_calls_for(SimpleNamespace(
+            base_url="https://opencode.ai/zen/v1")) == 45
+        assert max_tool_calls_for(SimpleNamespace(
+            base_url="http://localhost:8080/v1")) == 30
+
+    def test_recursion_limit(self):
+        from core.model_profiles import recursion_limit_for
+        from types import SimpleNamespace
+
+        cloud = SimpleNamespace(base_url="https://opencode.ai/zen/v1")
+        local = SimpleNamespace(base_url="http://localhost:8080/v1")
+        assert recursion_limit_for(cloud, True) == 100
+        assert recursion_limit_for(local, True) == 70
+        assert recursion_limit_for(cloud, False) == 50
+        assert recursion_limit_for(local, False) == 50
+
+
+class TestProfileThinkingCloud:
+    def test_cloud_tiene_techo_mayor(self, tmp_path):
+        from core.roles import Role
+        from orchestration.session import Session
+        from types import SimpleNamespace
+
+        s = Session(llm=None, repo_path=str(tmp_path))
+        s.llm = SimpleNamespace(base_url="https://opencode.ai/zen/v1",
+                                model_name="deepseek-v4.1-flash")
+        assert s._profile_thinking(Role.EXECUTE) == 36000
+        assert s._profile_thinking(Role.ANALYZE) == 12000
+
+    def test_local_usa_profile(self, tmp_path):
+        from core.roles import Role
+        from orchestration.session import Session
+        from types import SimpleNamespace
+
+        s = Session(llm=None, repo_path=str(tmp_path))
+        s.llm = SimpleNamespace(base_url="http://localhost:8080/v1",
+                                model_name="qwen3.6-35b-a3b")
+        s._model_profile = {"thinking_chars_exec": 12000,
+                            "thinking_chars_other": 6000}
+        assert s._profile_thinking(Role.EXECUTE) == 12000
+        assert s._profile_thinking(Role.ANALYZE) == 6000
 
 
 def test_session_aplica_profile(tmp_path):

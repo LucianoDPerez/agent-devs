@@ -476,11 +476,11 @@ def _json_entry_checklist_line(entry: dict) -> str:
     title = str(entry.get("title") or entry.get("titulo") or "").strip()
     if title:
         bits.append(title[:120])
-    for key in ("file", "archivo"):
+    for key in ("file", "files", "archivo"):
         if entry.get(key):
             bits.append(f"archivo: {entry[key]}")
             break
-    for key in ("verify", "acceptance", "rubrica", "criterios"):
+    for key in ("verify", "ac", "acceptance", "rubrica", "criterios"):
         if entry.get(key):
             bits.append(f"verify: {str(entry[key])[:160]}")
             break
@@ -550,7 +550,11 @@ def _pinned_entry_header(num: int, entry: dict) -> str:
         line += f" — {title[:120]}"
     if entry.get("status"):
         line += f" [{entry['status']}]"
-    for key in ("verify", "acceptance", "criterios", "rubrica"):
+    for key in ("file", "files", "archivo"):
+        if entry.get(key):
+            line += f"\n   Archivo: {entry[key]}"
+            break
+    for key in ("verify", "ac", "acceptance", "criterios", "rubrica"):
         if entry.get(key):
             line += f"\n   Criterio: {str(entry[key])[:220]}"
             break
@@ -767,8 +771,12 @@ def _collect_cited_paths(user_input: str, repo_path: str | None) -> list[Path]:
         try:
             if not p.is_file():
                 return
-            # Evitar cargar logs/dumps de 500KB para luego truncar: stat primero
-            if p.stat().st_size > 20000:
+            # Evitar cargar dumps gigantes: stat primero. Tope holgado
+            # (200KB): un tasks.json real con 26 tareas pesa ~35KB y DEBE
+            # pasar — abajo se filtra al pin (pocos KB) y el preload trunca
+            # al budget de todos modos. Con 20KB los planes grandes quedaban
+            # fuera en silencio y el pool corría ciego (E2E landing).
+            if p.stat().st_size > 200000:
                 return
         except OSError:
             return

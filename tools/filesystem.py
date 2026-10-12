@@ -730,6 +730,62 @@ def make_dir(path: str) -> str:
 
 
 @tool
+def copy_file(source_path: str, destination_path: str) -> str:
+    """
+    Copy ONE file byte-for-byte (text or binary: images, fonts, fixtures).
+    Use for asset tasks (copy product screenshots into the repo). No shell.
+    Rules: source must exist and be a FILE (no directories, no -r); the
+    parent dir of destination must exist (create it first with make_dir);
+    NEVER overwrites an existing destination (delete it first if a refresh
+    is really needed). Never prints file content (binaries stay out of
+    context): returns only source, destination and byte size.
+    Protected planning paths apply to the DESTINATION (never overwrite tasks).
+    Usage: copy_file(source_path="/prod/docs/assets/tui.png", destination_path="/repo/assets/img/tui.png")
+    """
+    import shutil
+
+    if _is_protected_task_path(destination_path):
+        return (
+            f"⛔ '{destination_path}' es un path de PLANIFICACIÓN (tasks/PRD/plan) "
+            "PROHIBIDO. NO lo sobrescribas: es tu fuente de verdad de la tarea."
+        )
+    src = Path(source_path or "")
+    dst = Path(destination_path or "")
+    if not str(source_path or "").strip() or not str(destination_path or "").strip():
+        return "⛔ Pasá source_path y destination_path (ambos requeridos)."
+    if not src.exists():
+        return (
+            f"File does not exist: {source_path}. "
+            "Do not retry this path. Continue with other tasks."
+        )
+    if src.is_dir():
+        return (
+            f"⛔ '{source_path}' is a directory. copy_file only copies ONE file "
+            "(no -r). Copy the needed files one by one."
+        )
+    if not dst.parent.exists():
+        return (
+            f"⛔ Parent dir does not exist: {dst.parent}. "
+            "Create it first with make_dir, then copy."
+        )
+    if dst.exists():
+        return (
+            f"⛔ '{destination_path}' already exists — copy_file never overwrites. "
+            "Delete it first with delete_file if a refresh is really needed."
+        )
+    try:
+        shutil.copy2(src, dst)
+    except OSError as e:
+        return f"⛔ Failed to copy {source_path} → {destination_path}: {e}."
+    try:
+        size = dst.stat().st_size
+    except OSError:
+        size = -1
+    _mark_read(str(dst))
+    return f"✅ Copiado {source_path} → {destination_path} ({size:,} bytes)"
+
+
+@tool
 def delete_file(path: str) -> str:
     """
     Delete a file from the filesystem.

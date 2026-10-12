@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 
 from orchestration.execute_bootstrap import (
+    _collect_cited_paths,
     build_paste_correction_suffix,
     detect_bulk_file_count,
     detect_repo_stacks,
@@ -15,6 +16,7 @@ from orchestration.execute_bootstrap import (
     filter_json_task_sections,
     filter_task_sections,
     format_done_checklist,
+    format_json_checklist,
     inject_repo_hints,
     pinned_task_header,
     pinned_task_scope_files,
@@ -821,3 +823,59 @@ class TestPinnedExactContents:
                                           "pegar_contenido": "X"}]), encoding="utf-8")
         out = pinned_exact_contents(f"implementar Tarea 5 de {p}", str(tmp_path))
         assert out == [("a.ts", "X"), ("b.ts", "X")]
+
+
+class TestPreloadTasksJsonGrande:
+    """E2E landing: tasks.json de 34.8KB con 26 tareas quedaba fuera por el
+    tope de 20KB en silencio → pool ciego ('Sin archivo reconocido')."""
+
+    def _big_tasks(self, tmp_path, n=26, pad=1200):
+        import json
+
+        tasks = []
+        for i in range(1, n + 1):
+            tasks.append({
+                "id": f"T{i:03d}",
+                "title": f"Tarea numero {i} con relleno " + ("x" * pad),
+                "files": [f"assets/css/parte{i}.css"],
+                "depends_on": [],
+                "ac": f"Hacer la cosa {i} con criterios detallados " + ("y" * pad),
+                "verify": f"read_file assets/css/parte{i}.css",
+                "status": "TODO",
+            })
+        p = tmp_path / "tasks.json"
+        p.write_text(json.dumps({"tasks": tasks}), encoding="utf-8")
+        return p
+
+    def test_collect_incluye_tasks_mediano(self, tmp_path):
+        p = self._big_tasks(tmp_path)
+        assert p.stat().st_size > 20000, "el fixture debe superar el tope viejo"
+        cited = _collect_cited_paths(f"implementar Tarea 1 de {p}", str(tmp_path))
+        assert str(p) in [str(c) for c in cited]
+
+    def test_collect_sigue_frenando_dumps(self, tmp_path):
+        p = tmp_path / "dump.json"
+        p.write_bytes(b"x" * 300000)
+        assert _collect_cited_paths(f"miralo {p}", str(tmp_path)) == []
+
+    def test_header_y_checklist_leen_files_y_ac(self, tmp_path):
+        import json
+
+        p = tmp_path / "t.json"
+        p.write_text(json.dumps({"tasks": [{
+            "id": "T007", "title": "CSS de features",
+            "files": ["assets/css/features.css"], "depends_on": ["T004"],
+            "ac": "Estilizar .features__grid con auto-fit",
+            "verify": "read_file assets/css/features.css",
+            "status": "TODO",
+        }]}), encoding="utf-8")
+        header = pinned_task_header("implementar Tarea 7 de " + str(p), str(tmp_path))
+        assert "T007" in header
+        assert "assets/css/features.css" in header
+        filt = filter_json_task_sections(p.read_text(encoding="utf-8"), [7])
+        # El ac completo viaja en el contenido precargado (no en la línea
+        # compacta del checklist, que lleva archivo + verify).
+        assert "auto-fit" in filt
+        line = format_json_checklist(filt)
+        assert "assets/css/features.css" in line
+        assert "read_file" in line

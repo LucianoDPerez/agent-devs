@@ -10,7 +10,7 @@ agente (analyzer, planner, executor, reviewer) use solo las que necesita.
 """
 
 from .env import inspect_env
-from .filesystem import apply_patch, delete_file, edit_file, list_files, make_dir, read_file, write_file
+from .filesystem import apply_patch, copy_file, delete_file, edit_file, list_files, make_dir, read_file, write_file
 from .git import (
     changed_files,
     create_branch,
@@ -33,7 +33,7 @@ from .search import search_code
 from .verify import run_build, run_install, install_package, run_lint, run_npm_script, run_test_file, run_tests, run_verify
 
 ALL_TOOLS = [
-    list_files, read_file, write_file, edit_file, delete_file, make_dir, search_code, inspect_routes,
+    list_files, read_file, write_file, edit_file, delete_file, make_dir, copy_file, search_code, inspect_routes,
     inspect_models,
     run_install, install_package, run_lint, run_tests, run_test_file, run_build, run_verify, run_npm_script,
     current_branch, changed_files, git_status, git_log,
@@ -51,7 +51,7 @@ PLANNER_TOOLS = [list_files, read_file, search_code, inspect_routes, inspect_mod
 # atención del modelo 4B — "olvidaba" que tenía edit_file y se escondía en
 # read_file infinitos. 12 tools + trace_component (compuesta, agrega agent_builder).
 EXECUTOR_TOOLS = [
-    read_file, write_file, edit_file, apply_patch, delete_file, make_dir,
+    read_file, write_file, edit_file, apply_patch, delete_file, make_dir, copy_file,
     search_code, inspect_routes,
     run_install, install_package, run_lint, run_tests, run_test_file, run_build, run_verify, run_npm_script,
     # git de LECTURA: 'hacer commit de los modificados' exige VER qué cambió
