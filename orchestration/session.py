@@ -955,6 +955,31 @@ def _format_reds_attribution(heredados: list[str], nuevos: list[str]) -> str:
     )
 
 
+# Firmas de fallo por INFRA (DB/servicios ausentes): el código del turno no
+# pudo haberlas causado → nunca cuentan como "nuevas" ni frenan el pool.
+# E2E real: 37 integration tests rojos por falta de PG/LocalStack contaron
+# como nuevos (baseline [] nunca sembrado) y frenaron el pool en T001.
+# Lista intencionalmente corta (causa inequívoca): un "password failed" o
+# "database does not exist" puede ser config del propio cambio y NO se
+# exime — esos siguen frenando.
+_INFRA_FAILURE_RES = (
+    re.compile(r"econnrefused", re.IGNORECASE),
+    re.compile(r"connection refused", re.IGNORECASE),
+    re.compile(r"could not connect to server", re.IGNORECASE),
+    re.compile(r"is the server running", re.IGNORECASE),
+    re.compile(r":5432\b"),
+    re.compile(r"localstack", re.IGNORECASE),
+    re.compile(r":4566\b"),
+)
+
+
+def _is_infra_failure_text(text: str) -> bool:
+    """True si el texto describe falta de infra (DB/servicios caídos)."""
+    if not text or not str(text).strip():
+        return False
+    return any(rx.search(str(text)) for rx in _INFRA_FAILURE_RES)
+
+
 def _git_branch(repo_path: str) -> str:
     try:
         result = subprocess.run(
@@ -1177,6 +1202,8 @@ class Session:
         self._turn_saw_pass = False
         self._turn_verify_failed = False
         self._turn_writes_after_pass = False
+        # Retry de fix (un intento por turno ante verify en rojo accionable).
+        self._fix_retried = False
         # Resultado del último turno (lo lee el pool de tareas para frenar
         # ante fallos). Vive a nivel sesión; se resetea por turno.
         self._last_turn_failed = False
@@ -1625,6 +1652,7 @@ class Session:
         """
         results: list[dict] = []
         stopped_early = False
+        self._seed_pool_baseline()
         for idx, n in enumerate(numbers):
             self._fresh_pool_turn()
             touched_before = set(self._session_touched_files)
@@ -2466,6 +2494,83 @@ class Session:
         except Exception:
             return False
 
+    def _only_infra_reds(self) -> bool:
+        """True si TODOS los fallos de verify del turno son de infra.
+
+        Usa los excerpts del primer fallo por área (failure_sink): si hay al
+        menos uno y todos tienen firma inequívoca de infra (sin DB /
+        connection refused), el rojo no lo causó el código del turno → el
+        cierre no falla ni frena el pool. Mezclado con un rojo real, o sin
+        excerpts registrados, devuelve False (falla como siempre: seguro).
+        """
+        try:
+            excerpts = [
+                v for v in (self._turn_failures or {}).values()
+                if isinstance(v, str) and v.strip()
+            ]
+        except Exception:
+            return False
+        if not excerpts:
+            return False
+        return all(_is_infra_failure_text(e) for e in excerpts)
+
+    def _reds_attribution_line(self) -> str:
+        """Línea 'Heredados/Nuevos' para el cierre, con exención de infra.
+
+        Si todos los rojos del turno son de infra (sin DB/servicios), se
+        informan como heredados de entorno —nunca 'nuevos': el código del
+        turno no pudo causar un connection refused.
+        """
+        try:
+            reds = self._current_failing_tests()
+            base = self._ensure_baseline()
+        except Exception:
+            return ""
+        if not reds or base is None:
+            return ""
+        if self._only_infra_reds():
+            shown = ", ".join(sorted({_baseline_key(i).split("/")[-1] for i in reds})[:2])
+            more = f" (+{len(reds) - 2} más)" if len(reds) > 2 else ""
+            return (f"\n   Heredados: {len(reds)} (infra: sin DB/servicios — "
+                    f"{shown}{more}) · Nuevos: 0 (ninguno)")
+        her, new = _split_reds(reds, base) or ([], [])
+        return "\n" + _format_reds_attribution(her, new)
+
+    def _fix_retry_excerpts(self, max_chars: int = 3000) -> str:
+        """Excerpts de fallos del turno para reinyectar al modelo (fix retry)."""
+        try:
+            bits = [
+                str(v).strip() for v in (self._turn_failures or {}).values()
+                if isinstance(v, str) and str(v).strip()
+            ]
+        except Exception:
+            return ""
+        out = "\n\n".join(bits)
+        return out[:max_chars] if len(out) > max_chars else out
+
+    def _should_fix_retry(self) -> bool:
+        """True si vale un intento de fix antes de cerrar fallido (EXECUTE).
+
+        Condiciones (todas): verificación en rojo, el turno ESCRIBIÓ (sin
+        writes no hay nada que arreglar), no es solo-infra (eso se exime,
+        no se arregla: ningún código verdea sin DB), hay excerpts
+        accionables, y aún no se usó el intento (uno por turno).
+        """
+        try:
+            if self.current_role != Role.EXECUTE:
+                return False
+            if getattr(self, "_fix_retried", False):
+                return False
+            if not self._turn_verify_is_red():
+                return False
+            if not getattr(self, "_turn_wrote", False):
+                return False
+            if self._only_infra_reds():
+                return False
+            return bool(self._fix_retry_excerpts())
+        except Exception:
+            return False
+
     def _turn_writes_all_failed(self) -> bool:
         """True si el turno intentó escribir pero NINGUNA escritura se aplicó
         y tampoco hay verificación en verde.
@@ -2678,14 +2783,59 @@ class Session:
         self._baseline = {"failing": [str(x) for x in failing]}
         return list(self._baseline["failing"])
 
+    def _seed_pool_baseline(self) -> None:
+        """Siembra el baseline con UNA batería antes de la primera tarea.
+
+        Sin siembra, los rojos preexistentes del repo cuentan como "nuevos"
+        en T01 y frenan el pool en la primera tarea (E2E real: 2 tests de
+        infra sin PG/LocalStack). Solo cuando se desconoce (sin memoria ni
+        disco para este snapshot): si ya hay baseline, no se paga batería.
+        Fail-open: si la siembra falla, el pool arranca igual.
+        """
+        try:
+            if self._ensure_baseline() is not None:
+                return
+            console.print("[dim]🔍 Sembrando baseline de verificación (una batería)…[/dim]")
+            cap: dict = {}
+            run_commit_verification(self.repo_path, capture=cap)
+            seed: list[str] = []
+            try:
+                from tools.verify import extract_failing_tests
+
+                for tail in (cap.get("details") or {}).values():
+                    seed.extend(extract_failing_tests(str(tail or "")))
+            except Exception:
+                pass
+            seen: set[str] = set()
+            seed = [x for x in seed if x not in seen and not seen.add(x)]
+            self._baseline = {"failing": seed}
+            try:
+                from cache import save_test_baseline, snapshot_hash
+
+                save_test_baseline(self.repo_path, failing=seed,
+                                   snapshot=snapshot_hash(self.repo_path))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def _store_baseline(self) -> None:
         """Guarda el SET de fallos del turno como baseline del siguiente
         (memoria + disco). Cuesta cero baterías: cosecha salidas ya corridas
-        por las tools del turno."""
+        por las tools del turno.
+
+        Solo turnos que CORRIERON verificación siembran: cosechar un turno
+        sin verify guardaba [] (= "todo verde") y los rojos heredados del
+        turno siguiente contaban como nuevos (E2E real: pool frenado en T001
+        por 2 tests de infra preexistentes). Rojos observados siempre se
+        guardan (son hechos); el [] verde exige verificación real.
+        """
         try:
+            failing = self._current_failing_tests()
+            if not failing and self._verify_all_passed() is not True:
+                return
             from cache import save_test_baseline, snapshot_hash
 
-            failing = self._current_failing_tests()
             try:
                 snap = snapshot_hash(self.repo_path)
             except Exception:
@@ -2997,14 +3147,7 @@ class Session:
         if verify_state is False:
             # Atribución heredados vs nuevos contra el baseline del turno
             # anterior (cero baterías: cosecha salidas ya corridas).
-            try:
-                _reds_now = self._current_failing_tests()
-                _base_now = self._ensure_baseline()
-            except Exception:
-                _reds_now, _base_now = [], None
-            if _reds_now and _base_now is not None:
-                _her_now, _new_now = _split_reds(_reds_now, _base_now) or ([], [])
-                reds_line = "\n" + _format_reds_attribution(_her_now, _new_now)
+            reds_line = self._reds_attribution_line()
         if own_files:
             head = f"✅ Tarea realizada: {len(own_files)} archivo(s) modificado(s){turn_suffix}"
             detail = "   · " + "\n   · ".join(own_files[:8])
@@ -3111,14 +3254,9 @@ class Session:
                     "done SIN verificación corrida — no dar la tarea por "
                     "hecha hasta verificar.[/dim]"
                 )
-        try:
-            _reds_f = self._current_failing_tests()
-            _base_f = self._ensure_baseline()
-        except Exception:
-            _reds_f, _base_f = [], None
-        if _reds_f and _base_f is not None:
-            _her_f, _new_f = _split_reds(_reds_f, _base_f) or ([], [])
-            msg += "\n[dim]" + _format_reds_attribution(_her_f, _new_f).strip() + "[/dim]"
+        _reds_line_f = self._reds_attribution_line()
+        if _reds_line_f:
+            msg += "\n[dim]" + _reds_line_f.strip() + "[/dim]"
         return msg
 
     def _git_cmd(self, args: list[str], timeout: int = 30) -> tuple[int, str]:
@@ -3594,6 +3732,7 @@ class Session:
         self._turn_saw_pass = False
         self._turn_verify_failed = False
         self._turn_writes_after_pass = False
+        self._fix_retried = False
         # Resultado del turno anterior (lo lee el pool): reset al arrancar.
         self._last_turn_failed = False
         self._last_turn_interrupted = False
@@ -4419,6 +4558,42 @@ class Session:
                         ))
                         messages_for_agent = list(self._messages)
                         continue
+                # Fix retry: el turno ESCRIBIÓ y el verify quedó en rojo con
+                # fallos accionables (no solo-infra). Un intento: se reinyectan
+                # los excerpts y el modelo corrige con las mismas tools. Sin
+                # esto el turno cerraba fallido teniendo los datos del fix en
+                # la mano (E2E real: pool frenado en T001). Guardrails: un
+                # intento por turno (consume attempt), los tests son de solo
+                # lectura en el fix, y si sigue en rojo el cierre falla igual.
+                if new_role == Role.EXECUTE and self._should_fix_retry():
+                    attempt += 1
+                    self._fix_retried = True
+                    self._messages.append(HumanMessage(
+                        "⛔ La verificación quedó en ROJO con estos fallos:\n"
+                        + self._fix_retry_excerpts() +
+                        "\n\nREGLAS DEL FIX (un único intento):\n"
+                        "1. Corregí el código fuente que ESTE turno escribió o "
+                        "rompió hasta dejar la batería en verde, y re-verificá "
+                        "con las tools.\n"
+                        "2. PROHIBIDO modificar, crear o borrar archivos de test "
+                        "(*test*, *spec*) para 'verdear': si un test falla por "
+                        "el test mismo y no por tu código, NO lo toques — "
+                        "informalo y terminá.\n"
+                        "3. Si el fallo es de infra (sin DB/servicios) o ajeno "
+                        "a tu cambio, NO intentes arreglarlo — informalo y "
+                        "terminá."
+                    ))
+                    messages_for_agent = list(self._messages)
+                    self._snapshot_turn_verify()
+                    self._called_tools.clear()
+                    self._verify_results.clear()
+                    self._dedupe.reset()
+                    self._explore_budget.reset()
+                    console.print(
+                        "\n[yellow]🔧 Verify en rojo con fallos accionables — "
+                        "un intento de fix…[/yellow]\n"
+                    )
+                    continue
                 break
             except KeyboardInterrupt:
                 interrupted = True
@@ -4924,13 +5099,21 @@ class Session:
         # FALLÓ, el turno no puede cerrar como éxito aunque haya escrito
         # (E2E T02/T04: verify FALLÓ + text-loop → cierre "ok" y el pool
         # siguió sobre base rota). Con verde o sin correr, no aplica.
+        # Exención: rojos SOLO de infra (sin DB/servicios) no los causó el
+        # código del turno → se informan pero no fallan ni frenan el pool.
         if new_role == Role.EXECUTE and not interrupted and not turn_failed:
-            if self._turn_verify_is_red():
+            if self._turn_verify_is_red() and not self._only_infra_reds():
                 turn_failed = True
                 console.print(
                     "\n[red]⛔ La verificación terminó en rojo y el turno no "
                     "la dejó verde. Se marca fallido para no fingir avance: "
                     "corregí los errores de arriba y re-verificá.[/red]"
+                )
+            elif self._turn_verify_is_red():
+                console.print(
+                    "\n[yellow]⚠️  Rojos solo de infra (sin DB/servicios): no "
+                    "los causó este turno — se informan pero no fallan ni "
+                    "frenan el pool.[/yellow]"
                 )
         # Commit preguntado: tras un turno EXECUTE EXITOSO, si hay cambios
         # sin commitear y el usuario no interrumpió, ofrecer commitear.

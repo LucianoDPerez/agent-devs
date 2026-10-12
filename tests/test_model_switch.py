@@ -64,6 +64,12 @@ class TestProfileBudgets:
 
     def test_switch_rebuilds_budget(self, tmp_path, monkeypatch):
         import llm_config
+        import llm_wrapper
+
+        # Hermético: sin depender del modelo que haya cargado el server
+        # local de esta máquina (cae al alias del config).
+        monkeypatch.setattr(llm_wrapper, "detect_server_model",
+                            lambda *a, **k: None)
 
         cfg = tmp_path / "cfg.json"
         cfg.write_text(json.dumps({"opencode_api_key": "oc_sk_fake"}))
@@ -74,6 +80,23 @@ class TestProfileBudgets:
         ok, _ = s.switch_model(model="muse-spark-1.3")
         assert ok is True
         assert s._analyze_budget.max_calls == 10
+        ok, _ = s.switch_model(provider="local")
+        assert ok is True
+        # El modelo local default es qwen3.6-35b-a3b (grande) y el ctx
+        # default 55800 → tier intermedio, no el ajustado del 4B.
+        assert s._analyze_budget.max_calls == 7
+
+    def test_switch_local_chico_tier_ajustado(self, tmp_path, monkeypatch):
+        import llm_config
+        import llm_wrapper
+
+        monkeypatch.setattr(llm_wrapper, "detect_server_model",
+                            lambda *a, **k: None)
+        cfg = tmp_path / "cfg.json"
+        cfg.write_text(json.dumps({"local_model": "agents-a1-4b"}))
+        monkeypatch.setattr(llm_config, "CONFIG_FILE", cfg)
+        monkeypatch.setattr(llm_config, "LEGACY_CONFIG_FILE", tmp_path / "old.json")
+        s = _session(tmp_path, _local_llm())
         ok, _ = s.switch_model(provider="local")
         assert ok is True
         assert s._analyze_budget.max_calls == 4
