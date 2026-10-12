@@ -2201,6 +2201,10 @@ class Session:
                         label = f"RESULTADO DE TRACE_COMPONENT ({key})"
                     elif key.startswith("[snippet:"):
                         label = f"SOURCE DEL GRAFO ({key})"
+                    elif key.startswith("[cm:"):
+                        label = (f"SALIDA DEL KNOWLEDGE GRAPH ({key}) — es un "
+                                 f"resultado de búsqueda, NO un archivo fuente: "
+                                 f"usalo como pista, no cites líneas de acá")
                     else:
                         label = f"CONTENIDO REAL DE {key}"
                     blocks.append(f"--- {label} ---\n{content[:take]}\n--- FIN ---")

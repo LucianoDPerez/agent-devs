@@ -247,3 +247,67 @@ def test_snippet_crudo_se_cachea_para_el_retry(tmp_path):
     out = wrapped[0].invoke({"qualified_name": "backend.Foo"})
     assert "class Foo" in out
     assert "[snippet:backend.Foo]" in cache
+
+
+def test_cm_genericas_se_cachean_para_el_retry(tmp_path):
+    """E2E real 35B 'deuda técnica': PASS1 con 5 cm__ (architecture, query,
+    search) y NINGUNA llegó al ancla — el retry arrancó ciego y el turno
+    cerró con análisis nulo. Ahora toda cm__* cachea su salida."""
+    from langchain_core.tools import tool as _tool
+
+    from orchestration.tool_dedupe import ExploreBudget, ToolCallDedupe, wrap_tools_with_dedupe
+
+    @_tool
+    def cm__query_graph(query: str, project: str) -> str:
+        """fake"""
+        return "f.gorda | src/a.ts | 18"
+
+    @_tool
+    def cm__search_code(pattern: str, project: str) -> str:
+        """fake"""
+        return "TODO en src/b.ts:10"
+
+    cache: dict = {}
+    budget = ExploreBudget(max_calls=10, max_reads_after_explore=8,
+                           max_tools_before_write=0, write_pressure=False)
+    wrapped = wrap_tools_with_dedupe(
+        [cm__query_graph, cm__search_code], ToolCallDedupe(), budget, cache)
+    wrapped[0].invoke({"query": "MATCH (f) RETURN f LIMIT 20", "project": "p"})
+    wrapped[1].invoke({"pattern": "TODO", "project": "p"})
+    keys = [k for k in cache if k.startswith("[cm:")]
+    assert len(keys) == 2, cache.keys()
+    assert any("cm__query_graph" in k for k in keys)
+    assert any("cm__search_code" in k for k in keys)
+    assert any("f.gorda" in v for v in cache.values())
+    assert any("TODO en src/b.ts" in v for v in cache.values())
+
+
+def test_cm_con_error_no_contamina_el_ancla(tmp_path):
+    """Los errores de cm__ no se cachean (igual que read_file fallido)."""
+    from langchain_core.tools import tool as _tool
+
+    from orchestration.tool_dedupe import ExploreBudget, ToolCallDedupe, wrap_tools_with_dedupe
+
+    @_tool
+    def cm__query_graph(query: str, project: str) -> str:
+        """fake"""
+        return "Error: store corrupt table=projects"
+
+    cache: dict = {}
+    budget = ExploreBudget(max_calls=10, max_reads_after_explore=8,
+                           max_tools_before_write=0, write_pressure=False)
+    wrapped = wrap_tools_with_dedupe(
+        [cm__query_graph], ToolCallDedupe(), budget, cache)
+    wrapped[0].invoke({"query": "MATCH (f) RETURN f", "project": "p"})
+    assert cache == {}
+
+
+def test_anchor_etiqueta_cm_como_pista_no_fuente(tmp_path):
+    """La salida del grafo va al ancla marcada como pista (no citable como
+    código con archivo:línea)."""
+    sess = _session(tmp_path)
+    sess._read_cache = {"[cm:cm__query_graph:abcd1234]": "f.gorda | src/a.ts | 18 " * 100}
+    anchor = sess._retry_analyze_anchor()
+    assert "SALIDA DEL KNOWLEDGE GRAPH" in anchor
+    assert "NO un archivo fuente" in anchor
+    assert "f.gorda" in anchor

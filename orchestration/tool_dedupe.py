@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -1292,6 +1293,25 @@ def _wrap_one(
             qn = kwargs.get("qualified_name") or kwargs.get("query") or "?"
             if isinstance(result, str) and result.strip():
                 read_cache[f"[snippet:{qn}]"] = result
+        elif name.startswith("cm__"):
+            # TODAS las demás tools del knowledge graph (get_architecture,
+            # query_graph, search_code, trace_path, ...): sus ToolMessages se
+            # pierden al cortar por budget igual que trace_component. Un PASS1
+            # puro-cm__ dejaba el retry ciego (E2E real 35B "deuda técnica":
+            # 5 cm__ + ancla vacía + análisis nulo). Clave estable y corta:
+            # hash de los args (las queries cypher son largas). No cachear
+            # errores ni vacíos; recorte a 8k (el ancla recorta por bloque).
+            if isinstance(result, str) and result.strip():
+                head = result.strip()[:80].lower()
+                if head.startswith("error") or "does not exist" in head or "no se pudo" in head:
+                    return
+                try:
+                    digest = hashlib.md5(
+                        json.dumps(kwargs, sort_keys=True, default=str).encode("utf-8")
+                    ).hexdigest()[:8]
+                except Exception:
+                    digest = "args"
+                read_cache[f"[cm:{name}:{digest}]"] = result[:8000]
 
     def _rejected_message(kwargs: dict[str, Any]) -> str:
         """Mensaje que ve el modelo cuando el usuario rechaza un write/edit/delete."""
