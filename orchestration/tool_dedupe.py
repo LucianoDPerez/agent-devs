@@ -68,7 +68,7 @@ READISH_TOOL_NAMES = frozenset(
 ) | MCP_READ_TOOL_NAMES
 
 # Tools de verificación (lint/tests/build) — acción productiva
-VERIFY_TOOL_NAMES = frozenset({"run_lint", "run_tests", "run_build", "run_verify", "run_install"})
+VERIFY_TOOL_NAMES = frozenset({"run_lint", "run_tests", "run_test_file", "run_build", "run_verify", "run_install"})
 
 
 def _canonical_verify_for_script(script: object) -> str | None:

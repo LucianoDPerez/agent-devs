@@ -8,8 +8,10 @@ from unittest.mock import patch
 from tools.verify import (
     _detect_stack,
     _resolve_command,
+    _single_test_command,
     run_build,
     run_lint,
+    run_test_file,
     run_tests,
 )
 
@@ -649,3 +651,94 @@ class TestMissingScriptSkipped:
             out = run_verify.invoke({"path": tmp})
             assert "[FAILED]" not in out.splitlines()[0]
             assert "⏭️ lint" in out and "⏭️ test" in out
+
+
+class TestRunTestFile:
+    """run_test_file: un solo archivo (diagnóstico rápido, E2E pool T02:
+    el AC pedía 1 archivo y el modelo quemó 6 baterías completas)."""
+
+    def test_comando_node_pasa_archivo_al_script(self):
+        import tempfile
+        from pathlib import Path
+
+        from tools.verify import _single_test_command
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "package.json").write_text('{"scripts": {"test": "vitest run"}}')
+            cmd = _single_test_command(root, "node", "tests/unit/x.test.ts")
+            assert cmd[:3] == ["npm", "run", "test"]
+            assert cmd[-1] == "tests/unit/x.test.ts"
+
+    def test_comando_python_pytest(self):
+        import tempfile
+        from pathlib import Path
+
+        from tools.verify import _single_test_command
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd = _single_test_command(Path(tmp), "python", "tests/test_x.py")
+            assert cmd == ["pytest", "-q", "tests/test_x.py"]
+
+    def test_comando_go_es_paquete(self):
+        import tempfile
+        from pathlib import Path
+
+        from tools.verify import _single_test_command
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cmd = _single_test_command(Path(tmp), "go", "pkg/foo/bar_test.go")
+            assert cmd == ["go", "test", "./pkg/foo/"]
+
+    def test_comando_java_por_clase(self):
+        import tempfile
+        from pathlib import Path
+
+        from tools.verify import _single_test_command
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pom.xml").write_text("<project/>")
+            cmd = _single_test_command(root, "java", "src/FooTest.java")
+            assert cmd == ["mvn", "test", "-Dtest=FooTest", "-q"]
+
+    def test_no_archivo_rechaza_directorio(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = run_test_file.invoke({"path": tmp})
+            assert "is not a file" in out
+            assert not out.startswith("[PASSED]")
+
+    def test_no_test_rechaza_archivo_comun(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Path(tmp) / "main.ts"
+            f.write_text("export const x = 1;\n")
+            out = run_test_file.invoke({"path": str(f)})
+            assert "doesn't look like a test file" in out
+
+    def test_ejecuta_un_pytest_verde(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+            f = Path(tmp) / "test_ok.py"
+            f.write_text("def test_ok():\n    assert 1 + 1 == 2\n")
+            out = run_test_file.invoke({"path": str(f)})
+            assert out.startswith("[PASSED]"), out[:300]
+
+    def test_ejecuta_un_pytest_rojo(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+            f = Path(tmp) / "test_bad.py"
+            f.write_text("def test_bad():\n    assert 1 + 1 == 3\n")
+            out = run_test_file.invoke({"path": str(f)})
+            assert out.startswith("[FAILED]"), out[:300]
+            assert "test_bad" in out

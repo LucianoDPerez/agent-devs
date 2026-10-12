@@ -111,6 +111,12 @@ from orchestration.tool_dedupe import (
 from tools import BUDGET_RETRY_TOOLS, GATE_RETRY_TOOLS
 
 
+# Verify diagnóstica (un solo archivo): NO valida la batería completa.
+# Un verde targeted jamás satisface el gate (el cierre exige lint+tests+build
+# o run_verify); solo aporta datos (tails/excerpts) para baseline y fix retry.
+_DIAGNOSTIC_VERIFY_NAMES = frozenset({"run_test_file"})
+
+
 def _is_llama_connection_error(exc: BaseException) -> bool:
     """Detecta errores de conexión a llama-server sin importar el wrapper."""
     seen: set[int] = set()
@@ -2700,7 +2706,7 @@ class Session:
         actual (verify stale no vale para seguir escribiendo).
         """
         try:
-            called = self._called_tools & VERIFY_TOOL_NAMES
+            called = (self._called_tools & VERIFY_TOOL_NAMES) - _DIAGNOSTIC_VERIFY_NAMES
             wrote = bool(self._called_tools & WRITE_TOOL_NAMES)
         except Exception:
             return
@@ -2890,7 +2896,7 @@ class Session:
 
     def _verify_all_skipped(self) -> bool:
         """True si el turno solo corrió verifies N/A (docs/infra sin stack)."""
-        called = self._called_tools & VERIFY_TOOL_NAMES
+        called = (self._called_tools & VERIFY_TOOL_NAMES) - _DIAGNOSTIC_VERIFY_NAMES
         if called:
             known = {k: v for k, v in self._verify_results.items() if k in called}
             if known:
@@ -2910,8 +2916,10 @@ class Session:
         turno (los reintentos limpian el estado del intento). Un PASSED
         acumulado solo vale si no hubo escrituras después (verify stale no
         bendice código nuevo); un FAILED acumulado sí contamina el cierre.
+        Los verdes targeted (run_test_file) no cuentan: diagnosticar un
+        archivo no valida la batería.
         """
-        called = self._called_tools & VERIFY_TOOL_NAMES
+        called = (self._called_tools & VERIFY_TOOL_NAMES) - _DIAGNOSTIC_VERIFY_NAMES
         if called:
             known = {k: v for k, v in self._verify_results.items() if k in called}
             if not known:

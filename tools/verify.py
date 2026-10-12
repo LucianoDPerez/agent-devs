@@ -290,6 +290,48 @@ def _ruff_cmd(root: Path, uv_py: bool) -> list[str]:
     return ["ruff", "check", "."]
 
 
+_TEST_FILE_RES = (
+    re.compile(r"\.(spec|test)\.[tj]sx?$", re.IGNORECASE),
+    re.compile(r"^(test_.*|.*_test)\.py$"),
+    re.compile(r"^.*_test\.go$"),
+    re.compile(r"^.*Test\.java$"),
+)
+
+
+def _looks_like_test_file(name: str) -> bool:
+    return any(rx.search(name or "") for rx in _TEST_FILE_RES)
+
+
+def _single_test_command(root: Path, stack: str, relfile: str) -> list[str] | str:
+    """Comando para correr UN archivo de test (diagnóstico rápido).
+
+    E2E real: el AC pedía `npx vitest run tests/unit/x.test.ts` y el modelo,
+    sin tool para un solo archivo, corrió la batería completa 6 veces
+    (minutos quemados + ruido de integration tests con DB). Esto corre solo
+    el archivo pedido; el gate final SIGUE exigiendo la batería completa.
+    """
+    if stack == "node":
+        base = _node_script(root, "test")
+        if isinstance(base, str):
+            return base  # sin script 'test' (el caller lo marca N/A)
+        return [*base, "--", relfile]
+    if stack == "python":
+        if _python_uses_uv(root):
+            return ["uv", "run", "pytest", "-q", relfile]
+        return ["pytest", "-q", relfile]
+    if stack == "go":
+        # Go testea por paquete: el archivo fija el directorio.
+        pkgdir = str(Path(relfile).parent) or "."
+        return ["go", "test", f"./{pkgdir}/" if pkgdir != "." else "./..."]
+    if stack == "java":
+        classname = Path(relfile).stem
+        tool = _java_build_tool(root)
+        if tool == "gradle":
+            return _gradle_cmd(root, "test", "--tests", classname, "--console=plain")
+        return ["mvn", "test", f"-Dtest={classname}", "-q"]
+    return f"Stack {stack} sin soporte para test individual (pasá directorio)"
+
+
 def _any_dep_missing(root: Path, pkg: dict) -> bool:
     """True si alguna dependency/devDependency declarada NO está en node_modules.
 
@@ -455,8 +497,72 @@ def run_tests(path: str) -> str:
     Run the test suite for the project at path (auto-detects Node/Python/Go).
     Node: npm/pnpm/yarn run test. Python: pytest. Go: go test ./...
     Usage: run_tests(path="/Users/me/repo")
+    To run ONE test file (diagnóstico rápido), use run_test_file instead —
+    es más rápido y no arrastra integration tests con DB.
     """
     return _run_verify(path, "test")
+
+
+@tool
+def run_test_file(path: str) -> str:
+    """Run ONE test file (fast diagnosis of a single AC).
+
+    Node: `<pm> run test -- <file>` (vitest/jest filter). Python:
+    `pytest <file>`. Go: package scope of the file. Java: test class.
+    Usage: run_test_file(path="/Users/me/repo/tests/unit/x.test.ts")
+    Prefer this over run_tests when the task names ONE test file: cheaper,
+    faster, and it doesn't drag DB-backed integration tests into the result.
+    It does NOT replace the full battery for the final gate (the close still
+    requires lint/tests/build on the repo).
+    """
+    p = Path(path or "")
+    if not str(path or "").strip():
+        return "No path provided. Pass a test FILE: run_test_file(path=\"/abs/repo/tests/x.test.ts\")"
+    try:
+        if not p.exists():
+            return f"Path does not exist: {path}"
+        if not p.is_file():
+            return (
+                f"'{path}' is not a file. run_test_file targets ONE test file; "
+                "pass the repo directory to run_tests instead."
+            )
+    except OSError as e:
+        return f"Cannot stat path: {e}"
+    if not _looks_like_test_file(p.name):
+        return (
+            f"'{p.name}' doesn't look like a test file "
+            "(*.test.*/*.spec.* / test_*.py / *_test.go / *Test.java). "
+            "Pass a test file, or the repo directory to run_tests."
+        )
+    root = _find_stack_root(str(p.parent))
+    if root is None:
+        return (
+            f"[SKIPPED] test-file: sin stack verificable sobre {p} "
+            "(docs/infra) — no aplica"
+        )
+    stack = _detect_stack(root)
+    if stack is None:
+        return (
+            f"[SKIPPED] test-file: sin stack verificable sobre {p} "
+            "(docs/infra) — no aplica"
+        )
+    try:
+        relfile = str(p.resolve().relative_to(root.resolve()))
+    except (OSError, ValueError):
+        relfile = p.name
+    command = _single_test_command(root, stack, relfile)
+    if isinstance(command, str):
+        return f"[SKIPPED] test-file: {command}"
+    result = _run_command(str(root), command)
+    if "FAILED" in result and AUTO_INSTALL_ON_VERIFY_FAIL:
+        if stack == "node" and _needs_node_install(root):
+            result += (
+                "\n⚠️  Dependencias faltantes (node_modules incompleto). "
+                "Instalando y reintentando una vez…"
+            )
+            result += "\n\n--- install ---\n" + _run_node_install(root)
+            result += "\n\n--- Re-run ---\n" + _run_command(str(root), command)
+    return _shorten_passed(result)
 
 
 @tool
