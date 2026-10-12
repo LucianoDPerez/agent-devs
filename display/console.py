@@ -78,6 +78,21 @@ _TEXT_LOOP_WINDOWS = (64, 128, 256)
 _TEXT_LOOP_MIN_LEN = 512
 
 
+def _window_has_signal(window: str, min_alnum: int = 24) -> bool:
+    """True si la ventana trae prosa/código real, no solo andamiaje markdown.
+
+    Tablas legítimas con el MISMO esquema repiten header+separador
+    byte-idénticos (`| Campo | ... |\n|---|---|`) en cada tabla — suman
+    ~64 chars y la ventana chica los cuenta como 'repetición', cortando
+    respuestas sanas (falso positivo real: informe con 3 tablas → corte
+    a mitad de la tercera). El andamiaje (`|`, `-`, espacios) no es señal;
+    un loop real (mismo párrafo/fila ×N) trae alfanumérico de sobra y
+    sigue disparando en ventanas mayores.
+    """
+    bare = window.replace("|", "").replace("-", "")
+    return sum(1 for ch in bare if ch.isalnum()) >= min_alnum
+
+
 def _text_loop_detected(text: str) -> bool:
     """True si el final de `text` repite un bloque ya emitido (loop del modelo).
 
@@ -86,9 +101,19 @@ def _text_loop_detected(text: str) -> bool:
     La versión anterior exigía 3 bloques CONSECUTIVOS de 256 chars idénticos
     y no atrapaba párrafos cuya longitud no es múltiplo de 256. Acá se
     detecta por sufijo: si los últimos N chars ya aparecieron ≥2 veces
-    antes, es repetición sin importar la alineación. Tablas/listas
-    legítimas tienen filas distintas y no disparan.
+    antes, es repetición sin importar la alineación. Ventanas sin señal
+    (andamiaje de tablas) se saltean: tablas legítimas con filas distintas
+    no disparan.
     """
+    if len(text) < _TEXT_LOOP_MIN_LEN:
+        return False
+    for w in _TEXT_LOOP_WINDOWS:
+        window = text[-w:]
+        if not _window_has_signal(window):
+            continue
+        if text[:-w].count(window) >= 2:
+            return True
+    return False
     if len(text) < _TEXT_LOOP_MIN_LEN:
         return False
     for w in _TEXT_LOOP_WINDOWS:

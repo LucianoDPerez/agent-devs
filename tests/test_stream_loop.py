@@ -104,6 +104,53 @@ def test_no_detecta_markdown_con_listas():
     assert not _detect_loop(md)
 
 
+def test_no_detecta_tablas_mismo_esquema():
+    """Regresión: informe con 3 tablas del mismo esquema. El header +
+    separador (`| Campo |...|\\n|---|---|`, ~64 chars) es byte-idéntico en
+    cada tabla y la ventana chica lo contaba como repetición, cortando la
+    respuesta a mitad de la tercera tabla (caso real: telemetría NR)."""
+    h = "| Campo | Tipo | Descripción |\n"
+    s = "|-------|------|-------------|\n"
+
+    def tabla(titulo, filas):
+        head = f"\n{titulo}\n" + h + s
+        return head + "".join(f"| `{c}` | {t} | {d} |\n" for c, t, d in filas)
+
+    texto = "El sistema escribe en **dos tablas** de New Relic:\n"
+    texto += tabla("### Campos comunes:", [
+        ("eventType", "string", "Siempre el nombre del evento actual"),
+        ("command", "string", "Nombre del slash command ejecutado"),
+        ("event", "string", "Acción realizada en el flujo"),
+        ("user", "string", "Username obtenido de git config"),
+        ("os", "string", "Sistema operativo donde corre todo"),
+        ("hostname", "string", "Hostname completo del equipo"),
+        ("timestamp", "int64", "Unix timestamp en segundos wall"),
+    ])
+    texto += tabla('#### `event = "start"`:', [
+        ("tokens", "int", "Tokens del template file leído"),
+        ("sessionId", "string", "UUID generado para correlacionar"),
+        ("specId", "string", "Clave compartida por las etapas"),
+        ("branch", "string", "Nombre completo del branch git"),
+        ("mode", "string", "Modo de sesión del agente actual"),
+        ("model", "string", "Slug del modelo en uso ahora"),
+        ("project", "string", "Atribución de proyecto opt-in"),
+        ("conversationId", "string", "Conversation ID de Cursor IDE"),
+        ("generationId", "string", "Generation ID de Cursor IDE"),
+    ])
+    texto += '\n#### `event = "end"`:\n' + h + s
+    assert len(texto) > 512
+    assert not _detect_loop(texto)
+
+
+def test_detecta_fila_de_tabla_repetida():
+    """Un loop real sobre tablas (misma fila exacta ×N) sigue detectándose:
+    la ventana mayor sí tiene señal."""
+    fila = "| `tokens` | int | Tokens del template file leído ahora |\n"
+    texto = "informe:\n" + fila * 12
+    assert len(texto) > 512
+    assert _detect_loop(texto)
+
+
 def test_texto_corto_no_se_evalua():
     """Menos de 512 chars: sin loop (la respuesta corta es legítima)."""
     assert not _detect_loop("hola " * 20)
