@@ -1245,7 +1245,8 @@ class Session:
         # Montos por perfil (nube amplio, local ajustado): ver model_profiles.
         from core.model_profiles import analyze_budget_for
 
-        _ab_calls, _ab_reads = analyze_budget_for(self.llm)
+        _ab_calls, _ab_reads = analyze_budget_for(
+            self.llm, getattr(self, "_ctx_limit", None))
         self._analyze_budget = ExploreBudget(
             max_calls=_ab_calls,
             max_reads_after_explore=_ab_reads,
@@ -3746,12 +3747,12 @@ class Session:
             from core.model_profiles import analyze_budget_for
 
             self._analyze_budget.max_calls, self._analyze_budget.max_reads_after_explore = \
-                analyze_budget_for(self.llm)
+                analyze_budget_for(self.llm, getattr(self, "_ctx_limit", None))
         elif new_role == Role.PLAN:
             from core.model_profiles import plan_budget_for
 
             self._analyze_budget.max_calls, self._analyze_budget.max_reads_after_explore = \
-                plan_budget_for(self.llm)
+                plan_budget_for(self.llm, getattr(self, "_ctx_limit", None))
         self._reset_turn_state()
         # Los overrides de write_file (habilitados tras fallar la cirugía fina
         # de edit_file) son por TURNO: limpiar para que el próximo turno
@@ -5639,9 +5640,10 @@ class Session:
             from core.model_profiles import analyze_budget_for, match_profile
 
             self._model_profile = match_profile(resolved["model"])
-            # El budget sigue al proveedor (nube amplio, local ajustado).
+            # El budget sigue al proveedor (nube amplio, local ajustado) y,
+            # en local grande, al contexto detectado.
             self._analyze_budget.max_calls, self._analyze_budget.max_reads_after_explore = \
-                analyze_budget_for(new_llm)
+                analyze_budget_for(new_llm, getattr(self, "_ctx_limit", None))
         except Exception:
             pass
         # Persistir para futuros arranques (json-first: sin flags alcanza).
