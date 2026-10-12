@@ -24,3 +24,36 @@ def test_detect_sin_server_devuelve_none(monkeypatch):
         raise ConnectionError("no server")
     monkeypatch.setattr(urllib.request, "urlopen", boom)
     assert detect_server_model("http://localhost:9999/v1") is None
+
+
+def test_switch_model_muestra_id_real_del_server(tmp_path, monkeypatch):
+    """E2E: /model local decía el default del config (qwen3.6-35b-a3b) con
+    otro modelo cargado. Debe mostrar el id de /v1/models."""
+    import llm_wrapper
+    from orchestration.session import Session
+
+    monkeypatch.setattr(llm_wrapper, "detect_server_model", lambda *a, **k: "spark2.5-4B")
+    import llm_config
+
+    monkeypatch.setattr(llm_config, "save_config", lambda cfg: "mocked")
+    s = Session(llm=None, repo_path=str(tmp_path))
+    ok, msg = s.switch_model(provider="local")
+    assert ok is True
+    assert "spark2.5-4B" in msg
+    assert "qwen3.6-35b-a3b" not in msg
+    assert s.get_status()["model"] == "spark2.5-4B"
+
+
+def test_switch_model_fallback_al_config_sin_server(tmp_path, monkeypatch):
+    import llm_wrapper
+    from orchestration.session import Session
+
+    monkeypatch.setattr(llm_wrapper, "detect_server_model", lambda *a, **k: None)
+    import llm_config
+
+    monkeypatch.setattr(llm_config, "save_config", lambda cfg: "mocked")
+    s = Session(llm=None, repo_path=str(tmp_path))
+    ok, msg = s.switch_model(provider="local")
+    assert ok is True
+    assert "qwen3.6-35b-a3b" in msg
+    assert s.get_status()["model"] == "qwen3.6-35b-a3b"

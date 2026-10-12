@@ -1120,6 +1120,11 @@ class Session:
         # Profile del modelo cargado (core/model_profiles): se resuelve en
         # start() contra /v1/models; default conservador si no hay match.
         self._model_profile: dict = {}
+        # Id REAL del modelo cargado en llama-server (vía /v1/models): lo
+        # muestra el header y /model en vez del default del config, que miente
+        # cuando el server corre otro modelo (E2E: decía qwen3.6-35b-a3b con
+        # spark2.5-4B cargado). Vacío = sin detectar (nube o server caído).
+        self._server_model_id: str = ""
 
         # Lógica de negocio: reglas concretas (campos requeridos, validaciones)
         # que el 4B ignora cuando solo ve la estructura general. Se inyecta en
@@ -1378,6 +1383,7 @@ class Session:
                     from core.model_profiles import match_profile
                     from llm_wrapper import detect_server_model
                     _mid = detect_server_model(_llm_base) or ""
+                    self._server_model_id = _mid
                     self._model_profile = match_profile(_mid)
                     console.print(
                         f"[dim]🎛️  Profile: {self._model_profile.get('family', '?')} "
@@ -5351,6 +5357,15 @@ class Session:
         """% del ctx_limit consumido por la sesión actual (para /compact, TUI)."""
         return _estimate_tokens(self._messages) / self._ctx_limit * 100
 
+    def _display_model(self) -> str:
+        """Nombre a mostrar (header, /model): el id REAL del server si es
+        local y se detectó, si no el configurado. Nunca vacío si hay llm."""
+        live = (getattr(self, "_server_model_id", "") or "").strip()
+        if live:
+            return live
+        llm = getattr(self, "llm", None)
+        return getattr(llm, "model_name", "") or ""
+
     def get_status(self) -> dict:
         usage = get_usage()
         total = usage["session"]["prompt"] + usage["session"]["completion"]
@@ -5366,8 +5381,10 @@ class Session:
             "confirm_imminent": self.confirm_imminent(),
             "auto_approve": self._auto_approve,
             # LLM REAL de la sesión (no el config): el header de la TUI lo
-            # muestra y /model lo actualiza en caliente.
-            "model": getattr(llm, "model_name", "") or "",
+            # muestra y /model lo actualiza en caliente. Si se detectó el id
+            # del server local, ese manda (el config miente si cambiaste de
+            # modelo en llama-server).
+            "model": self._display_model(),
             "llm_base": getattr(llm, "base_url", "") or "",
             "transport": getattr(llm, "transport", "chat") or "chat",
             "reasoning": getattr(llm, "reasoning_effort", None),
@@ -5491,7 +5508,29 @@ class Session:
             pass
         where = "local (llama.cpp)" if is_local_url(resolved["base_url"]) else resolved["base_url"]
         extra = f" · reasoning {resolved['reasoning']}" if resolved.get("transport") == "responses" else ""
-        return True, f"✅ LLM ahora: {resolved['model']} ({where}{extra}). Próximo turno lo usa."
+        # Nombre REAL del modelo cargado (el config miente si el server corre
+        # otro: sin --alias reporta el path del .gguf, con --alias el alias).
+        # Se re-detecta acá porque el server puede haber cambiado desde start().
+        shown = resolved["model"]
+        if is_local_url(resolved["base_url"]):
+            try:
+                from llm_wrapper import detect_server_model as _detect
+
+                live = _detect(resolved["base_url"]) or ""
+                self._server_model_id = live
+                if live:
+                    shown = live
+            except Exception:
+                pass
+        else:
+            self._server_model_id = ""
+        try:
+            from core.model_profiles import match_profile as _mp
+
+            self._model_profile = _mp(shown)
+        except Exception:
+            pass
+        return True, f"✅ LLM ahora: {shown} ({where}{extra}). Próximo turno lo usa."
 
     def close(self):
         pass
