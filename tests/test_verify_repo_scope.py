@@ -93,3 +93,143 @@ class TestSearchCodeEsGrep:
         desc = search_code.description
         assert "grep" in desc.lower()
         assert "search_code(path=" in desc
+
+
+class TestTaskRepoManda:
+    """Pool contra otro checkout: la verificación con alcance usa el repo de
+    la tarea pinnada, no el de la sesión (E2E venture: sesión en ulab,
+    tarea en ueno-ads)."""
+
+    def test_task_repo_permite_y_sesion_no(self, tmp_path):
+        from orchestration.tool_dedupe import ToolCallDedupe
+
+        sesion = tmp_path / "api-ulab"
+        sesion.mkdir()
+        tarea = tmp_path / "ueno-ads"
+        tarea.mkdir()
+        dd = ToolCallDedupe()
+        dd.task_repo = str(tarea)
+        from orchestration.tool_dedupe import ExploreBudget, wrap_tools_with_dedupe
+
+        (w,) = wrap_tools_with_dedupe(
+            [run_verify], dd, ExploreBudget(), {}, repo_path=str(sesion))
+        assert w.invoke({"path": str(tarea)}).startswith("ran:")
+        out = w.invoke({"path": str(sesion)})
+        assert "FUERA" in out
+        assert str(tarea) in out
+
+    def test_sin_pin_manda_sesion(self, tmp_path):
+        from orchestration.tool_dedupe import ToolCallDedupe
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        dd = ToolCallDedupe()
+        assert dd.task_repo is None
+        from orchestration.tool_dedupe import ExploreBudget, wrap_tools_with_dedupe
+
+        (w,) = wrap_tools_with_dedupe(
+            [run_verify], dd, ExploreBudget(), {}, repo_path=str(repo))
+        assert w.invoke({"path": str(repo)}).startswith("ran:")
+
+
+class TestPinnedTaskRepo:
+    def test_campo_repo(self, tmp_path):
+        import json
+
+        from orchestration.execute_bootstrap import pinned_task_repo
+
+        otro = tmp_path / "producto"
+        otro.mkdir()
+        p = tmp_path / "tasks.json"
+        p.write_text(json.dumps({
+            "repo": str(otro),
+            "tasks": [{"id": "T002", "ac": "x"}],
+        }), encoding="utf-8")
+        assert pinned_task_repo(f"implementar T002 desde {p}",
+                                repo_path=str(tmp_path)) == str(otro)
+
+    def test_git_root_walk(self, tmp_path):
+        import subprocess
+
+        from orchestration.execute_bootstrap import pinned_task_repo
+
+        sub = tmp_path / "proj" / "deep"
+        sub.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q"], cwd=str(tmp_path / "proj"),
+                       check=True)
+        p = sub / "tasks.json"
+        p.write_text('{"tasks": [{"id": "T002", "ac": "x"}]}', encoding="utf-8")
+        assert pinned_task_repo(f"implementar T002 desde {p}",
+                                repo_path=str(tmp_path)) == str(tmp_path / "proj")
+
+    def test_sin_pin_none(self, tmp_path):
+        from orchestration.execute_bootstrap import pinned_task_repo
+
+        assert pinned_task_repo("implementar algo",
+                                repo_path=str(tmp_path)) is None
+
+
+class TestScopePadresYFlips:
+    def test_padre_de_citado_in_scope(self):
+        from orchestration.tool_dedupe import _in_scope
+
+        scope = frozenset({"assets/css/tokens.css"})
+        assert _in_scope("/repo/assets/css", scope) is True
+        assert _in_scope("assets/css", scope) is True
+        assert _in_scope("/repo/assets/css/tokens.css", scope) is True
+        assert _in_scope("/repo/otra/cosa.css", scope) is False
+
+    def test_flip_planeado_no_es_creep(self, tmp_path):
+        """El tasks.json citado (TASK_PATH_ALLOW) no cuenta como violación
+        aunque no esté en scope_files: el flip es el flujo indicado."""
+        from orchestration.tool_dedupe import ToolCallDedupe
+        from tools.filesystem import TASK_PATH_ALLOW
+
+        @_tool
+        def write_file(path: str, content: str) -> str:
+            """fake write"""
+            return "written: " + path
+
+        tasks = tmp_path / "tasks.json"
+        tasks.write_text("{}")
+        scope = frozenset({"assets/css/tokens.css"})
+        dd = ToolCallDedupe()
+        dd.scope_files = scope
+        TASK_PATH_ALLOW.add(str(tasks))
+        try:
+            from orchestration.tool_dedupe import ExploreBudget, wrap_tools_with_dedupe
+
+            (w,) = wrap_tools_with_dedupe(
+                [write_file], dd, ExploreBudget(), {}, repo_path=str(tmp_path))
+            out = w.invoke({"path": str(tasks), "content": "{}"})
+            assert out.startswith("written:")
+            assert dd.scope_violations == {}
+        finally:
+            TASK_PATH_ALLOW.discard(str(tasks))
+
+
+class TestPinPreservaDiseno:
+    def test_design_y_stack_sobreviven(self):
+        import json
+
+        from orchestration.execute_bootstrap import filter_json_task_sections
+
+        raw = json.dumps({
+            "design": {"colors": {"bg": "#0B0E14"}},
+            "stack": {"tech": "HTML5"},
+            "tasks": [
+                {"id": "T002", "ac": "verificar"},
+                {"id": "T003", "ac": "tokens"},
+            ],
+        })
+        out = json.loads(filter_json_task_sections(raw, [3]))
+        assert [e["id"] for e in out["tasks"]] == ["T003"]
+        assert out["design"]["colors"]["bg"] == "#0B0E14"
+        assert out["stack"]["tech"] == "HTML5"
+
+
+class TestRunTestFileEsVitest:
+    def test_descripcion_mapea_vitest(self):
+        from tools.verify import run_test_file
+
+        assert "vitest" in run_test_file.description

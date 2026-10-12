@@ -509,6 +509,9 @@ def run_test_file(path: str) -> str:
 
     Node: `<pm> run test -- <file>` (vitest/jest filter). Python:
     `pytest <file>`. Go: package scope of the file. Java: test class.
+    El criterio `npx vitest run <file>` (con o sin `TZ=...` delante) se
+    cumple con run_test_file(path="<file>"): NO intentes npx por
+    run_npm_script (solo acepta scripts declarados en package.json).
     Usage: run_test_file(path="/Users/me/repo/tests/unit/x.test.ts")
     Prefer this over run_tests when the task names ONE test file: cheaper,
     faster, and it doesn't drag DB-backed integration tests into the result.

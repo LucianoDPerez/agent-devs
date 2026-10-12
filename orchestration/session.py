@@ -4148,9 +4148,22 @@ class Session:
             # (T002). Las escrituras fuera del alcance cuentan en el wrapper
             # y el runaway se frena con excepción (ver SCOPE_MAX_* en config).
             try:
-                from orchestration.execute_bootstrap import pinned_task_scope_files
+                from orchestration.execute_bootstrap import (
+                    pinned_task_repo,
+                    pinned_task_scope_files,
+                )
 
                 _nums = extract_requested_task_numbers(user_input)
+                # Repo de la tarea pinnada (pool contra otro checkout): la
+                # verificación con alcance lo usa en vez del repo de la
+                # sesión. Se setea SIEMPRE (None sin pin) para no arrastrar
+                # el de un turno anterior.
+                try:
+                    self._dedupe.task_repo = pinned_task_repo(
+                        user_input, self.repo_path
+                    )
+                except Exception:
+                    self._dedupe.task_repo = None
                 if _nums:
                     self._scope_nums = _nums
                     self._dedupe.scope_files = frozenset(

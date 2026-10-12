@@ -361,6 +361,10 @@ def filter_json_task_sections(raw: str, task_numbers: list[int]) -> str:
     Sin esto el preload inyecta TODAS las tareas (incluidas T003+ con sus
     paths) y el modelo "avanza" a tareas no pedidas (E2E real: pidió T002,
     leyó T003 con infra/iam.tf e implementó T003 por iniciativa).
+    Las claves top-level (design, stack, rules...) SE PRESERVAN: la tarea
+    pinnada las necesita como contexto (E2E landing T003: sin el design el
+    modelo inventó una paleta light en vez de la dark-first del proyecto).
+    Solo se podan las ENTRADAS no pinnadas de la lista de tareas.
     Fail-open: ante cualquier duda (JSON inválido, formato desconocido, sin
     match) devuelve el contenido completo.
     """
@@ -380,7 +384,9 @@ def filter_json_task_sections(raw: str, task_numbers: list[int]) -> str:
             ):
                 matched = [e for e in val if _task_id_matches(e.get("id"), wanted)]
                 if matched:
-                    return json.dumps({key: matched}, indent=2, ensure_ascii=False)
+                    out = dict(data)
+                    out[key] = matched
+                    return json.dumps(out, indent=2, ensure_ascii=False)
         if _task_id_matches(data.get("id"), wanted):
             return json.dumps(data, indent=2, ensure_ascii=False)
         return raw
@@ -465,6 +471,48 @@ def pinned_task_scope_files(user_input: str, repo_path: str | None) -> set[str]:
             raw = filter_json_task_sections(raw, nums)
         scope |= extract_scope_files(raw)
     return scope
+
+
+def pinned_task_repo(user_input: str, repo_path: str | None) -> str | None:
+    """Repo al que pertenecen las tareas pinnadas (pool contra otro checkout).
+
+    Orden: campo 'repo' del tasks.json citado (si existe en disco) → raíz
+    git que contiene el archivo de tareas (hasta 6 niveles) → None.
+    Fail-open: sin pin, sin archivo o sin .git → None (manda el repo_path
+    de la sesión, como antes). Las lecturas no necesitan esto (cruzan
+    repos); la verificación sí (un rojo fuera del repo de la tarea es
+    ruido que falla turnos en vano).
+    """
+    try:
+        cited = _collect_cited_paths(user_input, repo_path)
+    except Exception:
+        return None
+    if not cited:
+        return None
+    p = cited[0]
+    if p.suffix.lower() == ".json":
+        try:
+            import json
+
+            data = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            data = None
+        if isinstance(data, dict):
+            for key in ("repo", "repository", "root", "repo_path"):
+                cand = data.get(key)
+                if isinstance(cand, str) and cand.strip() and Path(cand.strip()).is_dir():
+                    return str(Path(cand.strip()))
+    cur = p.parent
+    try:
+        for _ in range(6):
+            if (cur / ".git").exists():
+                return str(cur)
+            if cur == cur.parent:
+                break
+            cur = cur.parent
+    except OSError:
+        pass
+    return None
 
 
 # Verbos de verificación en el AC pinneado (constatar, no construir). Espejo

@@ -128,6 +128,17 @@ def _in_scope(target: str, scope: frozenset) -> bool:
         # Vale para paths absolutos (.../repo/backend/x) y relativos.
         if ("/" + sn + "/") in t + "/":
             return True
+        # La tarea cita un ARCHIVO y el target es su directorio padre
+        # (make_dir del padre para poder escribir el citado): crear el padre
+        # es preparación in-scope, no creep (E2E landing T003: make_dir
+        # assets/css para escribir assets/css/tokens.css marcado fuera).
+        # Vale en relativo ("assets/css") y absoluto (".../repo/assets/css").
+        if "/" in sn:
+            _p = sn
+            while "/" in _p:
+                _p = _p.rsplit("/", 1)[0]
+                if t == _p or t.endswith("/" + _p):
+                    return True
         sb = sn.rsplit("/", 1)[-1]
         if sb and sb in candidates:
             return True
@@ -161,6 +172,10 @@ class ToolCallDedupe:
         # retries del turno; reset() NO lo toca, la sesión lo gestiona).
         self.scope_files: frozenset = frozenset()
         self.scope_violations: dict[str, int] = {}
+        # Repo de la tarea pinnada (pool contra otro checkout): lo setea la
+        # sesión por turno EXECUTE (None sin pin). La verificación con alcance
+        # lo usa en vez del repo de la sesión.
+        self.task_repo: str | None = None
         # Rechazos de planificación protegida POR PATH y rechazos no-op POR
         # path: viven EN EL DEDUPE (objeto compartido de la sesión) porque los
         # retries RECONSTRUYEN el agente (y con él el closure del wrapper) —
@@ -1165,24 +1180,37 @@ def _wrap_one(
         (GraphBubbleUp) se re-lanza siempre: es la única forma de frenar el 4B.
         """
         kwargs = _resolve_kwargs(kwargs)
-        # Verify fuera del repo del turno: STOP sin ejecutar (ver
+        # Verify fuera del repo que importa: STOP sin ejecutar (ver
         # _VERIFY_PATH_SCOPED). Un rojo de otro checkout no dice nada del
-        # cambio y falla el turno en vano. El STOP no se loguea como verify
-        # corrida (vuelve antes del logger).
+        # cambio y falla el turno en vano (E2E venture: run_verify sobre
+        # venture-api-ulab cuando la tarea era de venture-ueno-ads).
+        # Repo que importa = el de la tarea pinnada si hay pin a otro
+        # checkout (pool multi-repo), si no el repo de la sesión. El STOP no
+        # se loguea como verify corrida (vuelve antes del logger).
         if name in _VERIFY_PATH_SCOPED and repo_path:
             _vpath = (kwargs or {}).get("path", "")
-            if isinstance(_vpath, str) and _vpath and not _is_within_repo(_vpath, repo_path):
+            _trepo = getattr(dedupe, "task_repo", None)
+            try:
+                import os as _os
+
+                _same = bool(_trepo) and (
+                    _os.path.realpath(_trepo) == _os.path.realpath(repo_path)
+                )
+            except Exception:
+                _same = False
+            _scope_repo = repo_path if (not _trepo or _same) else _trepo
+            if isinstance(_vpath, str) and _vpath and not _is_within_repo(_vpath, _scope_repo):
                 return (
                     "return",
                     (
-                        f"⛔ '{_vpath}' está FUERA del repo de este turno "
-                        f"({repo_path}). Las tools de verificación "
-                        "(lint/tests/build) solo corren DENTRO del repo: un "
-                        "rojo de otro checkout no dice nada de tu cambio y "
-                        "falla el turno en vano. Si quisiste verificar ESTE "
-                        f"repo, pasá path='{repo_path}' (o el subdirectorio "
-                        "con su package.json). No reintentes con otro path "
-                        "externo."
+                        f"⛔ '{_vpath}' está FUERA del repo que importa para "
+                        f"esta tarea ({_scope_repo}). Las tools de "
+                        "verificación (lint/tests/build) solo corren DENTRO "
+                        "de ese repo: un rojo de otro checkout no dice nada "
+                        "de tu cambio y falla el turno en vano. Si quisiste "
+                        f"verificar ESE repo, pasá un path bajo '{_scope_repo}' "
+                        "(o el subdirectorio con su package.json). No "
+                        "reintentes con otro path externo."
                     ),
                 )
         # Fail-fast para archivos de PLANIFICACIÓN protegidos (tasks/plan/PRD):
@@ -1248,6 +1276,22 @@ def _wrap_one(
         if name in ("write_file", "edit_file", "apply_patch", "delete_file", "make_dir", "copy_file"):
             _tp = (kwargs or {}).get("path", "") or (kwargs or {}).get("destination_path", "")
             _scope = getattr(dedupe, "scope_files", None)
+            # Orden explícita del usuario (TASK_PATH_ALLOW: planning citado,
+            # p. ej. el tasks.json del pool para flips TODO→DONE): no es
+            # creep, es el flujo indicado — el guard de planning ya restringe
+            # QUÉ se puede editar ahí. Sin esto cada flip legítimo ensucia el
+            # cierre con "fuera del alcance pinnado".
+            try:
+                from tools.filesystem import TASK_PATH_ALLOW as _allow
+
+                if _tp and _allow:
+                    import os as _os
+
+                    _tpr = _os.path.realpath(str(_tp))
+                    if any(_os.path.realpath(a) == _tpr for a in _allow):
+                        _tp = ""
+            except Exception:
+                pass
             if _tp and _scope and not _in_scope(_tp, _scope):
                 from config import SCOPE_MAX_OUT_OF_SCOPE_WRITES
 
