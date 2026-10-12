@@ -3604,8 +3604,9 @@ class Session:
         if not EXECUTE_ASK_COMMIT or not sys.stdin.isatty() or self._fullscreen:
             if self._fullscreen and EXECUTE_ASK_COMMIT:
                 console.print(
-                    "[dim]ℹ️  Modo --tui: commit manual al terminar el turno "
-                    "(git add + git commit). El prompt interactivo está "
+                    "[dim]ℹ️  Modo --tui: "
+                    "el commit es manual — usá /commit sesion ai (verifica + "
+                    "genera el mensaje) o git a mano. El prompt interactivo está "
                     "deshabilitado.[/dim]"
                 )
             return
