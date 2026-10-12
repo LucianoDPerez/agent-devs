@@ -68,3 +68,25 @@ def test_marcar_sin_path_no_ruta_execute():
     from orchestration.router import classify_intent
 
     assert classify_intent(None, "marcá los errores que veas") != Intent.EXECUTE
+
+
+def test_si_aplica_no_es_orden():
+    """E2E real: '...que arquitectura tiene si aplica...' matcheaba el verbo
+    'aplica' → EXECUTE en un turno de análisis puro. 'Si aplica' es
+    condicional (if applicable), nunca imperativo."""
+    assert classify_intent(
+        None, "cuentame de que va este proyecto, que arquitectura tiene si "
+        "aplica, cuales son sus entry points y listame si tiene endpoints "
+        "expluestos",
+    ) == Intent.ANALYZE
+    assert classify_intent(
+        None, "explicá si aplican descuentos en el total"
+    ) != Intent.EXECUTE
+
+
+def test_aplica_imperativo_sigue_execute():
+    """La orden real ('aplicá' / 'aplica' al inicio) no se neutraliza."""
+    assert classify_intent(None, "aplicá el descuento al total") == Intent.EXECUTE
+    assert classify_intent(
+        None, "si aplica los cambios, commitea"
+    ) == Intent.EXECUTE  # por 'commitea', no por 'aplica'

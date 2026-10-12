@@ -89,6 +89,14 @@ _NEGATED_ACTION_RE = re.compile(
     r"actualiz\w*|renombr\w*|mov\w*|borr\w*|quit\w*|remov\w*)\b"
 )
 
+# Condicional "si aplica/n" (= if applicable, NO es una orden): "qué
+# arquitectura tiene si aplica" matcheaba el verbo 'aplica' → EXECUTE con
+# retry de escritura en un turno de análisis puro. El imperativo real es
+# "aplicá" (voseo) o "aplica" al inicio ("aplica el descuento"); con "si"
+# delante siempre es condicional — se neutraliza como las negaciones.
+# ("si aplica los cambios, commitea" sigue a EXECUTE por 'commitea'.)
+_SI_APLICA_RE = re.compile(r"\bsi\s+aplic\w*\b")
+
 # Stoplist idiomática: "elimina/quita/saca dudas" no es borrar código.
 _IDIOM_NO_EXECUTE_RE = re.compile(
     r"\b(?:elimina|elimina?r|quita|quitar|saca|sacar)\s+(?:dudas|la\s+duda|mis\s+dudas)\b"
@@ -180,6 +188,8 @@ def classify_intent(_llm, user_message: str) -> Intent:
     raw_prefix = prefix
     text = _NEGATED_ACTION_RE.sub(" ", text)
     prefix = _NEGATED_ACTION_RE.sub(" ", prefix)
+    text = _SI_APLICA_RE.sub(" ", text)
+    prefix = _SI_APLICA_RE.sub(" ", prefix)
 
     # CORRECCIÓN POST-REVIEW: verbo de acción + mención de review/correcciones
     # → EXECUTE (aplicar los hallazgos del review). Debe ir ANTES del check de
