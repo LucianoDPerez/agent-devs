@@ -182,3 +182,70 @@ class TestRedsAttributionInfra:
         line = s._reds_attribution_line()
         assert "infra" in line
         assert "Nuevos: 0" in line
+
+
+class TestVerifyRedClose:
+    """El veredicto ante rojo: falla solo si hay rojos NUEVOS reales."""
+
+    def _red_session(self, tmp_path, tails, baseline, failures):
+        s = _session(tmp_path)
+        s._explore_budget._failure_tails = tails
+        s._baseline = baseline
+        s._turn_failures = failures
+        return s
+
+    def test_solo_heredados_cierra_ok(self, tmp_path):
+        s = self._red_session(
+            tmp_path,
+            {("run_tests", "/x"): ["users-table.test.ts"]},
+            {"failing": ["users-table.test.ts"]},
+            {"run_tests": "FAIL users-table.test.ts: assert falló"},
+        )
+        ok, why = s._verify_red_close()
+        assert (ok, why) == (True, "solo-heredados")
+
+    def test_solo_infra_cierra_ok_sin_baseline(self, tmp_path):
+        s = self._red_session(
+            tmp_path,
+            {("run_tests", "/x"): ["users-table.test.ts"]},
+            None,
+            {"run_tests": "ECONNREFUSED 127.0.0.1:5432"},
+        )
+        ok, why = s._verify_red_close()
+        assert (ok, why) == (True, "solo-infra")
+
+    def test_con_nuevos_falla(self, tmp_path):
+        s = self._red_session(
+            tmp_path,
+            {("run_tests", "/x"): ["users-table.test.ts", "nuevo.test.ts"]},
+            {"failing": ["users-table.test.ts"]},
+            {"run_tests": "FAIL nuevo.test.ts: assert falló"},
+        )
+        ok, why = s._verify_red_close()
+        assert (ok, why) == (False, "con-nuevos")
+
+    def test_sin_baseline_falla_seguro(self, tmp_path):
+        s = self._red_session(
+            tmp_path,
+            {("run_tests", "/x"): ["nuevo.test.ts"]},
+            None,
+            {"run_tests": "FAIL nuevo.test.ts: assert falló"},
+        )
+        ok, why = s._verify_red_close()
+        assert (ok, why) == (False, "sin-baseline")
+
+    def test_mixto_infra_mas_real_falla(self, tmp_path):
+        s = self._red_session(
+            tmp_path,
+            {("run_tests", "/x"): ["users-table.test.ts", "nuevo.test.ts"]},
+            {"failing": []},
+            {
+                "run_tests": "FAIL nuevo.test.ts: assert falló",
+                "run_build": "ECONNREFUSED 127.0.0.1:5432",
+            },
+        )
+        # No todo es infra (hay un rojo real) → no exime...
+        assert s._only_infra_reds() is False
+        # ...y como el baseline no lo tiene como heredado → falla.
+        ok, _ = s._verify_red_close()
+        assert ok is False

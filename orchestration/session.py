@@ -2488,6 +2488,30 @@ class Session:
                 bad.append(rel)
         return bad
 
+    def _verify_red_close(self) -> tuple[bool, str]:
+        """(puede_cerrar_ok, motivo) ante verificación en rojo al cerrar.
+
+        Fallar con "Nuevos: 0" es incoherente: si el turno no rompió nada
+        nuevo, cierra ok informando. Falla solo cuando hay rojos nuevos
+        reales o no atribuibles (baseline desconocido / sin nombres
+        extraíbles): en la duda, frena (seguro).
+        """
+        if self._only_infra_reds():
+            return True, "solo-infra"
+        try:
+            reds = self._current_failing_tests()
+            base = self._ensure_baseline()
+        except Exception:
+            return False, "error"
+        if not reds:
+            return False, "sin-nombres"
+        if base is None:
+            return False, "sin-baseline"
+        _, new = _split_reds(reds, base) or ([], [])
+        if not new:
+            return True, "solo-heredados"
+        return False, "con-nuevos"
+
     def _turn_verify_is_red(self) -> bool:
         """True si se corrió verificación en el turno y quedó en rojo.
 
@@ -5103,26 +5127,34 @@ class Session:
                     "edit_file/write_file copiando LITERAL el "
                     "`pegar_contenido` de la tarea.[/red]"
                 )
-        # Verificación en rojo al cerrar: si se corrió lint/tests/build y
-        # FALLÓ, el turno no puede cerrar como éxito aunque haya escrito
-        # (E2E T02/T04: verify FALLÓ + text-loop → cierre "ok" y el pool
-        # siguió sobre base rota). Con verde o sin correr, no aplica.
-        # Exención: rojos SOLO de infra (sin DB/servicios) no los causó el
-        # código del turno → se informan pero no fallan ni frenan el pool.
+        # Verificación en rojo al cerrar: falla solo si el turno rompió algo
+        # NUEVO (E2E T02/T04: verify FALLÓ + text-loop → cierre "ok" y el pool
+        # siguió sobre base rota). Sin rojos nuevos (todo heredado o de infra)
+        # cierra ok informando: fallar con "Nuevos: 0" es incoherente y frena
+        # pools en repos con deuda preexistente.
         if new_role == Role.EXECUTE and not interrupted and not turn_failed:
-            if self._turn_verify_is_red() and not self._only_infra_reds():
-                turn_failed = True
-                console.print(
-                    "\n[red]⛔ La verificación terminó en rojo y el turno no "
-                    "la dejó verde. Se marca fallido para no fingir avance: "
-                    "corregí los errores de arriba y re-verificá.[/red]"
-                )
-            elif self._turn_verify_is_red():
-                console.print(
-                    "\n[yellow]⚠️  Rojos solo de infra (sin DB/servicios): no "
-                    "los causó este turno — se informan pero no fallan ni "
-                    "frenan el pool.[/yellow]"
-                )
+            if self._turn_verify_is_red():
+                _pass_ok, _why = self._verify_red_close()
+                if _pass_ok:
+                    if _why == "solo-infra":
+                        console.print(
+                            "\n[yellow]⚠️  Rojos solo de infra (sin DB/servicios): no "
+                            "los causó este turno — se informan pero no fallan ni "
+                            "frenan el pool.[/yellow]"
+                        )
+                    else:
+                        console.print(
+                            "\n[yellow]⚠️  Rojos heredados (ya fallaban antes de este "
+                            "turno): tu cambio no rompió nada nuevo — el cierre "
+                            "no falla.[/yellow]"
+                        )
+                else:
+                    turn_failed = True
+                    console.print(
+                        "\n[red]⛔ La verificación terminó en rojo y el turno no "
+                        "la dejó verde. Se marca fallido para no fingir avance: "
+                        "corregí los errores de arriba y re-verificá.[/red]"
+                    )
         # Commit preguntado: tras un turno EXECUTE EXITOSO, si hay cambios
         # sin commitear y el usuario no interrumpió, ofrecer commitear.
         # Turnos FALLIDOS (loop/recursion/error) pueden dejar el árbol roto
