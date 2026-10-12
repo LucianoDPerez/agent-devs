@@ -411,7 +411,8 @@ class TestRepoHints:
         )
         assert out.startswith("PLAN: leé los archivos de la tarea con read_file")
         assert "write_file o edit_file" in out
-        assert "sin list_files" in out
+        assert "list_files" in out
+        assert "VERIFICACIÓN no modifica" in out
         assert "CONTEXTO DE REPO PRECARGADO" in out
 
 
@@ -561,6 +562,52 @@ class TestJsonTaskPinning:
             "infra/sqs.tf", "schema.prisma",
         }
         assert extract_scope_files("sin paths acá") == set()
+
+    def test_verify_only_detecta_ac_con_prohibicion(self, tmp_path):
+        """E2E landing T002: AC con VERIFICAR + 'no modificar ni renombrar' →
+        verify-only (exime require_write, habilita cierre documental)."""
+        import json
+
+        from orchestration.execute_bootstrap import pinned_task_is_verify_only
+
+        p = tmp_path / "tasks.json"
+        p.write_text(json.dumps({"tasks": [
+            {"id": "T002", "title": "Verificar imagenes en assets/img/",
+             "files": ["assets/img/"],
+             "ac": "VERIFICAR (no copiar: un humano ya copió los archivos). "
+                   "Con la tool list_files sobre assets/img/ confirmar que existen. "
+                   "No modificar ni renombrar nada.",
+             "verify": "list_files sobre assets/img/",
+             "status": "TODO"},
+            {"id": "T003", "title": "Design tokens",
+             "files": ["assets/css/tokens.css"],
+             "ac": "En :root define los colores y espacios.",
+             "verify": "read_file assets/css/tokens.css",
+             "status": "TODO"},
+        ]}), encoding="utf-8")
+        assert pinned_task_is_verify_only(f"implementar T002 desde {p}",
+                                          repo_path=str(tmp_path)) is True
+        # Implementación aunque tenga verbo de verificación suelto.
+        assert pinned_task_is_verify_only(f"implementar T003 desde {p}",
+                                          repo_path=str(tmp_path)) is False
+        # Mixto pinnado: una de implementación contamina → sin exención.
+        assert pinned_task_is_verify_only(f"implementar T002-T003 desde {p}",
+                                          repo_path=str(tmp_path)) is False
+
+    def test_verify_only_fail_open(self, tmp_path):
+        from orchestration.execute_bootstrap import pinned_task_is_verify_only
+
+        assert pinned_task_is_verify_only("implementar algo",
+                                          repo_path=str(tmp_path)) is False
+        assert pinned_task_is_verify_only("", repo_path=str(tmp_path)) is False
+        missing = tmp_path / "no-existe.json"
+        assert pinned_task_is_verify_only(f"implementar T002 desde {missing}",
+                                          repo_path=str(tmp_path)) is False
+        md = tmp_path / "tasks.md"
+        md.write_text("## Tarea 2\nVERIFICAR algo. No modificar nada.\n",
+                      encoding="utf-8")
+        assert pinned_task_is_verify_only(f"implementar Tarea 2 de {md}",
+                                          repo_path=str(tmp_path)) is False
 
 
 class TestScopeBreaker:

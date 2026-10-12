@@ -1296,3 +1296,129 @@ def test_own_files_previo_intacto_sigue_previo(tmp_path):
     s._turn_start_diffs = s._snapshot_path_states(pre)
     own = s._turn_own_files(s._changed_files(), pre)
     assert own == []
+
+
+def _tasks_json_verify_only(tmp_path):
+    import json
+
+    p = tmp_path / "tasks.json"
+    p.write_text(json.dumps({"tasks": [
+        {"id": "T002", "title": "Verificar imagenes en assets/img/",
+         "files": ["assets/img/"],
+         "ac": "VERIFICAR (no copiar). Con list_files confirmar que existen. "
+               "No modificar ni renombrar nada.",
+         "verify": "list_files sobre assets/img/",
+         "status": "TODO"},
+        {"id": "T003", "title": "Design tokens",
+         "files": ["assets/css/tokens.css"],
+         "ac": "En :root define los colores.",
+         "verify": "read_file assets/css/tokens.css",
+         "status": "TODO"},
+    ]}), encoding="utf-8")
+    return p
+
+
+def test_documentary_close_ok_con_list_files_y_sin_escrituras(tmp_path):
+    """E2E landing T002: list_files corrido + árbol limpio + sin writes →
+    cierre documental ok (no 'sin verificación')."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    p = _tasks_json_verify_only(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    # Snapshot como lo toma run_turn: el tasks.json untracked ya estaba.
+    s._turn_start_dirty = frozenset(s._filter_porcelain(s._porcelain_lines()))
+    s._called_tools = {"list_files", "read_file"}
+    s._verify_results = {}
+    ok, msg = s._documentary_verify_close(f"implementar T002 desde {p}")
+    assert ok is True
+    assert "documental" in msg.lower()
+
+
+def test_documentary_close_falla_sin_tools(tmp_path):
+    """Tarea verify-only pero el turno no corrió nada (ni doc ni batería) →
+    False: cerrar ok sería fingir."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    p = _tasks_json_verify_only(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    # Snapshot como lo toma run_turn: el tasks.json untracked ya estaba.
+    s._turn_start_dirty = frozenset(s._filter_porcelain(s._porcelain_lines()))
+    s._called_tools = set()
+    s._verify_results = {}
+    ok, _msg = s._documentary_verify_close(f"implementar T002 desde {p}")
+    assert ok is False
+
+
+def test_documentary_close_no_aplica_a_implementacion(tmp_path):
+    """T003 es de implementación → None (flujo normal, sin exenciones)."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    p = _tasks_json_verify_only(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    # Snapshot como lo toma run_turn: el tasks.json untracked ya estaba.
+    s._turn_start_dirty = frozenset(s._filter_porcelain(s._porcelain_lines()))
+    s._called_tools = {"list_files"}
+    s._verify_results = {}
+    ok, _msg = s._documentary_verify_close(f"implementar T003 desde {p}")
+    assert ok is None
+
+
+def test_documentary_close_no_aplica_si_hubo_escrituras(tmp_path):
+    """Con writes en el turno manda el flujo normal (verificación real)."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    p = _tasks_json_verify_only(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    # Snapshot como lo toma run_turn: el tasks.json untracked ya estaba.
+    s._turn_start_dirty = frozenset(s._filter_porcelain(s._porcelain_lines()))
+    s._called_tools = {"list_files", "edit_file"}
+    s._verify_results = {}
+    ok, _msg = s._documentary_verify_close(f"implementar T002 desde {p}")
+    assert ok is None
+
+
+def test_needs_verify_gate_saltea_doc_sin_escrituras(tmp_path):
+    """E2E landing T002: verify-only + 0 writes → sin gate (nada que
+    compilar; el gate mandaba a un intento ciego que leía PNGs)."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    p = _tasks_json_verify_only(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    s._turn_start_dirty = frozenset(s._filter_porcelain(s._porcelain_lines()))
+    s._called_tools = {"list_files", "read_file"}
+    s._verify_results = {}
+    assert s._needs_verify_gate(f"implementar T002 desde {p}") is False
+
+
+def test_needs_verify_gate_con_escrituras(tmp_path):
+    """Con writes (actuales o acumuladas) el gate sigue aplicando."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    p = _tasks_json_verify_only(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    s._turn_start_dirty = frozenset(s._filter_porcelain(s._porcelain_lines()))
+    s._verify_results = {}
+    s._called_tools = {"list_files", "edit_file"}
+    assert s._needs_verify_gate(f"implementar T002 desde {p}") is True
+    s._called_tools = {"list_files"}
+    s._turn_wrote = True
+    assert s._needs_verify_gate(f"implementar T002 desde {p}") is True
+
+
+def test_needs_verify_gate_tarea_normal(tmp_path):
+    """Tarea de implementación → gate normal aunque no haya writes."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    p = _tasks_json_verify_only(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    s._turn_start_dirty = frozenset(s._filter_porcelain(s._porcelain_lines()))
+    s._called_tools = {"read_file"}
+    s._verify_results = {}
+    assert s._needs_verify_gate(f"implementar T003 desde {p}") is True

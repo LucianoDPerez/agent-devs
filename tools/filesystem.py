@@ -28,6 +28,20 @@ _SYNTAX_CHECKERS = {
 # y comentarios se respetan para evitar falsos positivos.
 _INTEGRITY_EXTS = {".sh", ".py", ".go", ".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte", ".md"}
 
+# Extensiones binarias: leerlas como texto inunda el contexto con basura y
+# puede reventar el n_ctx del server (E2E landing T002: el modelo leyó
+# tui.png → 50KB de garbage → 400 context-exceeded y turno fallido).
+# read_file las RECHAZA con mensaje (existencia: list_files; copia: copy_file).
+_BINARY_EXTS = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".tif", ".tiff",
+    ".pdf", ".zip", ".gz", ".tgz", ".tar", ".rar", ".7z",
+    ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    ".mp3", ".mp4", ".mov", ".avi", ".mkv", ".wav", ".ogg",
+    ".exe", ".dll", ".so", ".dylib", ".bin", ".dat",
+    ".db", ".sqlite", ".sqlite3", ".parquet",
+    ".pyc", ".pyo", ".class", ".o", ".a",
+})
+
 # Paths autorizados por el ORQUESTADOR para sobrescribir con write_file pese al
 # guard anti-destrucción. Se habilita SOLO tras N rechazos del guard quirúrgico
 # de edit_file sobre el mismo archivo (escalamiento de estrategia, ver
@@ -293,8 +307,9 @@ def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> st
     """
     Read a text file. Optionally specify line range (start_line, end_line).
     Files exceeding MAX_FILE_READ_BYTES are truncated and a notice is shown.
-    If the file does not exist (or the path is a directory), returns a message —
-    accept it and continue; do not retry the same path or hunt for name variants.
+    If the file does not exist (or the path is a directory or a binary),
+    returns a message — accept it and continue; do not retry the same path
+    or hunt for name variants.
     Usage: read_file(path="/path/to/repo/README.md")
     """
     p = Path(path)
@@ -332,6 +347,31 @@ def read_file(path: str, start_line: int = 1, end_line: int | None = None) -> st
     if p.is_dir():
         return (
             f"'{path}' is a directory, not a file. Use list_files to browse it. "
+            "Do not call read_file on this path again."
+        )
+    # Binarios (imágenes, PDFs, fuentes, archivos): leerlos como texto mete
+    # decenas de KB de basura al contexto y puede exceder el n_ctx del server
+    # (E2E real: tui.png leído como texto → 400 context-exceeded). Se rechaza
+    # ANTES de leer: existencia = list_files, copia = copy_file. No se marca
+    # como leído (editar un binario como texto no tiene sentido).
+    try:
+        if p.suffix.lower() in _BINARY_EXTS:
+            _is_binary = True
+        else:
+            with open(p, "rb") as _fh:
+                _is_binary = b"\x00" in _fh.read(8192)
+    except OSError:
+        _is_binary = False
+    if _is_binary:
+        try:
+            _size = p.stat().st_size
+        except OSError:
+            _size = -1
+        return (
+            f"'{path}' is a BINARY file ({p.suffix or 'unknown type'}, "
+            f"{_size:,} bytes) — do NOT read binaries as text (it floods "
+            "context with garbage). To confirm it exists use list_files on "
+            "its directory; to place it elsewhere use copy_file. "
             "Do not call read_file on this path again."
         )
 

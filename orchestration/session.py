@@ -91,6 +91,7 @@ from orchestration.execute_bootstrap import (
     detect_bulk_file_count,
     extract_requested_task_numbers,
     inject_repo_hints,
+    pinned_task_is_verify_only,
     preload_cited_files,
     preload_for_analyze,
     preload_for_review,
@@ -115,6 +116,11 @@ from tools import BUDGET_RETRY_TOOLS, GATE_RETRY_TOOLS
 # Un verde targeted jamás satisface el gate (el cierre exige lint+tests+build
 # o run_verify); solo aporta datos (tails/excerpts) para baseline y fix retry.
 _DIAGNOSTIC_VERIFY_NAMES = frozenset({"run_test_file"})
+
+# Tools documentales: constatan el estado del disco sin ejecutar nada. Para
+# tareas solo-de-verificación (AC con list_files/read_file) SON la batería
+# que aplica — lint/tests/build no validan un assets/img/.
+_DOCUMENTARY_TOOL_NAMES = frozenset({"list_files", "read_file"})
 
 
 def _is_llama_connection_error(exc: BaseException) -> bool:
@@ -3238,6 +3244,77 @@ class Session:
             return False, "JSON inválido en " + "; ".join(bad[:3])
         return True, f"JSON válido ({n} archivo(s))"
 
+    def _documentary_verify_close(self, user_input: str) -> tuple[bool | None, str]:
+        """Cierre documental para tareas pinnadas solo-de-verificación.
+
+        (True, msg) si el turno verificó sin escribir: corrió list_files/
+        read_file, no escribió nada propio y el árbol no tiene cambios
+        propios. (False, msg) si la tarea pedía esa verificación y el turno
+        no corrió ni tools documentales ni batería (cerrar ok sería fingir).
+        (None, "") si no aplica (no es tarea verify-only, hubo escrituras o
+        la batería ya corrió en verde).
+
+        E2E landing T002: el AC pide list_files y prohíbe modificar; con
+        require_write eximido el turno cierra en texto y este es el único
+        respaldo entre "verificó" y "no hizo nada".
+        """
+        try:
+            if not pinned_task_is_verify_only(user_input, self.repo_path):
+                return None, ""
+            if self._verify_all_passed() is True:
+                return None, ""
+            if bool(self._called_tools & WRITE_TOOL_NAMES):
+                return None, ""
+            try:
+                _snap = getattr(self, "_turn_start_dirty", frozenset())
+                own = (
+                    []
+                    if _snap is None
+                    else self._turn_own_files(
+                        self._changed_files(), frozenset(_snap or ())
+                    )
+                )
+            except Exception:
+                own = []
+            if own:
+                return None, ""
+            if self._called_tools & _DOCUMENTARY_TOOL_NAMES:
+                return True, (
+                    "Verificación documental (list_files/read_file) — tarea "
+                    "de verificación, sin cambios en disco"
+                )
+            return False, (
+                "La tarea pedía verificar con list_files/read_file y el turno "
+                "no corrió esa verificación (ni batería): no se puede dar por "
+                "hecha"
+            )
+        except Exception:
+            return None, ""
+
+    def _needs_verify_gate(self, user_input: str) -> bool:
+        """False si no hay nada que compilar: tarea pinnada solo-de-
+        verificación sin escrituras en ningún intento del turno.
+
+        La compuerta inyecta lint/tests/build con un pool de retry pensado
+        para corregir compilación: en un turno documental que ya verificó
+        perfecto, el gate lo manda a un intento sin herramientas documentales
+        que termina leyendo binarios como texto y reventando el contexto
+        (E2E landing T002: intento 1 con list_files ✅ → gate → intento 2
+        leyó tui.png → 400 context-exceeded). El cierre documental ya cubre
+        el veredicto de esos turnos. Con escrituras (del intento actual o
+        acumuladas del turno) la compuerta sigue aplicando siempre.
+        """
+        try:
+            if not pinned_task_is_verify_only(user_input, self.repo_path):
+                return True
+            if bool(self._called_tools & WRITE_TOOL_NAMES):
+                return True
+            if bool(self._turn_wrote):
+                return True
+            return False
+        except Exception:
+            return True
+
     def _deterministic_close(self) -> str:
         """Resumen de cierre determinístico del SISTEMA (no del modelo).
 
@@ -4436,6 +4513,13 @@ class Session:
                 # con no-write retry empuja al modelo a inventar fixes
                 # destructivos (E2E real: 'main.go truncado' inexistente).
                 and not _is_verification_only(user_input)
+                # Tarea pinnada solo-de-verificación (el prompt del pool
+                # siempre dice "implementar", así que _is_verification_only
+                # no la detecta: se mira el AC pinneado). Exigir escritura
+                # a una tarea que prohíbe modificar es una trampa (E2E
+                # landing T002: list_files + "no modificar nada" → loop
+                # no-write hasta fallar el turno).
+                and not pinned_task_is_verify_only(user_input, self.repo_path)
             )
             task = loop.create_task(
                 stream_agent_turn(
@@ -4584,10 +4668,13 @@ class Session:
                 # run_lint / run_tests / run_build, inyectamos un gate que lo
                 # obliga a verificar. El 4B/9B tiende a saltarse la verificación
                 # y responder LISTO sin validar que el código compila.
+                # EXCEPCIÓN: tarea pinnada solo-de-verificación sin escrituras
+                # (nada que compilar) — ver _needs_verify_gate.
                 if (
                     new_role == Role.EXECUTE
                     and gate_retries < POST_WRITE_GATE_MAX_RETRIES
                     and not self._verify_tools_called(messages_for_agent)
+                    and self._needs_verify_gate(user_input)
                 ):
                     gate_retries += 1
                     self._inject_verify_gate()
@@ -5348,6 +5435,18 @@ class Session:
                         console.print(
                             f"\n[red]⛔ {_msg_c}. Corregilo y re-verificá.[/red]"
                         )
+        # Verificación DOCUMENTAL: tarea pinnada solo-de-verificación (el AC
+        # pide list_files/read_file y prohíbe modificar). Sin batería en
+        # verde y sin escrituras, las tools documentales corridas SON la
+        # verificación que aplica (E2E landing T002). Sin ellas, cerrar ok
+        # sería fingir avance.
+        if new_role == Role.EXECUTE and not interrupted and not turn_failed:
+            _doc_ok, _doc_msg = self._documentary_verify_close(user_input)
+            if _doc_ok is True:
+                console.print(f"\n[dim]✅ {_doc_msg}.[/dim]")
+            elif _doc_ok is False:
+                turn_failed = True
+                console.print(f"\n[red]⛔ {_doc_msg}.[/red]")
         # Commit preguntado: tras un turno EXECUTE EXITOSO, si hay cambios
         # sin commitear y el usuario no interrumpió, ofrecer commitear.
         # Turnos FALLIDOS (loop/recursion/error) pueden dejar el árbol roto

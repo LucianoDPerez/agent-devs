@@ -467,6 +467,90 @@ def pinned_task_scope_files(user_input: str, repo_path: str | None) -> set[str]:
     return scope
 
 
+# Verbos de verificación en el AC pinneado (constatar, no construir). Espejo
+# de _VERIFY_ONLY_RE en session.py (ahí se evalúa el texto del usuario, acá
+# el AC de la tarea; bootstrap no puede importar session: circular).
+_VERIFY_TASK_RE = re.compile(
+    r"\b(verific|confirm|comprob|cheque|asegur|revis|valid)\w*",
+    re.IGNORECASE,
+)
+
+# Prohibiciones explícitas de escritura en el AC. La tarea lo dice ella
+# ("No modificar ni renombrar nada"): sin esta señal no hay exención aunque
+# haya verbo de verificación (un "verificá y arreglá" sí debe escribir).
+_NOWRITE_TASK_SIGNALS = frozenset({
+    "no copiar", "no modificar", "no renombrar", "no tocar", "no crear",
+    "no editar", "no agregar", "no escribir", "no cambies", "no modifiques",
+    "sin modificar", "solo verificar", "sólo verificar",
+    "do not modify", "do not rename", "do not create", "do not write",
+    "read-only", "readonly", "no changes",
+})
+
+
+def pinned_task_is_verify_only(user_input: str, repo_path: str | None) -> bool:
+    """True si TODAS las tareas pinnadas son solo-de-verificación.
+
+    Tarea verify-only (convención tasks.json): su AC combina un verbo de
+    verificación (VERIFICAR/CONFIRMAR/...) con una prohibición explícita de
+    escritura ("no copiar", "no modificar ni renombrar", ...) — p. ej. T002
+    del landing. Solo .json (los .md no separan AC/verify en campos y el
+    heurístico daría falsos positivos).
+
+    Se usa para eximir require_write y para el cierre documental: exigir
+    escritura a una tarea que prohíbe modificar empuja al modelo a inventar
+    cambios destructivos o a fallar en loop no-write. Fail-open: sin pin,
+    sin json, formato desconocido o alguna tarea de implementación → False.
+    """
+    nums = extract_requested_task_numbers(user_input)
+    if not nums or not repo_path:
+        return False
+    wanted = set(nums)
+    checked = 0
+    try:
+        import json
+
+        for p in _collect_cited_paths(user_input, repo_path):
+            if p.suffix.lower() != ".json":
+                continue
+            try:
+                data = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+            except (OSError, ValueError):
+                continue
+            entries: list[dict] = []
+            if isinstance(data, dict):
+                for val in data.values():
+                    if (
+                        isinstance(val, list)
+                        and val
+                        and all(isinstance(e, dict) for e in val)
+                    ):
+                        entries = val
+                        break
+                else:
+                    if data.get("id"):
+                        entries = [data]
+            elif isinstance(data, list):
+                entries = [e for e in data if isinstance(e, dict)]
+            for entry in entries:
+                if not _task_id_matches(entry.get("id"), wanted):
+                    continue
+                checked += 1
+                text = " ".join(
+                    str(entry.get(k) or "")
+                    for k in (
+                        "title", "titulo", "ac", "acceptance",
+                        "verify", "criterios", "rubrica",
+                    )
+                ).lower()
+                if not _VERIFY_TASK_RE.search(text):
+                    return False
+                if not any(sig in text for sig in _NOWRITE_TASK_SIGNALS):
+                    return False
+    except Exception:
+        return False
+    return checked > 0
+
+
 def _json_entry_checklist_line(entry: dict) -> str:
     """Una línea de checklist para una entrada de tasks.json: id + título +
     archivo + verify + dependencias + estado. Compacta a propósito (~100-200
@@ -1617,10 +1701,16 @@ def preload_cited_files(user_input: str, repo_path: str | None = None) -> str:
         if hints:
             out = _insert_before_marker(out, marker, hints)
         # Banner al INICIO: leé los archivos de la tarea (para el read_cache) y
-        # luego escribí. Sin list_files — los paths de la tarea bastan.
+        # luego escribí — SALVO que la tarea prohíba modificar (verificación:
+        # ahí vale listar/verificar sin escribir). list_files existe y se usa
+        # cuando la tarea pide verificar un directorio (no read_file sobre
+        # directorios: eso devuelve error, no contenido).
         banner = (
-            "PLAN: leé los archivos de la tarea con read_file (sin list_files), "
-            "después ESCRIBÍ con write_file o edit_file. El layout ya está abajo.\n\n"
+            "PLAN: leé los archivos de la tarea con read_file (si la tarea pide "
+            "verificar un directorio, listalo con list_files). ESCRIBÍ con "
+            "write_file o edit_file SOLO si la tarea lo permite: una tarea de "
+            "VERIFICACIÓN no modifica ni renombra nada, cierra con el veredicto "
+            "y la evidencia. El layout ya está abajo.\n\n"
         )
         out = banner + out
     return out

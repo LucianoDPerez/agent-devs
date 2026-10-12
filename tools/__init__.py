@@ -50,8 +50,12 @@ PLANNER_TOOLS = [list_files, read_file, search_code, inspect_routes, inspect_mod
 # EXECUTE: SOLO las esenciales. 35 tools (21 locales + 14 MCP) diluía la
 # atención del modelo 4B — "olvidaba" que tenía edit_file y se escondía en
 # read_file infinitos. 12 tools + trace_component (compuesta, agrega agent_builder).
+# list_files SÍ está: las tareas documentales/de verificación (p. ej. T002
+# landing: "list_files sobre assets/img/") lo exigen en su AC y sin él el
+# modelo improvisa con read_file sobre directorios hasta agotar el turno.
+# Es una sola call acotada (MAX_LIST_RESULTS), no un loop de exploración.
 EXECUTOR_TOOLS = [
-    read_file, write_file, edit_file, apply_patch, delete_file, make_dir, copy_file,
+    list_files, read_file, write_file, edit_file, apply_patch, delete_file, make_dir, copy_file,
     search_code, inspect_routes,
     run_install, install_package, run_lint, run_tests, run_test_file, run_build, run_verify, run_npm_script,
     # git de LECTURA: 'hacer commit de los modificados' exige VER qué cambió
@@ -88,7 +92,9 @@ WRITE_RETRY_TOOLS = [
 # Retry de EXECUTE tras agotar el presupuesto de exploración: escritura con
 # lectura ACOTADA. read_file SÍ está (limitado por limit_reads_now +
 # max_reads_after_explore): sin lecturas el 35B alucina o destruye (E2E real:
-# escribía tmp_read.sh/tmp_read.py para intentar leer el archivo). SIN
+# escribía tmp_read.sh/tmp_read.py para intentar leer el archivo). list_files
+# también: las tareas documentales (verificar un directorio) lo necesitan en
+# el retry igual que en el intento 1 (E2E landing T002). SIN
 # delete_file: borrar + recrear bypassa el guard anti-sobrescritura (E2E real:
 # el 35B borró __init__.py de 1851 líneas y escribió un stub de 40). SIN verify
 # tools (el modelo las usaba como "acción gratis" para esquivar la write
@@ -102,7 +108,7 @@ WRITE_RETRY_TOOLS = [
 # rama). Git de lectura + stage/commit/push: el retry puede COMPLETAR un
 # commit a mitad (tarea de git interrumpida), no solo editar código.
 BUDGET_RETRY_TOOLS = [
-    read_file, edit_file, apply_patch, write_file, make_dir,
+    list_files, read_file, edit_file, apply_patch, write_file, make_dir,
     current_branch, changed_files, git_status, git_log,
     stage_files, create_commit, push,
 ]
@@ -110,11 +116,13 @@ BUDGET_RETRY_TOOLS = [
 # Retry de la compuerta post-escritura (error de compilación): corregir un
 # error EXIGE ver el archivo real — sin read_file el 4B alucina old_str y
 # termina reescribiendo el archivo entero de memoria (destructivo, ver
-# PacientesPage.tsx). SIN herramientas de búsqueda (list_files/search_code:
-# el error ya viene inyectado, no hay que explorar) y SIN git-write (el fix
-# no debe volver a commiteear).
+# PacientesPage.tsx). SIN herramientas de búsqueda (search_code/inspect: el
+# error ya viene inyectado, no hay que explorar) y SIN git-write (el fix
+# no debe volver a commiteear). list_files SÍ está (solo existencia, no
+# exploración): un gate sobre un turno documental necesita listar para
+# verificar sin leer binarios como texto (E2E landing T002).
 GATE_RETRY_TOOLS = [
-    read_file, edit_file, apply_patch, write_file, delete_file, make_dir,
+    list_files, read_file, edit_file, apply_patch, write_file, delete_file, make_dir,
     *_READONLY_GIT, *_VERIFY, run_npm_script,
 ]
 

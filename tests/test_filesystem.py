@@ -296,6 +296,32 @@ class TestSoftErrors:
         assert "directory" in result.lower()
         assert "list_files" in result
 
+    def test_read_file_rechaza_binario_por_extension(self):
+        """E2E landing T002: leer tui.png como texto metió 50KB de basura al
+        contexto → 400 context-exceeded. read_file debe rechazar binarios."""
+        repo = tempfile.mkdtemp()
+        png = Path(repo) / "tui.png"
+        png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+        result = read_file.invoke({"path": str(png)})
+        assert "BINARY" in result
+        assert "list_files" in result
+        assert "copy_file" in result
+
+    def test_read_file_rechaza_binario_por_sniff(self):
+        """Sin extensión conocida, el null-byte decide (fail-open a texto)."""
+        repo = tempfile.mkdtemp()
+        blob = Path(repo) / "data.dump"
+        blob.write_bytes(b"abc\x00def" * 100)
+        result = read_file.invoke({"path": str(blob)})
+        assert "BINARY" in result
+
+    def test_read_file_texto_sin_nulls_pasa(self):
+        repo = tempfile.mkdtemp()
+        txt = Path(repo) / "notes.txt"
+        txt.write_text("hola mundo\n", encoding="utf-8")
+        result = read_file.invoke({"path": str(txt)})
+        assert "hola mundo" in result
+
     def test_list_files_missing(self):
         result = list_files.invoke({"path": "/nonexistent/path"})
         assert "does not exist" in result
