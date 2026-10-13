@@ -1106,9 +1106,9 @@ def test_readonly_evidence_cuenta_lecturas_del_turno(tmp_path):
     assert s._readonly_evidence_turn(resp) is True
 
 
-def test_pool_frena_ante_primer_fallo(tmp_path):
-    """E2E T02: el turno falló sin escribir y el pool igual avanzó a T03
-    sobre base rota. Por defecto el pool FRENA y dice cómo reanudar."""
+def test_pool_continua_por_defecto(tmp_path):
+    """Contrato nuevo: el pool SIEMPRE termina el rango (sin quiebres).
+    T2 falla y T3 igual corre (sin mapa de dependencias no hay bloqueos)."""
     from orchestration.session import Session
 
     repo = _init_repo(tmp_path)
@@ -1124,10 +1124,94 @@ def test_pool_frena_ante_primer_fallo(tmp_path):
     assert [c for c in calls] == [
         "implementar Tarea 1 de deuda/tareas.json",
         "implementar Tarea 2 de deuda/tareas.json",
+        "implementar Tarea 3 de deuda/tareas.json",
+    ]
+    assert summary["ok"] == 2
+    assert summary["fallidas"] == [2]
+    assert summary["bloqueadas"] == []
+    assert summary["stopped_early"] is False
+
+
+def test_pool_stop_on_fail_legacy(tmp_path):
+    """stop_on_fail=True conserva el modo viejo (frena ante el primer fallo)."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    calls = []
+
+    def _fake_run_turn(prompt):
+        calls.append(prompt)
+        s._last_turn_failed = ("Tarea 2" in prompt)
+
+    s.run_turn = _fake_run_turn
+    summary = s.run_task_pool([1, 2, 3], tasks_file="deuda/tareas.json",
+                              stop_on_fail=True)
+    assert [c for c in calls] == [
+        "implementar Tarea 1 de deuda/tareas.json",
+        "implementar Tarea 2 de deuda/tareas.json",
     ]
     assert summary["ok"] == 1
     assert summary["fallidas"] == [2]
     assert summary["stopped_early"] is True
+
+
+def test_pool_veredicto_bloqueo_y_flip(tmp_path):
+    """Contrato determinista completo con archivo real:
+    - T1: turno FALLIDO pero criterio cumplido → ok + flip a DONE.
+    - T2: turno ok pero criterio incumplido → fallida (manda el disco).
+    - T3: depende de T2 → bloqueada SIN correr turno.
+    - T4: ok normal + flip.
+    El flip solo toca el status (resto byte-idéntico)."""
+    import json
+
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    (repo / "m.txt").write_text("hola mundo\n")
+    tasks = repo / "tasks.json"
+    tasks.write_text(json.dumps({"tasks": [
+        {"id": "T01", "title": "t1", "files": ["m.txt"],
+         "depends_on": [], "ac": "",
+         "verify": "grep -q 'hola' m.txt", "status": "TODO"},
+        {"id": "T02", "title": "t2", "files": ["m.txt"],
+         "depends_on": [], "ac": "",
+         "verify": "grep -q 'zzz-ausente' m.txt", "status": "TODO"},
+        {"id": "T03", "title": "t3", "files": ["m.txt"],
+         "depends_on": ["T02"], "ac": "",
+         "verify": "grep -q 'hola' m.txt", "status": "TODO"},
+        {"id": "T04", "title": "t4", "files": ["m.txt"],
+         "depends_on": [], "ac": "",
+         "verify": "grep -q 'mundo' m.txt", "status": "TODO"},
+    ]}), encoding="utf-8")
+    before = json.loads(tasks.read_text(encoding="utf-8"))
+    s = Session(llm=None, repo_path=str(repo))
+    calls = []
+
+    def _fake_run_turn(prompt):
+        calls.append(prompt)
+        # T1 falla (pero el disco cumple), T2 sale ok (pero el disco no).
+        s._last_turn_failed = ("Tarea 1" in prompt)
+
+    s.run_turn = _fake_run_turn
+    summary = s.run_task_pool([1, 2, 3, 4], tasks_file=str(tasks))
+    assert [c.split(" de ")[0] for c in calls] == [
+        "implementar Tarea 1", "implementar Tarea 2", "implementar Tarea 4"]
+    assert summary["ok"] == 2
+    assert summary["fallidas"] == [2]
+    assert summary["bloqueadas"] == [3]
+    assert summary["stopped_early"] is False
+    after = json.loads(tasks.read_text(encoding="utf-8"))
+    by_id = {t["id"]: t for t in after["tasks"]}
+    assert by_id["T01"]["status"] == "DONE"
+    assert by_id["T02"]["status"] == "TODO"
+    assert by_id["T03"]["status"] == "TODO"
+    assert by_id["T04"]["status"] == "DONE"
+    # El flip solo tocó status: resto idéntico.
+    for b, a in zip(before["tasks"], after["tasks"]):
+        assert b["id"] == a["id"]
+        for k in ("title", "files", "depends_on", "ac", "verify"):
+            assert b[k] == a[k]
 
 
 def test_pool_continue_sigue_tras_fallo(tmp_path):
@@ -1151,7 +1235,29 @@ def test_pool_continue_sigue_tras_fallo(tmp_path):
     assert summary["stopped_early"] is False
 
 
-def test_pool_excepcion_tambien_frena(tmp_path):
+def test_pool_excepcion_se_registra_y_sigue(tmp_path):
+    """Excepción en un turno: se registra como fallida y el pool continúa."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+    calls = []
+
+    def _boom(prompt):
+        calls.append(prompt)
+        s._last_turn_failed = False
+        if "Tarea 1" in prompt:
+            raise RuntimeError("llm caído")
+
+    s.run_turn = _boom
+    summary = s.run_task_pool([1, 2])
+    assert len(calls) == 2
+    assert summary["fallidas"] == [1]
+    assert summary["ok"] == 1
+    assert summary["stopped_early"] is False
+
+
+def test_pool_excepcion_frena_en_modo_legacy(tmp_path):
     from orchestration.session import Session
 
     repo = _init_repo(tmp_path)
@@ -1163,7 +1269,7 @@ def test_pool_excepcion_tambien_frena(tmp_path):
             raise RuntimeError("llm caído")
 
     s.run_turn = _boom
-    summary = s.run_task_pool([1, 2])
+    summary = s.run_task_pool([1, 2], stop_on_fail=True)
     assert summary["fallidas"] == [1]
     assert summary["stopped_early"] is True
 

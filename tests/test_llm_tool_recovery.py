@@ -140,3 +140,55 @@ class TestParseDSML:
 
     def test_dsml_prosa_con_pipes_no_dispara(self):
         assert parse_text_tool_calls("uso pipes | así | en texto") == []
+
+
+class TestClientImportRaceHeals:
+    """Carrera de imports openai 3.x: el primer AsyncOpenAI() del proceso
+    puede fallar con ImportError 'materialize_input_tools' y envenenar todos
+    los turnos (E2E pool: 0/4 en 0.1s). _get_client reintenta una vez tras
+    reimportar explícito."""
+
+    def test_get_client_reintenta_tras_importerror(self, monkeypatch):
+        import llm_wrapper
+        from llm_wrapper import LocalLLM
+
+        calls = []
+
+        class FakeClient:
+            pass
+
+        def flaky(**kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise ImportError(
+                    "cannot import name 'materialize_input_tools' from "
+                    "'openai.lib._parsing'"
+                )
+            return FakeClient()
+
+        monkeypatch.setattr(llm_wrapper, "AsyncOpenAI", flaky)
+        llm = LocalLLM(base_url="http://127.0.0.1:8080/v1",
+                       model_name="m", temperature=0.2, max_tokens=16,
+                       api_key="x")
+        assert isinstance(llm._get_client(), FakeClient)
+        assert len(calls) == 2
+        # Segunda vez: cacheado, sin reintentar.
+        assert isinstance(llm._get_client(), FakeClient)
+        assert len(calls) == 2
+
+    def test_get_client_falla_de_verdad_si_persiste(self, monkeypatch):
+        import llm_wrapper
+        from llm_wrapper import LocalLLM
+
+        def broken(**kwargs):
+            raise ImportError("roto de verdad")
+
+        monkeypatch.setattr(llm_wrapper, "AsyncOpenAI", broken)
+        llm = LocalLLM(base_url="http://127.0.0.1:8080/v1",
+                       model_name="m", temperature=0.2, max_tokens=16,
+                       api_key="x")
+        try:
+            llm._get_client()
+            assert False, "debió propagar"
+        except ImportError:
+            pass

@@ -693,7 +693,7 @@ class TestJsonGate:
 
     def test_edit_que_rompe_json_rechazado_y_revierte(self):
         repo = tempfile.mkdtemp()
-        p = Path(repo) / "tasks.json"
+        p = Path(repo) / "data.json"
         original = '{"a": 1, "b": 2}'
         p.write_text(original, encoding="utf-8")
         read_file.invoke({"path": str(p)})
@@ -705,7 +705,7 @@ class TestJsonGate:
 
     def test_edit_json_valido_pasa(self):
         repo = tempfile.mkdtemp()
-        p = Path(repo) / "tasks.json"
+        p = Path(repo) / "data.json"
         p.write_text('{"a": 1}', encoding="utf-8")
         read_file.invoke({"path": str(p)})
         result = edit_file.invoke({
@@ -722,6 +722,20 @@ class TestJsonGate:
         })
         assert "JSON inválido" in result
         assert not p.exists()
+
+    def test_write_tasks_json_sin_cita_rechazado(self):
+        """E2E landing: write_file entero sobre tasks.json perdía tareas
+        (T003 duplicado al final, T026 perdido). Sin cita explícita del
+        usuario se rechaza; el contenido queda intacto."""
+        repo = tempfile.mkdtemp()
+        p = Path(repo) / "tasks.json"
+        original = '{"tasks": [{"id": "T01", "status": "TODO"}]}'
+        p.write_text(original, encoding="utf-8")
+        result = write_file.invoke({
+            "path": str(p), "content": '{"tasks": [{"id": "T99"}]}',
+        })
+        assert "PLANIFICACIÓN" in result
+        assert p.read_text(encoding="utf-8") == original
 
 
 def test_status_flip_pending_a_done_en_tasks_json(tmp_path):
@@ -921,3 +935,4 @@ class TestCopyFile:
             "destination_path": str(tmp_path / "d" / "secret.bin")})
         assert out.startswith("✅")
         assert "SECRETO" not in out
+

@@ -926,3 +926,85 @@ class TestPreloadTasksJsonGrande:
         line = format_json_checklist(filt)
         assert "assets/css/features.css" in line
         assert "read_file" in line
+
+
+class TestPoolVerdict:
+    """Veredicto determinístico del pool: el criterio contra el disco manda."""
+
+    def _ws(self, tmp_path, tasks):
+        import json
+
+        (tmp_path / "src").mkdir(exist_ok=True)
+        p = tmp_path / "tasks.json"
+        p.write_text(json.dumps({"tasks": tasks}), encoding="utf-8")
+        return p
+
+    def test_grep_ok_y_fail(self, tmp_path):
+        from orchestration.execute_bootstrap import evaluate_task_criterion
+
+        (tmp_path / "a.txt").write_text("hola mundo\n")
+        p = self._ws(tmp_path, [
+            {"id": "T01", "verify": "grep -q 'hola' a.txt", "status": "TODO"},
+            {"id": "T02", "verify": "grep -q 'zzz' a.txt", "status": "TODO"},
+        ])
+        assert evaluate_task_criterion(str(p), 1, str(tmp_path))[0] is True
+        ok, msg = evaluate_task_criterion(str(p), 2, str(tmp_path))
+        assert ok is False and "zzz" in msg
+
+    def test_grep_multi_and_shell_none(self, tmp_path):
+        from orchestration.execute_bootstrap import evaluate_task_criterion
+
+        (tmp_path / "r.ts").write_text("buildPautaDailyCsv\ntext/csv\n")
+        p = self._ws(tmp_path, [
+            {"id": "T01", "verify": "grep -q 'buildPautaDailyCsv' 'r.ts' && grep -q 'text/csv' 'r.ts'"},
+            {"id": "T02", "verify": "TZ=America/Asuncion npx vitest run t.test.ts"},
+        ])
+        assert evaluate_task_criterion(str(p), 1, str(tmp_path))[0] is True
+        assert evaluate_task_criterion(str(p), 2, str(tmp_path))[0] is None
+
+    def test_list_y_read(self, tmp_path):
+        from orchestration.execute_bootstrap import evaluate_task_criterion
+
+        img = tmp_path / "assets" / "img"
+        img.mkdir(parents=True)
+        (img / "tui.png").write_bytes(b"\x89PNG")
+        p = self._ws(tmp_path, [
+            {"id": "T01", "verify": "list_files sobre assets/img/",
+             "ac": "confirmar tui.png y otro.png presentes"},
+            {"id": "T02", "verify": "read_file c.css (existe :root con --x)",
+             "ac": ""},
+        ])
+        ok, msg = evaluate_task_criterion(str(p), 1, str(tmp_path))
+        assert ok is False and "otro.png" in msg
+        (tmp_path / "c.css").write_text(":root{--x:1px}\n")
+        assert evaluate_task_criterion(str(p), 2, str(tmp_path))[0] is True
+
+    def test_dep_map(self, tmp_path):
+        from orchestration.execute_bootstrap import _pool_dep_map
+
+        p = self._ws(tmp_path, [
+            {"id": "T01"},
+            {"id": "T02", "depends_on": ["T01"]},
+            {"id": "T03", "depends_on": ["T02", "T09"]},
+        ])
+        assert _pool_dep_map(str(p)) == {1: set(), 2: {1}, 3: {2, 9}}
+        assert _pool_dep_map(str(tmp_path / "nope.json")) == {}
+
+    def test_ensure_flip_solo_status(self, tmp_path):
+        import json
+
+        from orchestration.execute_bootstrap import ensure_task_done
+
+        p = self._ws(tmp_path, [
+            {"id": "T01", "title": "t", "verify": "v", "status": "TODO"},
+            {"id": "T02", "title": "t2", "verify": "v2", "status": "DONE"},
+        ])
+        before = p.read_text(encoding="utf-8")
+        assert ensure_task_done(str(p), 1) is True
+        assert ensure_task_done(str(p), 2) is True
+        assert ensure_task_done(str(p), 9) is False
+        after = json.loads(p.read_text(encoding="utf-8"))
+        assert [t["status"] for t in after["tasks"]] == ["DONE", "DONE"]
+        # Solo cambió el status de T01: diff textual de una línea.
+        diff = [ln for ln in after["tasks"][0].items()]
+        assert before.replace('"status": "TODO"', '"status": "DONE"', 1) == p.read_text(encoding="utf-8")

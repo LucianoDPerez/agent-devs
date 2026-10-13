@@ -1443,6 +1443,22 @@ class Session:
             except Exception:
                 pass
             self._turn_start_ts = time.time()
+            # Warmup del cliente OpenAI (imports + primera construcción):
+            # openai 3.x tiene una carrera de imports en la primera creación
+            # (ImportError 'materialize_input_tools' que envenena todos los
+            # turnos del proceso con 0 tokens). Calentar acá (single-thread,
+            # antes del streaming) cierra la ventana; _get_client reintenta
+            # igual por seguridad. Fail-open: jamás rompe el arranque.
+            try:
+                import importlib
+
+                importlib.import_module("openai.lib._parsing")
+                importlib.import_module("openai.resources.chat.completions")
+                _llm = getattr(self, "llm", None)
+                if _llm is not None and hasattr(_llm, "_get_client"):
+                    _llm._get_client()
+            except Exception:
+                pass
             self._tools, self._mcp_available = loop.run_until_complete(init_mcp())
             # Detección llama-only (GET /props y /v1/models): en la nube no
             # hay llama-server — se salta (el ctx default cubre de sobra y el
@@ -1601,9 +1617,10 @@ class Session:
         Sintaxis: /tasks-pool T001-T010 [archivo-tareas] [--commit] [--continue]
         Sin rango: usa los números citados (T003, tareas 1 y 2). Sin archivo:
         el prompt cita solo el N y la maquinaria pinnada resuelve.
-        El pool FRENA ante la primera tarea fallida (listas ordenadas: seguir
-        sobre una base rota quema tokens y arrastra el error). --continue
-        restaura el modo viejo (registrar y seguir).
+        El pool SIEMPRE termina el rango: veredicto determinístico por tarea
+        (criterio contra disco), fallidas registradas y dependientes
+        salteadas (no se construye sobre base rota). --continue se acepta
+        por compatibilidad (ya no cambia nada).
         """
         from orchestration.execute_bootstrap import (
             extract_requested_task_numbers,
@@ -1613,7 +1630,6 @@ class Session:
 
         text = (arg or "").strip()
         commit_each = "--commit" in text
-        continue_on_fail = "--continue" in text
         text = text.replace("--commit", "").replace("--continue", "").strip()
         numbers: list[int] = []
         tasks_file: str | None = None
@@ -1633,11 +1649,11 @@ class Session:
             f"[bold cyan]Pool autónomo: {len(numbers)} tareas "
             f"({numbers[0]:03d}→{numbers[-1]:03d})[/bold cyan]"
             + (" + commit por tarea" if commit_each else "")
-            + (" (sigue aunque fallen)" if continue_on_fail else " (frena ante el primer fallo)")
+            + " (veredicto determinístico; saltea dependientes de fallidas)"
             + "\n[dim]Un turno fresco por tarea (sin acumular contexto).[/dim]\n"
         )
         return self.run_task_pool(numbers, tasks_file, commit_each,
-                                  stop_on_fail=not continue_on_fail)
+                                  stop_on_fail=False)
 
     def _fresh_pool_turn(self) -> None:
         """Aislamiento por tarea del pool: conserva SystemMessages (system
@@ -1683,21 +1699,39 @@ class Session:
             return set()
 
     def run_task_pool(self, numbers: list[int], tasks_file: str | None = None,
-                      commit_each: bool = False, stop_on_fail: bool = True) -> dict:
+                      commit_each: bool = False, stop_on_fail: bool = False) -> dict:
         """Ejecuta tareas T en secuencia autónoma, un turno fresco por tarea.
 
-        Cada tarea corre `run_turn("implementar Tarea N [de <file>]")` con la
-        maquinaria pinnada existente (scope, budgets) y el historial truncado
-        antes de arrancar. Si commit_each, commitea alcance sesion por tarea.
-        Por defecto FRENA ante la primera tarea fallida (listas ordenadas:
-        seguir sobre una base rota quema tokens y arrastra el error — E2E
-        T02 falló sin escribir y el pool igual avanzó a T03). Con
-        stop_on_fail=False se registra y sigue (modo viejo). Retorna resumen.
+        Determinístico: cada tarea corre `run_turn("implementar Tarea N [de
+        <file>]")` y al cerrar el pool RE-EVALÚA el criterio contra el disco
+        (veredicto determinístico, no lo que el modelo afirme). Criterio
+        cumplido → DONE y se avanza; incumplido → fallida y se avanza igual;
+        dependientes de fallidas → bloqueadas (no se construye sobre base
+        rota). El pool SIEMPRE termina el rango asignado (sin quiebres);
+        stop_on_fail=True conserva el modo viejo (frena ante el primer fallo).
+        Si commit_each, commitea alcance sesion por tarea. Retorna resumen.
         """
+        from orchestration.execute_bootstrap import (
+            _pool_dep_map,
+            ensure_task_done,
+            evaluate_task_criterion,
+        )
+
         results: list[dict] = []
         stopped_early = False
+        failed: set[int] = set()
+        blocked: dict[int, list[int]] = {}
+        depmap = _pool_dep_map(tasks_file) if tasks_file else {}
         self._seed_pool_baseline()
         for idx, n in enumerate(numbers):
+            unmet = [d for d in depmap.get(n, ()) if d in failed or d in blocked]
+            if unmet:
+                blocked[n] = unmet
+                dep_txt = ", ".join(f"T{d:03d}" for d in sorted(unmet)[:3])
+                status = f"bloqueada (depende de {dep_txt} no completada)"
+                console.print(f"\n[dim]⏭️  T{n:03d} bloqueada: depende de {dep_txt}.[/dim]")
+                results.append({"tarea": n, "status": status, "commit": ""})
+                continue
             self._fresh_pool_turn()
             touched_before = set(self._session_touched_files)
             prompt = f"implementar Tarea {n}"
@@ -1710,6 +1744,29 @@ class Session:
                     status = "fallida (el turno no completó — ver salida arriba)"
             except Exception as e:  # noqa: BLE001
                 status = f"error: {e}"
+            # Veredicto determinístico: el criterio contra el disco manda
+            # sobre el ruido del turno (divagues, loops, cierres raros).
+            if tasks_file:
+                try:
+                    verdict, evidence = evaluate_task_criterion(
+                        tasks_file, n, self.repo_path)
+                except Exception:
+                    verdict, evidence = None, "veredicto no evaluable"
+                if verdict is True:
+                    try:
+                        ensure_task_done(tasks_file, n)
+                    except Exception:
+                        pass
+                    if status != "ok":
+                        console.print(
+                            f"\n[dim]✅ T{n:03d}: el turno falló pero el "
+                            f"criterio está cumplido en disco ({evidence}) — "
+                            "se da por hecha.[/dim]")
+                    status = "ok"
+                elif verdict is False:
+                    status = f"fallida ({evidence})"
+            if status != "ok":
+                failed.add(n)
             committed = ""
             if commit_each and status == "ok":
                 try:
@@ -1758,13 +1815,16 @@ class Session:
         done = [r for r in results if r["status"] == "ok"]
         summary = {
             "total": len(results), "ok": len(done),
-            "fallidas": [r["tarea"] for r in results if r["status"] != "ok"],
+            "fallidas": [r["tarea"] for r in results
+                         if r["status"] != "ok" and r["tarea"] not in blocked],
+            "bloqueadas": sorted(blocked),
             "detalle": results,
             "stopped_early": stopped_early,
         }
         console.print(
             f"\n[bold]Pool: {summary['ok']}/{summary['total']} tareas OK[/bold]"
             + (f" — fallidas: {summary['fallidas']}" if summary["fallidas"] else "")
+            + (f" — bloqueadas: {summary['bloqueadas']}" if summary["bloqueadas"] else "")
             + (" (detenido ante el primer fallo)" if stopped_early else "")
         )
         return summary

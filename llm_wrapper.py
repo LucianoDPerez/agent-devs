@@ -413,10 +413,25 @@ class LocalLLM(BaseChatModel):
 
     def _get_client(self) -> AsyncOpenAI:
         if self._client is None:
-            self._client = AsyncOpenAI(
-                base_url=self.base_url,
-                api_key=self.api_key,
-            )
+            try:
+                self._client = AsyncOpenAI(
+                    base_url=self.base_url,
+                    api_key=self.api_key,
+                )
+            except ImportError:
+                # Carrera de imports en openai 3.x (visto en vivo: primer
+                # AsyncOpenAI() del proceso falla con "cannot import name
+                # 'materialize_input_tools'" y envenena todos los turnos).
+                # Reimportar explícito completa la inicialización y el retry
+                # suele sanar. Si re-falla, que suba con contexto.
+                import importlib
+
+                importlib.import_module("openai.lib._parsing")
+                importlib.import_module("openai.resources.chat.completions")
+                self._client = AsyncOpenAI(
+                    base_url=self.base_url,
+                    api_key=self.api_key,
+                )
         return self._client
 
     def bind_tools(self, tools, *, tool_choice=None, **kwargs):

@@ -75,6 +75,11 @@ PROTECTED_TASK_FILENAMES = frozenset({
     "tasks.md", "task.md", "plan.md", "prd.md", "roadmap.md",
     "backlog.md", "agenda.md", "user-stories.md", "stories.md",
     "task-dependency-analyzer.md", "story-to-plan.md",
+    # tasks.json SÍ (JSON de pool): un write_file entero lo reemplaza y
+    # pierde tareas (E2E landing: clobber dejó 26 entradas con T003
+    # duplicado y T026 perdido). Solo flips TODO→DONE pasan (excepción
+    # quirúrgica + TASK_PATH_ALLOW cuando el usuario lo cita).
+    "tasks.json",
 })
 PROTECTED_TASK_DIRS = frozenset({
     ".agent-devs", ".agent", ".atl",

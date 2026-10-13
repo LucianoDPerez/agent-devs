@@ -515,6 +515,332 @@ def pinned_task_repo(user_input: str, repo_path: str | None) -> str | None:
     return None
 
 
+# ── Veredicto determinístico de pool ─────────────────────────────────────
+# El pool no le cree al modelo ni al cierre del turno: re-evalúa el criterio
+# de la tarea contra el disco con herramientas de solo-lectura. Letras del
+# contrato: el criterio manda (si el archivo cumple el grep/list/read, la
+# tarea está hecha aunque el turno haya divagado; si no lo cumple, no está
+# hecha aunque el modelo diga LISTO).
+
+# grep -q 'PAT' FILE [&& ...]
+_GREP_SEG_RE = re.compile(
+    r"""grep\s+(?:-[a-zA-Z]+\s+)*['"](?P<pat>.+?)['"]\s+(?P<file>\S+)""",
+)
+# Comandos de ejecución (no verificables estáticamente: los corre el turno
+# con verify tools, el pool no re-ejecuta suites).
+_SHELL_RUN_RES = (
+    "npx ", "npm ", "pytest", "cargo test", "go test", "vitest",
+    "python3 -m http", "curl ", "TZ=",
+)
+# Tokens de archivo en criterios (tui.png, route.ts, ...).
+_FILENAME_RE = re.compile(r"[\w][\w.@+-]*\.[a-zA-Z0-9]{1,5}\b")
+# Marcadores de contenido en criterios read_file (--var, :root, `literal`).
+_MARKER_RES = (
+    re.compile(r"--[\w-]+"),
+    re.compile(r":root\b"),
+    re.compile(r"`([^`]{2,120})`"),
+    re.compile(r"'((?:[^'\\]|\\.){3,120})'"),
+)
+
+
+def _task_file_repo(tasks_file: str, session_repo: str | None) -> str:
+    """Raíz contra la que se resuelven los paths relativos del criterio:
+    campo 'repo' del tasks.json, o la raíz git del archivo, o el repo de
+    la sesión. Fail-open: tasks_file tal cual si nada resuelve."""
+    try:
+        import json
+
+        data = json.loads(Path(tasks_file).read_text(encoding="utf-8",
+                                                     errors="replace"))
+    except (OSError, ValueError):
+        data = None
+    if isinstance(data, dict):
+        for key in ("repo", "repository", "root", "repo_path"):
+            cand = data.get(key)
+            if isinstance(cand, str) and cand.strip() and Path(cand.strip()).is_dir():
+                return str(Path(cand.strip()))
+    cur = Path(tasks_file).expanduser().parent
+    try:
+        for _ in range(6):
+            if (cur / ".git").exists():
+                return str(cur)
+            if cur == cur.parent:
+                break
+            cur = cur.parent
+    except OSError:
+        pass
+    return session_repo or tasks_file
+
+
+def _resolve_criterion_path(raw: str, base: str) -> str:
+    """Path del criterio → absoluto. Relativo: contra la raíz de la tarea."""
+    tok = (raw or "").strip().strip("'").strip('"')
+    if not tok:
+        return tok
+    p = Path(tok)
+    if p.is_absolute():
+        return str(p)
+    return str(Path(base) / tok)
+
+
+def _grep_holds(pattern: str, content: str) -> bool:
+    """grep -q: substring literal, o regex como fallback (BRE≠pyre)."""
+    if pattern in content:
+        return True
+    try:
+        return re.search(pattern, content) is not None
+    except re.error:
+        return False
+
+
+def _criterion_markers(criterion: str) -> list[str]:
+    """Marcadores de contenido exigibles (--var, :root, literales)."""
+    out: list[str] = []
+    for rx in _MARKER_RES:
+        for m in rx.finditer(criterion or ""):
+            val = m.group(1) if m.lastindex else m.group(0)
+            if val and val not in out:
+                out.append(val)
+    return out
+
+
+def _load_task_entry(tasks_file: str, num: int) -> dict | None:
+    """Entrada T{num} del tasks.json, o None (fail-open → veredicto None)."""
+    try:
+        import json
+
+        data = json.loads(Path(tasks_file).read_text(encoding="utf-8",
+                                                     errors="replace"))
+    except (OSError, ValueError):
+        return None
+    entries: list[dict] = []
+    if isinstance(data, dict):
+        for val in data.values():
+            if isinstance(val, list) and val and all(isinstance(e, dict) for e in val):
+                entries = val
+                break
+        else:
+            if data.get("id"):
+                entries = [data]
+    elif isinstance(data, list):
+        entries = [e for e in data if isinstance(e, dict)]
+    for entry in entries:
+        if _task_id_matches(entry.get("id"), {num}):
+            return entry
+    return None
+
+
+def evaluate_task_criterion(tasks_file: str, num: int,
+                            session_repo: str | None = None
+                            ) -> tuple[bool | None, str]:
+    """Veredicto determinístico del criterio de la tarea T{num}.
+
+    (True, evidencia) si el disco cumple el criterio; (False, motivo) si no;
+    (None, motivo) si el criterio no es evaluable estáticamente (comandos de
+    ejecución: npx/pytest/... — los corre el turno, el pool no re-ejecuta).
+    Solo lectura, sin builds: barato y seguro en cada tarea del pool.
+    """
+    entry = _load_task_entry(tasks_file, num)
+    if entry is None:
+        return None, "tarea no encontrada en el archivo"
+    criterion = str(entry.get("verify") or entry.get("ac") or "")
+    ac = str(entry.get("ac") or "")
+    if not criterion.strip():
+        return None, "sin criterio"
+    base = _task_file_repo(tasks_file, session_repo)
+
+    def _read(p: str) -> str | None:
+        try:
+            return Path(p).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+
+    low = criterion.lower()
+    # 1) grep -q 'PAT' FILE [&& ...]: todos los segmentos deben cumplir.
+    if "grep" in low:
+        segs = [s.strip() for s in re.split(r"&&|\|\|", criterion) if s.strip()]
+        checks: list[tuple[str, str]] = []
+        for seg in segs:
+            m = _GREP_SEG_RE.search(seg)
+            if not m:
+                return None, f"segmento no evaluable: {seg[:80]}"
+            checks.append((m.group("pat"), m.group("file")))
+        missing: list[str] = []
+        for pat, raw in checks:
+            content = _read(_resolve_criterion_path(raw, base))
+            if content is None or not _grep_holds(pat, content):
+                missing.append(f"'{pat}' en {raw.strip(chr(39) + chr(34))}")
+        if missing:
+            return False, "no cumple: " + "; ".join(missing[:4])
+        return True, f"criterio grep OK en disco ({len(checks)}/{len(checks)})"
+
+    # 2) Comandos de ejecución: no evaluables por el pool.
+    if any(tok in low for tok in _SHELL_RUN_RES):
+        return None, "criterio de ejecución (lo corre el turno)"
+
+    # 3) list_files sobre DIR: archivos nombrados presentes en DIR.
+    if "list_files" in low:
+        dirm = re.search(r"([\w.@+-]+/)+", criterion)
+        # Nombres PELADOS (tui.png), no los que son parte de otro path
+        # (tasks/asset-manifest.md no vive en assets/img/).
+        names: list[str] = []
+        haystack = criterion + " " + ac
+        for m in _FILENAME_RE.finditer(haystack):
+            if m.start() > 0 and haystack[m.start() - 1] == "/":
+                continue
+            if m.group(0) not in names:
+                names.append(m.group(0))
+        if not dirm:
+            return None, "list_files sin directorio claro"
+        if not names:
+            return None, "list_files sin archivos nombrados que comprobar"
+        d = Path(_resolve_criterion_path(dirm.group(0), base))
+        if not d.is_dir():
+            return False, f"directorio inexistente: {dirm.group(0)}"
+        have = set()
+        try:
+            have = {q.name for q in d.iterdir() if q.is_file()}
+        except OSError:
+            pass
+        absent = [n for n in names
+                  if "/" not in n and n not in have
+                  and not (d / n).exists()]
+        if absent:
+            return False, "faltan en disco: " + ", ".join(absent[:6])
+        return True, f"list_files OK ({len(names)} archivo(s) presentes)"
+
+    # 4) read_file FILE (+ marcadores): existe y contiene los marcadores.
+    if "read_file" in low:
+        m = re.search(r"read_file\s+(\S+)", criterion)
+        cands = [m.group(1)] if m else []
+        cands += [n for n in _FILENAME_RE.findall(criterion)]
+        target: str | None = None
+        for cand in cands:
+            p = _resolve_criterion_path(cand.strip("'\""), base)
+            if Path(p).is_file():
+                target = p
+                break
+        if target is None and cands:
+            return False, f"archivo inexistente: {cands[0].strip(chr(39) + chr(34))}"
+        if target is None:
+            return None, "read_file sin archivo claro"
+        content = _read(target) or ""
+        missing = [mk for mk in _criterion_markers(criterion) if mk not in content]
+        if missing:
+            return False, f"faltan marcadores en {Path(target).name}: " + ", ".join(missing[:6])
+        return True, f"read_file OK ({Path(target).name} con marcadores)"
+
+    return None, "criterio no evaluable estáticamente"
+
+
+def _pool_dep_map(tasks_file: str | None) -> dict[int, set[int]]:
+    """Tarea → dependencias (números) según depends_on. Fail-open {}."""
+    if not tasks_file:
+        return {}
+    try:
+        import json
+
+        data = json.loads(Path(tasks_file).read_text(encoding="utf-8",
+                                                     errors="replace"))
+    except (OSError, ValueError):
+        return {}
+    entries: list[dict] = []
+    if isinstance(data, dict):
+        for val in data.values():
+            if isinstance(val, list) and val and all(isinstance(e, dict) for e in val):
+                entries = val
+                break
+        else:
+            if data.get("id"):
+                entries = [data]
+    elif isinstance(data, list):
+        entries = [e for e in data if isinstance(e, dict)]
+    out: dict[int, set[int]] = {}
+    for entry in entries:
+        m = re.search(r"(\d+)", str(entry.get("id") or ""))
+        if not m:
+            continue
+        deps = set()
+        for tok in re.findall(r"(\d+)", str(entry.get("depends_on") or "")):
+            try:
+                deps.add(int(tok))
+            except ValueError:
+                pass
+        out[int(m.group(1))] = deps
+    return out
+
+
+def ensure_task_done(tasks_file: str, num: int) -> bool:
+    """Marca DONE la tarea T{num} si está en estado pendiente. Solo-lectura
+    salvo el flip quirúrgico TODO/IN_PROGRESS→DONE (validado por los guards
+    de planning como cualquier flip del modelo). True si ya estaba DONE o
+    quedó DONE; False si no se pudo (formato inesperado, ya cerrada raro).
+
+    El flip va por edit_file (con read previo + TASK_PATH_ALLOW) para que lo
+    cubran las mismas protecciones anti-corrupción que los flips del modelo.
+    """
+    try:
+        from tools.filesystem import (
+            TASK_PATH_ALLOW,
+            edit_file,
+            read_file,
+        )
+    except Exception:
+        return False
+    try:
+        resolved = str(Path(tasks_file).expanduser().resolve())
+    except OSError:
+        resolved = str(tasks_file)
+    try:
+        read_file.invoke({"path": resolved})
+        text = Path(resolved).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    # Span de la entrada: desde su "id" hasta el próximo "id" de tarea.
+    idm = re.search(rf'"id"\s*:\s*"T0*{num}"', text)
+    if not idm:
+        idm = re.search(rf'"id"\s*:\s*{num}\b', text)
+    if not idm:
+        return False
+    nxt = re.search(r'"id"\s*:', text[idm.end():])
+    span = text[idm.start(): idm.end() + nxt.start() if nxt else len(text)]
+    sm = re.search(r'"status"\s*:\s*"([^"]+)"', span)
+    if not sm:
+        return False
+    if sm.group(1).strip().lower() == "done":
+        return True
+    if sm.group(1).strip().lower() not in (
+        "todo", "in_progress", "in-progress", "pending", "open", "todo ",
+    ):
+        return False
+    # old_str con contexto previo crudo (sin fabricar saltos) hasta ser único
+    # en el archivo. Funciona en indent-2 multi-línea y en JSON de una línea.
+    abs_sm_start = text.find(sm.group(0), idm.start())
+    abs_sm_end = abs_sm_start + len(sm.group(0))
+    lo = abs_sm_start
+    old_str = ""
+    while lo > idm.start():
+        # retroceder hasta el salto anterior (o inicio del span)
+        prev_nl = text.rfind("\n", idm.start(), lo - 1)
+        lo = prev_nl + 1 if prev_nl >= idm.start() else idm.start()
+        old_str = text[lo:abs_sm_end]
+        if len(old_str) > 4000:
+            return False
+        if text.count(old_str) == 1:
+            break
+    else:
+        return False
+    if not old_str or text.count(old_str) != 1:
+        return False
+    new_str = old_str.replace(sm.group(0), '"status": "DONE"')
+    TASK_PATH_ALLOW.add(resolved)
+    try:
+        res = edit_file.invoke({"path": resolved, "old_str": old_str, "new_str": new_str})
+    finally:
+        TASK_PATH_ALLOW.discard(resolved)
+    return isinstance(res, str) and res.startswith("✅")
+
+
 # Verbos de verificación en el AC pinneado (constatar, no construir). Espejo
 # de _VERIFY_ONLY_RE en session.py (ahí se evalúa el texto del usuario, acá
 # el AC de la tarea; bootstrap no puede importar session: circular).
