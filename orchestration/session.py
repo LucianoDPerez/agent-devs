@@ -967,6 +967,73 @@ def _format_reds_attribution(heredados: list[str], nuevos: list[str]) -> str:
     )
 
 
+def _red_stem(path: str) -> str:
+    """Stem normalizado para comparar test-rojo vs archivo propio.
+
+    'tests/integration/users-table.test.ts' → 'users-table'.
+    'src/a.ts' → 'a'. Sin extensión reconocible → '' (no atribuible).
+    """
+    try:
+        base = re.split(r"::", (path or "").strip(), maxsplit=1)[0].strip()
+        base = base.split("/")[-1].split("\\")[-1].lower()
+        if not base or "." not in base:
+            return ""
+        base = re.sub(r"\.(test|spec)\.[a-z]+$", "", base)
+        base = re.sub(r"\.[a-z0-9]+$", "", base)
+        return base.strip(" -_")
+    except Exception:
+        return ""
+
+
+def _reds_unrelated_to_own(reds: list[str], own_files: list[str]) -> bool:
+    """True si NINGÚN rojo menciona los archivos del turno.
+
+    Compara stems (users-table vs users-table.test.ts) y substrings
+    (bar.ts vs bar.test.ts). Conservador: ante la duda (stem vacío,
+    identificador sin path como 'TestNombre' de Go, own vacío
+    desconocido) devuelve False = relacionado → falla como siempre.
+    """
+    try:
+        if not reds or not own_files:
+            return False
+        own_stems = [s for s in (_red_stem(f) for f in own_files) if s]
+        if not own_stems:
+            return False
+        own_blob = "/".join(f.lower() for f in own_files)
+        for r in reds:
+            key = _baseline_key(r)
+            # Sin path ni extensión (p. ej. '--- FAIL: TestX' de Go):
+            # no se puede probar falta de relación → relacionado.
+            if "/" not in key and "." not in key:
+                return False
+            stem = _red_stem(key)
+            if not stem:
+                return False
+            kl = key.lower()
+            for o, os in zip(own_files, own_stems):
+                ol = str(o).lower()
+                # Mismo stem: src/bar.ts vs tests/bar.test.ts → relacionado.
+                if stem == os:
+                    return False
+                # Substring con largo mínimo (evita 'a' en 'pauta').
+                if len(stem) >= 4 and len(os) >= 4 and (
+                    stem in ol or os in kl
+                ):
+                    return False
+            # Chequeo extra: el path del rojo contiene el basename propio.
+            for o in own_files:
+                try:
+                    ob = str(o).split("/")[-1].split("\\")[-1].lower()
+                    ob = re.sub(r"\.[a-z0-9]+$", "", ob)
+                    if ob and len(ob) >= 4 and ob in kl:
+                        return False
+                except Exception:
+                    continue
+        return True
+    except Exception:
+        return False
+
+
 # Firmas de fallo por INFRA (DB/servicios ausentes): el código del turno no
 # pudo haberlas causado → nunca cuentan como "nuevas" ni frenan el pool.
 # E2E real: 37 integration tests rojos por falta de PG/LocalStack contaron
@@ -2612,6 +2679,13 @@ class Session:
         nuevo, cierra ok informando. Falla solo cuando hay rojos nuevos
         reales o no atribuibles (baseline desconocido / sin nombres
         extraíbles): en la duda, frena (seguro).
+
+        Excepción: rojos NO RELACIONADOS con los archivos del turno
+        (p. ej. el turno tocó ExportDailyCsvButton.tsx y fallan
+        users-table.test.ts + video-link-firmado.test.ts) con código
+        sintácticamente sano → cierra ok informando ("no-relacionados").
+        Sin esto un repo con deuda preexistente y baseline ausente
+        marca "Turno fallido" aunque el turno salió perfecto.
         """
         if self._only_infra_reds():
             return True, "solo-infra"
@@ -2623,11 +2697,41 @@ class Session:
         if not reds:
             return False, "sin-nombres"
         if base is None:
+            if self._reds_unrelated_to_turn(reds):
+                return True, "sin-baseline-no-relacionados"
             return False, "sin-baseline"
         _, new = _split_reds(reds, base) or ([], [])
         if not new:
             return True, "solo-heredados"
+        # Con "nuevos" según baseline, pero ajenos a lo tocado por el
+        # turno → no los rompió este turno (baseline sin sembrar o deuda
+        # cruzada). Exige gate de sintaxis sano para no bendecir roto.
+        if self._reds_unrelated_to_turn(new):
+            try:
+                gate_ok, _ = self._post_write_gate()
+            except Exception:
+                gate_ok = True
+            if gate_ok:
+                return True, "no-relacionados"
         return False, "con-nuevos"
+
+    def _reds_unrelated_to_turn(self, reds: list[str]) -> bool:
+        """True si los rojos no mencionan archivos propios del turno.
+
+        Fail-closed: snapshot desconocido, sin own_files o sin stems
+        atribuibles → False (se falla como siempre, seguro).
+        """
+        try:
+            files = self._changed_files()
+            snap = getattr(self, "_turn_start_dirty", frozenset())
+            if snap is None:
+                return False
+            own = self._turn_own_files(files, frozenset(snap or ()))
+            if not own:
+                return False
+            return _reds_unrelated_to_own(reds, own)
+        except Exception:
+            return False
 
     def _turn_verify_is_red(self) -> bool:
         """True si se corrió verificación en el turno y quedó en rojo.
@@ -5475,6 +5579,19 @@ class Session:
                             "\n[yellow]⚠️  Rojos solo de infra (sin DB/servicios): no "
                             "los causó este turno — se informan pero no fallan ni "
                             "frenan el pool.[/yellow]"
+                        )
+                    elif _why in ("no-relacionados", "sin-baseline-no-relacionados"):
+                        try:
+                            _rn = ", ".join(
+                                sorted({_baseline_key(i).split("/")[-1]
+                                        for i in self._current_failing_tests()})[:2]
+                            )
+                        except Exception:
+                            _rn = "tests ajenos"
+                        console.print(
+                            "\n[yellow]⚠️  Rojos no relacionados con tu cambio "
+                            f"({_rn}): tu turno no rompió nada propio — el cierre "
+                            "no falla (verificá el criterio de la tarea).[/yellow]"
                         )
                     else:
                         console.print(

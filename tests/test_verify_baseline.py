@@ -249,3 +249,84 @@ class TestVerifyRedClose:
         # ...y como el baseline no lo tiene como heredado → falla.
         ok, _ = s._verify_red_close()
         assert ok is False
+
+
+class TestRedsUnrelated:
+    """T04 real: turno toca ExportDailyCsvButton.tsx, fallan
+    users-table + video-link-firmado (deuda ajena, baseline ausente).
+    Antes → 'Turno fallido'; ahora → cierra ok informando."""
+
+    def _unrelated_session(self, tmp_path, baseline):
+        from orchestration.session import Session
+
+        s = Session(llm=None, repo_path=str(tmp_path))
+        s._rebuild_agent = lambda *a, **k: True
+        s._explore_budget._failure_tails = {
+            ("run_tests", "/x"): [
+                "tests/integration/users-table.test.ts",
+                "tests/integration/video-link-firmado.test.ts",
+            ]
+        }
+        s._baseline = baseline
+        s._turn_failures = {
+            "run_tests": "FAIL users-table.test.ts: assert falló"}
+        # Turno tocó solo el botón de export.
+        s._turn_start_dirty = frozenset()
+        s._changed_files = lambda: [
+            "src/components/ops/metricas/ExportDailyCsvButton.tsx"]
+        s._turn_own_files = lambda files, pre: list(files)
+        s._post_write_gate = lambda: (True, "")
+        return s
+
+    def test_no_relacionados_con_baseline_vacio_cierra_ok(self, tmp_path):
+        s = self._unrelated_session(tmp_path, {"failing": []})
+        ok, why = s._verify_red_close()
+        assert (ok, why) == (True, "no-relacionados")
+
+    def test_no_relacionados_sin_baseline_cierra_ok(self, tmp_path):
+        s = self._unrelated_session(tmp_path, None)
+        # Sin baseline en memoria ni disco → _ensure_baseline None.
+        s._baseline = None
+        import cache
+        orig = cache.load_test_baseline
+        cache.load_test_baseline = lambda *a, **k: {}
+        try:
+            ok, why = s._verify_red_close()
+        finally:
+            cache.load_test_baseline = orig
+        assert (ok, why) == (True, "sin-baseline-no-relacionados")
+
+    def test_relacionado_sigue_fallando(self, tmp_path):
+        from orchestration.session import Session
+
+        s = Session(llm=None, repo_path=str(tmp_path))
+        s._rebuild_agent = lambda *a, **k: True
+        s._explore_budget._failure_tails = {
+            ("run_tests", "/x"): ["tests/unit/bar.test.ts"]}
+        s._baseline = {"failing": []}
+        s._turn_failures = {"run_tests": "FAIL bar.test.ts: assert"}
+        s._turn_start_dirty = frozenset()
+        s._changed_files = lambda: ["src/bar.ts"]
+        s._turn_own_files = lambda files, pre: list(files)
+        s._post_write_gate = lambda: (True, "")
+        ok, why = s._verify_red_close()
+        assert (ok, why) == (False, "con-nuevos")
+
+    def test_stems(self):
+        from orchestration.session import (
+            _reds_unrelated_to_own,
+            _red_stem,
+        )
+
+        assert _red_stem("tests/integration/users-table.test.ts") == "users-table"
+        assert _red_stem("src/bar.ts") == "bar"
+        assert _red_stem("TestNombre") == ""
+        assert _reds_unrelated_to_own(
+            ["tests/integration/users-table.test.ts"],
+            ["src/components/ops/metricas/ExportDailyCsvButton.tsx"],
+        ) is True
+        assert _reds_unrelated_to_own(
+            ["tests/unit/bar.test.ts"], ["src/bar.ts"]) is False
+        # Identificador Go sin path: no atribuible → relacionado (falla seguro).
+        assert _reds_unrelated_to_own(
+            ["TestNombre"], ["src/bar.ts"]) is False
