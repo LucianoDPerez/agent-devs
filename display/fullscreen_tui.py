@@ -117,6 +117,22 @@ class SelectablePane(RichLog):
     la acción (E2E real: click derecho copiaba, ⌘C no).
     """
 
+    def get_selection(self, selection) -> tuple[str, str] | None:
+        """Extrae del tail plano (el _render del RichLog es Visual genérico
+        y el get_selection heredado devuelve None → sin esto no hay copia).
+        El tail guarda el plain visible (sin ANSI), con los mismos saltos
+        que lo escrito, así los offsets de línea del drag mapean bien."""
+        try:
+            plain = self.app._plain_tail
+        except Exception:
+            return None
+        if not plain:
+            return None
+        try:
+            return selection.extract(plain), "\n"
+        except Exception:
+            return None
+
     def selection_updated(self, selection) -> None:
         """Cachea el texto en el drag-selection."""
         with contextlib.suppress(Exception):
@@ -125,7 +141,7 @@ class SelectablePane(RichLog):
             # no sobreescribir el cache con None (se limpia por keystroke)
             return
         try:
-            sel = self.app.screen.get_selected_text()
+            sel = self.app._plain_tail and selection.extract(self.app._plain_tail)
             if sel and sel.strip():
                 self.app._last_selected_text = sel
         except Exception:
@@ -344,11 +360,18 @@ class FullscreenTUI(App):
             raw = raw[begin_idx + len(MD_BEGIN):]
 
     def _write_lines(self, raw: str) -> None:
-        """Escribe el chunk al RichLog (Text ANSI → líneas) + tail fallback."""
+        """Escribe el chunk al RichLog (Text ANSI -> lineas) + tail fallback.
+
+        El tail guarda el PLAIN visible (sin codigos ANSI): los offsets de
+        la seleccion cuentan caracteres visibles, asi el extract mapea bien.
+        """
         if not raw:
             return
-        if self._plain_tail or len(raw) > 0:
-            self._plain_tail = (self._plain_tail + raw)[-_MAX_PANE_CHARS:]
+        try:
+            frag = Text.from_ansi(raw)
+        except Exception:
+            frag = Text(raw, style="dim")
+        self._plain_tail = (self._plain_tail + frag.plain)[-_MAX_PANE_CHARS:]
         try:
             pane = self.query_one("#pane", SelectablePane)
         except Exception:
@@ -390,7 +413,11 @@ class FullscreenTUI(App):
             at_end = True
         with contextlib.suppress(Exception):
             pane.write(rendered, scroll_end=at_end)
-        self._plain_tail = (self._plain_tail + raw)[-_MAX_PANE_CHARS:]
+        try:
+            rendered_plain = rendered.plain
+        except Exception:
+            rendered_plain = raw
+        self._plain_tail = (self._plain_tail + rendered_plain)[-_MAX_PANE_CHARS:]
 
     def _render_markdown(self, md: str) -> Text:
         import io
