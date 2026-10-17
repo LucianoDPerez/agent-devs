@@ -24,8 +24,7 @@ import traceback
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import VerticalScroll
-from textual.widgets import Static, TextArea
+from textual.widgets import RichLog, Static, TextArea
 
 from display.console import MD_BEGIN, MD_END, harness_head
 
@@ -103,56 +102,32 @@ class PaneWriter:
         return buf
 
 
-class SelectablePane(Static):
-    """Static del pane con get_selection QUE FUNCIONA.
+class SelectablePane(RichLog):
+    """RichLog virtualizado con copia QUE FUNCIONA.
 
-    El Static heredado extrae de self._render() — que acá devuelve un
-    RichVisual, no un Text → Screen.get_selected_text() devolvía None y el
-    copiado jamás funcionaba. Esta subclase extrae directamente del acumulado
-    de la App (self.app._pane_text.plain) mapeando los offsets de la selección
-    a posiciones del texto plano (mismo orden: la selección nace del visual
-    del pane, que ES ese Text).
+    Antes era un Static con UN ÚNICO Text de 200k chars: cada append
+    re-layouteaba TODO (scroll/selección tediosos con mucho texto).
+    RichLog virtualiza por línea: solo renderiza lo visible y descarta
+    lo viejo con max_lines (sin copias O(n) ni splices).
+
+    Selección: a diferencia del Static (devolvía RichVisual y había que
+    mapear offsets a mano), RichLog expone texto real y
+    Screen.get_selected_text() funciona nativo. Este handler solo
+    cachea durante el drag, porque Ctrl+C limpia la selección ANTES de
+    la acción (E2E real: click derecho copiaba, ⌘C no).
     """
 
-    def get_selection(self, selection) -> tuple[str, str] | None:
-        """Extrae el texto seleccionado del acumulado de la App.
-
-        El Static heredado extrae de self._render() — que acá devuelve un
-        RichVisual, no un Text → Screen.get_selected_text() daba None y el
-        copiado nunca funcionaba. Esta subclase extrae del plain acumulado
-        con selection.extract() (la utilidad oficial de Textual para mapear
-        offsets de selección a substrings).
-        """
-        try:
-            plain = self.app._pane_text.plain
-        except Exception:
-            return None
-        if not plain:
-            return None
-        try:
-            return selection.extract(plain), "\n"
-        except Exception:
-            return None
-
     def selection_updated(self, selection) -> None:
-        """Cachea el texto en el drag-selection.
-
-        Al presionar ⌘C/Ctrl+C el keystroke limpia la selección ANTES de la
-        acción (get_selected_text() da None en ese instante) — con este
-        cache, action_copy_or_quit puede usar el texto que YA se capturó
-        durante el drag. E2E real: click derecho copiaba, ⌘C no.
-        """
+        """Cachea el texto en el drag-selection."""
         with contextlib.suppress(Exception):
             super().selection_updated(selection)
         if selection is None:
             # no sobreescribir el cache con None (se limpia por keystroke)
             return
         try:
-            plain = self.app._pane_text.plain
-            if plain:
-                extracted = selection.extract(plain)
-                if extracted:
-                    self.app._last_selected_text = extracted
+            sel = self.app.screen.get_selected_text()
+            if sel and sel.strip():
+                self.app._last_selected_text = sel
         except Exception:
             pass
 
@@ -198,10 +173,6 @@ class FullscreenTUI(App):
         background: #121212;
         border: none;
         padding: 0 1;
-    }
-    #pane_text {
-        width: 100%;
-        background: #121212;
     }
     #input {
         height: 6;
@@ -253,7 +224,7 @@ class FullscreenTUI(App):
         self.pane_writer = PaneWriter()
         self._busy_count = 0
         self._busy_lock = threading.Lock()
-        self._pane_text: Text = Text()   # acumulado único del pane
+        self._plain_tail: str = ""   # últimas ~200k chars, solo para fallback
         self._exit_armed = False         # confirmación de salida (ctl+c ×2)
         self._last_selected_text = ""    # cache del drag-selection (⌘C)
         # Modelo real cargado en llama-server: se detecta lazy al primer
@@ -262,7 +233,6 @@ class FullscreenTUI(App):
         # Render de markdown por segmento (marcadores de display.console)
         self._md_active = False
         self._md_raw = ""
-        self._md_start = 0
         # Sugerencias de slash commands (tira sobre el input, estilo opencode)
         self._slash_matches: list[tuple[str, str]] = []
         self._slash_index = 0
@@ -271,10 +241,8 @@ class FullscreenTUI(App):
     # ── UI ─────────────────────────────────────────────────────────────
     def compose(self) -> ComposeResult:
         yield Static(id="header")
-        yield VerticalScroll(
-            SelectablePane(id="pane_text", markup=False),
-            id="pane",
-        )
+        yield SelectablePane(id="pane", wrap=True, markup=False,
+                               max_lines=3000)
         yield Static(id="toolbar")
         yield Static(id="slash-hint")
         yield TextArea(id="input", text="")
@@ -348,75 +316,81 @@ class FullscreenTUI(App):
 
     # ── output: append al pane (SIEMPRE en hilo de UI, vía _pull_pane) ─
     def _append_pane(self, raw: str) -> None:
-        """Append del streaming a UN ÚNICO Text acumulado (no entradas).
+        """Append por LÍNEA al RichLog (virtualizado, sin re-layout total).
 
         Además procesa los marcadores MD_BEGIN/MD_END de display.console:
-        el tramo entre marcadores es markdown CRUDO del LLM; al llegar MD_END
-        se reemplaza por la versión renderizada (rich Markdown) vía splice.
-        Mientras llega, se muestra crudo (streaming honesto).
+        el tramo markdown se BUFFEREA sin mostrar y al llegar MD_END se
+        escribe ya renderizado (o crudo si es gigante). Sin splices O(n):
+        el crudo nunca entra al log, así que no hay que reemplazar nada.
         """
         while raw:
             if self._md_active:
                 end_idx = raw.find(MD_END)
                 if end_idx == -1:
                     self._md_raw += raw
-                    self._append_plain(raw)
                     break
                 self._md_raw += raw[:end_idx]
-                self._append_plain(raw[:end_idx])
                 self._flush_markdown()
                 raw = raw[end_idx + len(MD_END):]
                 continue
             begin_idx = raw.find(MD_BEGIN)
             if begin_idx == -1:
-                self._append_plain(raw)
+                self._write_lines(raw)
                 break
-            self._append_plain(raw[:begin_idx])
+            if begin_idx:
+                self._write_lines(raw[:begin_idx])
             self._md_active = True
             self._md_raw = ""
-            self._md_start = len(self._pane_text.plain)
             raw = raw[begin_idx + len(MD_BEGIN):]
-        self._trim_and_update()
 
-    def _append_plain(self, raw: str) -> None:
-        """Acumula texto tal cual (con ANSI → estilos rich), sin refrescar.
-
-        El refresco del widget se hace UNA vez al final de _append_pane /
-        _flush_markdown: antes cada fragmento re-layouteaba el Static de
-        200k chars (lento con tablas grandes + scroll/selección tediosos).
-        """
+    def _write_lines(self, raw: str) -> None:
+        """Escribe el chunk al RichLog (Text ANSI → líneas) + tail fallback."""
         if not raw:
             return
+        if self._plain_tail or len(raw) > 0:
+            self._plain_tail = (self._plain_tail + raw)[-_MAX_PANE_CHARS:]
+        try:
+            pane = self.query_one("#pane", SelectablePane)
+        except Exception:
+            return
+        try:
+            at_end = pane.scroll_offset.y >= pane.max_scroll_y
+        except Exception:
+            at_end = True
         try:
             frag = Text.from_ansi(raw)
         except Exception:
             frag = Text(raw, style="dim")
-        self._pane_text.append_text(frag)
+        with contextlib.suppress(Exception):
+            pane.write(frag, scroll_end=at_end)
 
     def _flush_markdown(self) -> None:
-        """Reemplaza el tramo crudo [MD_BEGIN..MD_END] por el renderizado."""
+        """Escribe el tramo markdown buffereado (renderizado o crudo)."""
         self._md_active = False
-        if len(self._md_raw) > _MD_MAX_RENDER_CHARS:
+        raw, self._md_raw = self._md_raw, ""
+        if not raw:
+            return
+        if len(raw) > _MD_MAX_RENDER_CHARS:
             # Tablas gigantes (veredictos de pool): renderarlas congela la
             # UI; el crudo ya es legible y seleccionable.
-            self._trim_and_update()
+            self._write_lines(raw)
             return
         try:
-            rendered = self._render_markdown(self._md_raw)
+            rendered = self._render_markdown(raw)
         except Exception:
-            return  # fail-open: queda el crudo, que ya es legible
-        plain = self._pane_text.plain
-        idx = plain.find(self._md_raw, max(0, self._md_start - 2000))
-        if idx == -1:
-            return  # trim/edge: mejor dejar el crudo que corromper el pane
-        pre = self._pane_text[:idx]
-        post = self._pane_text[idx + len(self._md_raw):]
-        nuevo = Text()
-        nuevo.append_text(pre)
-        nuevo.append_text(rendered)
-        nuevo.append_text(post)
-        self._pane_text = nuevo
-        self._trim_and_update()
+            self._write_lines(raw)  # fail-open: crudo legible
+            return
+        try:
+            pane = self.query_one("#pane", SelectablePane)
+        except Exception:
+            return
+        try:
+            at_end = pane.scroll_offset.y >= pane.max_scroll_y
+        except Exception:
+            at_end = True
+        with contextlib.suppress(Exception):
+            pane.write(rendered, scroll_end=at_end)
+        self._plain_tail = (self._plain_tail + raw)[-_MAX_PANE_CHARS:]
 
     def _render_markdown(self, md: str) -> Text:
         import io
@@ -431,22 +405,9 @@ class FullscreenTUI(App):
         return Text.from_ansi(buf.getvalue())
 
     def _trim_and_update(self) -> None:
-        if len(self._pane_text.plain) > _MAX_PANE_CHARS:
-            excess = len(self._pane_text.plain) - _MAX_PANE_CHARS
-            self._pane_text = Text(self._pane_text.plain[excess:], style="dim")
-        self.query_one("#pane_text", Static).update(self._pane_text)
-        # Auto-follow CONDICIONAL: solo scrollear al fondo si el usuario ya
-        # está pegado al fondo (como tail -f). Si el usuario scrolleó hacia
-        # arriba para leer mientras el agente escribe, NO lo movemos —
-        # esa era la queja: el streaming lo clavaba al fondo siempre.
-        # is_scroll_end no existe en Textual 8.x → comparación manual de
-        # scroll_offset.y contra max_scroll_y.
-        try:
-            pane = self.query_one("#pane", VerticalScroll)
-            if pane.scroll_offset.y >= pane.max_scroll_y:
-                pane.scroll_end(animate=False)
-        except Exception:
-            pass
+        """Compat: el RichLog se auto-limita (max_lines) y auto-scrollea
+        por write(scroll_end=). Se conserva el nombre por llamadas viejas."""
+        return
 
     # ── toolbar ────────────────────────────────────────────────────────
     def _refresh_toolbar(self) -> None:
@@ -762,11 +723,11 @@ class FullscreenTUI(App):
     # ── API ────────────────────────────────────────────────────────────
     def clear_pane(self) -> None:
         """Limpia el acumulado (/new): sesión nueva, panel nuevo."""
-        self._pane_text = Text()
+        self._plain_tail = ""
         self._md_active = False
         self._md_raw = ""
         with contextlib.suppress(Exception):
-            self.query_one("#pane_text", Static).update(self._pane_text)
+            self.query_one("#pane", SelectablePane).clear()
 
     def write(self, text: str) -> None:
         """Output del harness → panel (thread-safe)."""
