@@ -38,6 +38,7 @@ def _is_approval_text(text: str) -> bool:
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _MAX_PANE_CHARS = 200_000   # tope de memoria del pane (trims desde el head)
+_MD_MAX_RENDER_CHARS = 8_000  # markdown mayor que esto queda crudo (no render)
 
 
 class PaneWriter:
@@ -360,7 +361,7 @@ class FullscreenTUI(App):
                 if end_idx == -1:
                     self._md_raw += raw
                     self._append_plain(raw)
-                    return
+                    break
                 self._md_raw += raw[:end_idx]
                 self._append_plain(raw[:end_idx])
                 self._flush_markdown()
@@ -369,15 +370,21 @@ class FullscreenTUI(App):
             begin_idx = raw.find(MD_BEGIN)
             if begin_idx == -1:
                 self._append_plain(raw)
-                return
+                break
             self._append_plain(raw[:begin_idx])
             self._md_active = True
             self._md_raw = ""
             self._md_start = len(self._pane_text.plain)
             raw = raw[begin_idx + len(MD_BEGIN):]
+        self._trim_and_update()
 
     def _append_plain(self, raw: str) -> None:
-        """Acumula texto tal cual (con ANSI → estilos rich) y refresca."""
+        """Acumula texto tal cual (con ANSI → estilos rich), sin refrescar.
+
+        El refresco del widget se hace UNA vez al final de _append_pane /
+        _flush_markdown: antes cada fragmento re-layouteaba el Static de
+        200k chars (lento con tablas grandes + scroll/selección tediosos).
+        """
         if not raw:
             return
         try:
@@ -385,11 +392,15 @@ class FullscreenTUI(App):
         except Exception:
             frag = Text(raw, style="dim")
         self._pane_text.append_text(frag)
-        self._trim_and_update()
 
     def _flush_markdown(self) -> None:
         """Reemplaza el tramo crudo [MD_BEGIN..MD_END] por el renderizado."""
         self._md_active = False
+        if len(self._md_raw) > _MD_MAX_RENDER_CHARS:
+            # Tablas gigantes (veredictos de pool): renderarlas congela la
+            # UI; el crudo ya es legible y seleccionable.
+            self._trim_and_update()
+            return
         try:
             rendered = self._render_markdown(self._md_raw)
         except Exception:

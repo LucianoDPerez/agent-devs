@@ -604,20 +604,36 @@ def _grep_holds(pattern: str, content: str) -> bool:
         return False
 
 
-# Todo lo posterior a estos delimitadores habla de lo PROHIBIDO/ausente
-# ("y NO existen X", "(NO X)", "PROHIBIDO ...", "SIN width") y NO debe
-# exigirse como presente. Ver T004: "...; y NO existen .../:root" — ese
-# :root es prohibido, no requerido.
+# Delimitadores de SECCIÓN prohibida: todo lo posterior es ausente
+# ("y NO existen X", "NO contiene", "PROHIBIDO ..."). Ver T004.
+# Los inline "(NO X)" y "SIN width" NO parten la sección: solo el token
+# siguiente es prohibido, el resto sigue siendo requerido (T010:
+# ".steps__hint (NO .install__hint), .gallery__grid..." — gallery sigue
+# siendo requerido).
 _NEG_SPLIT_RE = re.compile(
     r";\s*y\s+NO\s+existe[ns]?\b"
     r"|\by\s+NO\s+existe[ns]?\b"
     r"|\bNO\s+existe[ns]?\b"
     r"|\bNO\s+contiene\b"
-    r"|\(NO\b"
-    r"|\bPROHIBIDO\b"
-    r"|\bSIN\s+width\b",
+    r"|\bPROHIBIDO\b",
     re.IGNORECASE,
 )
+# Prohibiciones INLINE: solo el fragmento entre paréntesis / la palabra
+# siguiente, sin tragar el resto del criterio.
+_INLINE_FORBIDDEN_RES = (
+    re.compile(r"\(NO\s+([^)]+)\)", re.IGNORECASE),
+    re.compile(r"\bSIN\s+(\w[\w/-]*)", re.IGNORECASE),
+)
+
+
+def _inline_forbidden_fragments(criterion: str) -> list[str]:
+    out: list[str] = []
+    for rx in _INLINE_FORBIDDEN_RES:
+        for m in rx.finditer(criterion or ""):
+            frag = m.group(1) if m.lastindex else m.group(0)
+            if frag:
+                out.append(frag)
+    return out
 
 
 def _split_required_forbidden(criterion: str) -> tuple[str, str]:
@@ -640,6 +656,10 @@ def _criterion_markers(criterion: str) -> list[str]:
     presente cuando el AC lo prohibía).
     """
     required, _forbidden = _split_required_forbidden(criterion)
+    # Quitar fragmentos inline prohibidos del cálculo de requeridos:
+    # "(NO .install__hint)" no vuelve requerido a install__hint.
+    for frag in _inline_forbidden_fragments(criterion):
+        required = required.replace(frag, " ")
     out: list[str] = []
     for rx in _MARKER_RES:
         for m in rx.finditer(required or ""):
@@ -650,14 +670,16 @@ def _criterion_markers(criterion: str) -> list[str]:
 
 
 def _forbidden_markers(criterion: str) -> list[str]:
-    """Marcadores que deben estar AUSENTES (parte tras NO existen/PROHIBIDO)."""
+    """Marcadores que deben estar AUSENTES (sección NO... + inline)."""
     _required, forbidden = _split_required_forbidden(criterion)
+    frags = [forbidden] + _inline_forbidden_fragments(criterion)
     out: list[str] = []
-    for rx in _MARKER_RES:
-        for m in rx.finditer(forbidden or ""):
-            val = m.group(1) if m.lastindex else m.group(0)
-            if val and val not in out and val not in _META_TOKENS:
-                out.append(val)
+    for frag in frags:
+        for rx in _MARKER_RES:
+            for m in rx.finditer(frag or ""):
+                val = m.group(1) if m.lastindex else m.group(0)
+                if val and val not in out and val not in _META_TOKENS:
+                    out.append(val)
     return out
 
 
