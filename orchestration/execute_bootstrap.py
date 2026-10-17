@@ -532,14 +532,25 @@ _SHELL_RUN_RES = (
     "npx ", "npm ", "pytest", "cargo test", "go test", "vitest",
     "python3 -m http", "curl ", "TZ=",
 )
+# Nombres de tools: son META (cómo verificar), no contenido exigido.
+# Si entran a marcadores, todo read_file fallaría ("read_file" no está
+# dentro del archivo verificado). E2E: test_list_y_read.
+_META_TOKENS = frozenset({"read_file", "list_files", "write_file", "edit_file", "grep"})
 # Tokens de archivo en criterios (tui.png, route.ts, ...).
 _FILENAME_RE = re.compile(r"[\w][\w.@+-]*\.[a-zA-Z0-9]{1,5}\b")
-# Marcadores de contenido en criterios read_file (--var, :root, `literal`).
+# Marcadores de contenido en criterios read_file (--var, :root, literales).
+# Incluye ## headings, "dobles", ids snake (tool names), fracciones y URLs:
+# el verify de T011 solo traía --port y pasaba con cualquier archivo mínimo.
 _MARKER_RES = (
     re.compile(r"--[\w-]+"),
     re.compile(r":root\b"),
     re.compile(r"`([^`]{2,120})`"),
     re.compile(r"'((?:[^'\\]|\\.){3,120})'"),
+    re.compile(r'"([^"]{3,120})"'),
+    re.compile(r"##\s+[\w-]+"),
+    re.compile(r"\b[a-z][a-z0-9]*_[a-z0-9_]+\b"),
+    re.compile(r"\b\d+/\d+%?\b"),
+    re.compile(r"https?://[^\s,;)\]]+"),
 )
 
 
@@ -593,13 +604,59 @@ def _grep_holds(pattern: str, content: str) -> bool:
         return False
 
 
+# Todo lo posterior a estos delimitadores habla de lo PROHIBIDO/ausente
+# ("y NO existen X", "(NO X)", "PROHIBIDO ...", "SIN width") y NO debe
+# exigirse como presente. Ver T004: "...; y NO existen .../:root" — ese
+# :root es prohibido, no requerido.
+_NEG_SPLIT_RE = re.compile(
+    r";\s*y\s+NO\s+existe[ns]?\b"
+    r"|\by\s+NO\s+existe[ns]?\b"
+    r"|\bNO\s+existe[ns]?\b"
+    r"|\bNO\s+contiene\b"
+    r"|\(NO\b"
+    r"|\bPROHIBIDO\b"
+    r"|\bSIN\s+width\b",
+    re.IGNORECASE,
+)
+
+
+def _split_required_forbidden(criterion: str) -> tuple[str, str]:
+    """Parte requerida vs parte prohibida del criterio.
+
+    Retorna (requerido, prohibido). Sin delimitador de negación,
+    prohibido es "".
+    """
+    m = _NEG_SPLIT_RE.search(criterion or "")
+    if not m:
+        return criterion or "", ""
+    return (criterion or "")[:m.start()], (criterion or "")[m.end():]
+
+
 def _criterion_markers(criterion: str) -> list[str]:
-    """Marcadores de contenido exigibles (--var, :root, literales)."""
+    """Marcadores de contenido exigibles (--var, :root, literales).
+
+    Solo de la parte requerida: lo que está tras "NO existen/PROHIBIDO"
+    es prohibido y no se exige como presente (bug T004: pedía :root
+    presente cuando el AC lo prohibía).
+    """
+    required, _forbidden = _split_required_forbidden(criterion)
     out: list[str] = []
     for rx in _MARKER_RES:
-        for m in rx.finditer(criterion or ""):
+        for m in rx.finditer(required or ""):
             val = m.group(1) if m.lastindex else m.group(0)
-            if val and val not in out:
+            if val and val not in out and val not in _META_TOKENS:
+                out.append(val)
+    return out
+
+
+def _forbidden_markers(criterion: str) -> list[str]:
+    """Marcadores que deben estar AUSENTES (parte tras NO existen/PROHIBIDO)."""
+    _required, forbidden = _split_required_forbidden(criterion)
+    out: list[str] = []
+    for rx in _MARKER_RES:
+        for m in rx.finditer(forbidden or ""):
+            val = m.group(1) if m.lastindex else m.group(0)
+            if val and val not in out and val not in _META_TOKENS:
                 out.append(val)
     return out
 
@@ -728,6 +785,9 @@ def evaluate_task_criterion(tasks_file: str, num: int,
         missing = [mk for mk in _criterion_markers(criterion) if mk not in content]
         if missing:
             return False, f"faltan marcadores en {Path(target).name}: " + ", ".join(missing[:6])
+        bad = [mk for mk in _forbidden_markers(criterion) if mk in content]
+        if bad:
+            return False, f"contiene prohibido en {Path(target).name}: " + ", ".join(bad[:6])
         return True, f"read_file OK ({Path(target).name} con marcadores)"
 
     return None, "criterio no evaluable estáticamente"
@@ -2033,7 +2093,7 @@ def _build_preload_parts(
         + scope_rule
         + "El contenido relevante YA ESTÁ ARRIBA (tasks + layout + .env.example + main). "
         "PLAN: leé los ARCHIVOS de la tarea con read_file (los archivos de enganche "
-        "están citados en la tarea; leélos TODOS antes de escribir, sin list_files). "
+        "están citados en la tarea; leélos TODOS antes de escribir, sin list_files). Si el AC pide leer un README/producto: leé ACOTADO (start_line=1 end_line=80), no entero. Si el archivo a crear supera ~150 líneas: escribí en 2 pasos (write_file primera mitad + edit_file append), no un write gigante. "
         "Después escribí con write_file o edit_file la implementación completa. "
         "DIFF MÍNIMO: seguí el PLAN DE ARCHIVOS MÍNIMOS; no inventes CRUD/controllers/secrets. "
         "ENV.md en la RAÍZ del repo (solo vars del AC). "
