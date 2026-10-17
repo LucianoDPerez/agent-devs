@@ -24,6 +24,7 @@ import traceback
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.strip import Strip
 from textual.widgets import RichLog, Static, TextArea
 
 from display.console import MD_BEGIN, MD_END, harness_head
@@ -36,7 +37,6 @@ def _is_approval_text(text: str) -> bool:
     return normalize(text) in ("s", "si", "y", "yes", "n", "no")
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-_MAX_PANE_CHARS = 200_000   # tope de memoria del pane (trims desde el head)
 _MD_MAX_RENDER_CHARS = 8_000  # markdown mayor que esto queda crudo (no render)
 
 
@@ -110,38 +110,93 @@ class SelectablePane(RichLog):
     RichLog virtualiza por línea: solo renderiza lo visible y descarta
     lo viejo con max_lines (sin copias O(n) ni splices).
 
-    Selección: a diferencia del Static (devolvía RichVisual y había que
-    mapear offsets a mano), RichLog expone texto real y
-    Screen.get_selected_text() funciona nativo. Este handler solo
-    cachea durante el drag, porque Ctrl+C limpia la selección ANTES de
-    la acción (E2E real: click derecho copiaba, ⌘C no).
+    Selección: el RichLog upstream no trae offsets de selección (su
+    get_selection heredado devuelve None y el drag no pinta nada).
+    Acá se agregan como TextLog: render_line aplica offsets + hornea
+    el highlight del span, y get_selection extrae de las propias
+    líneas del log (alineación 1:1 por construcción).
     """
 
-    def get_selection(self, selection) -> tuple[str, str] | None:
-        """Extrae del tail plano (el _render del RichLog es Visual genérico
-        y el get_selection heredado devuelve None → sin esto no hay copia).
-        El tail guarda el plain visible (sin ANSI), con los mismos saltos
-        que lo escrito, así los offsets de línea del drag mapean bien."""
+    def render_line(self, y: int) -> Strip:
+        """Fila visible con offsets de selección + highlight horneado."""
+        scroll_x, scroll_y = self.scroll_offset
         try:
-            plain = self.app._plain_tail
+            strip = super().render_line(y)
+        except Exception:
+            return Strip.blank(self.size.width if self.size else 80)
+        try:
+            strip = strip.apply_offsets(scroll_x, scroll_y + y)
+        except Exception:
+            pass
+        try:
+            selection = self.text_selection
+        except Exception:
+            selection = None
+        if selection is not None:
+            try:
+                span = selection.get_span(scroll_y + y)
+            except Exception:
+                span = None
+            if span is not None:
+                start, end = span
+                try:
+                    text = strip.text
+                    if end == -1 or end > len(text):
+                        end = len(text)
+                    if start < end:
+                        style = self.screen.get_component_rich_style(
+                            "screen--selection"
+                        )
+                        rebuilt = Text()
+                        for seg in strip:
+                            rebuilt.append(
+                                seg.text, style=seg.style or None
+                            )
+                        rebuilt.stylize(style, start, end)
+                        console = self.app.console
+                        try:
+                            options = console.options.update_width(
+                                max(strip.cell_length, len(rebuilt.plain), 1)
+                            )
+                            segments = console.render(rebuilt, options)
+                        except Exception:
+                            segments = console.render(rebuilt)
+                        strip = Strip(
+                            list(segments), strip.cell_length
+                        )
+                except Exception:
+                    pass
+        return strip
+
+    def get_selection(self, selection) -> tuple[str, str] | None:
+        """Extrae de las propias líneas del log (alineación exacta)."""
+        try:
+            text = "\n".join(line.text for line in self.lines)
         except Exception:
             return None
-        if not plain:
+        if not text.strip():
             return None
         try:
-            return selection.extract(plain), "\n"
+            return selection.extract(text), "\n"
         except Exception:
             return None
 
     def selection_updated(self, selection) -> None:
-        """Cachea el texto en el drag-selection."""
+        """Cachea el texto + invalida highlight (el _line_cache del
+        RichLog no contempla selección y dejaría el pintado rancio)."""
+        try:
+            self._line_cache.clear()
+        except Exception:
+            pass
         with contextlib.suppress(Exception):
             super().selection_updated(selection)
+        with contextlib.suppress(Exception):
+            self.refresh()
         if selection is None:
             # no sobreescribir el cache con None (se limpia por keystroke)
             return
         try:
-            sel = self.app._plain_tail and selection.extract(self.app._plain_tail)
+            sel = self.app.screen.get_selected_text()
             if sel and sel.strip():
                 self.app._last_selected_text = sel
         except Exception:
@@ -240,7 +295,6 @@ class FullscreenTUI(App):
         self.pane_writer = PaneWriter()
         self._busy_count = 0
         self._busy_lock = threading.Lock()
-        self._plain_tail: str = ""   # últimas ~200k chars, solo para fallback
         self._exit_armed = False         # confirmación de salida (ctl+c ×2)
         self._last_selected_text = ""    # cache del drag-selection (⌘C)
         # Modelo real cargado en llama-server: se detecta lazy al primer
@@ -359,19 +413,14 @@ class FullscreenTUI(App):
             self._md_raw = ""
             raw = raw[begin_idx + len(MD_BEGIN):]
 
-    def _write_lines(self, raw: str) -> None:
-        """Escribe el chunk al RichLog (Text ANSI -> lineas) + tail fallback.
+    def _write_text_rows(self, frag: Text) -> None:
+        """Escribe un Text al RichLog fila por fila (1 write = 1 fila).
 
-        El tail guarda el PLAIN visible (sin codigos ANSI): los offsets de
-        la seleccion cuentan caracteres visibles, asi el extract mapea bien.
+        RichLog abre fila nueva por write: si se escribe el chunk tal cual,
+        el "\n" final genera una tira vacia fantasma e infla el log al
+        doble. Partiendo por "\n" (split preserva los spans ANSI) cada
+        fila lógica queda en su propia tira.
         """
-        if not raw:
-            return
-        try:
-            frag = Text.from_ansi(raw)
-        except Exception:
-            frag = Text(raw, style="dim")
-        self._plain_tail = (self._plain_tail + frag.plain)[-_MAX_PANE_CHARS:]
         try:
             pane = self.query_one("#pane", SelectablePane)
         except Exception:
@@ -381,11 +430,28 @@ class FullscreenTUI(App):
         except Exception:
             at_end = True
         try:
+            parts = frag.split("\n")
+        except Exception:
+            parts = [frag]
+        while parts and not parts[-1].plain:
+            parts.pop()
+        if not parts:
+            with contextlib.suppress(Exception):
+                pane.write(Text(""), scroll_end=at_end)
+            return
+        for part in parts:
+            with contextlib.suppress(Exception):
+                pane.write(part, scroll_end=at_end)
+
+    def _write_lines(self, raw: str) -> None:
+        """Chunk crudo -> Text ANSI -> filas del RichLog."""
+        if not raw:
+            return
+        try:
             frag = Text.from_ansi(raw)
         except Exception:
             frag = Text(raw, style="dim")
-        with contextlib.suppress(Exception):
-            pane.write(frag, scroll_end=at_end)
+        self._write_text_rows(frag)
 
     def _flush_markdown(self) -> None:
         """Escribe el tramo markdown buffereado (renderizado o crudo)."""
@@ -403,21 +469,7 @@ class FullscreenTUI(App):
         except Exception:
             self._write_lines(raw)  # fail-open: crudo legible
             return
-        try:
-            pane = self.query_one("#pane", SelectablePane)
-        except Exception:
-            return
-        try:
-            at_end = pane.scroll_offset.y >= pane.max_scroll_y
-        except Exception:
-            at_end = True
-        with contextlib.suppress(Exception):
-            pane.write(rendered, scroll_end=at_end)
-        try:
-            rendered_plain = rendered.plain
-        except Exception:
-            rendered_plain = raw
-        self._plain_tail = (self._plain_tail + rendered_plain)[-_MAX_PANE_CHARS:]
+        self._write_text_rows(rendered)
 
     def _render_markdown(self, md: str) -> Text:
         import io
@@ -750,7 +802,6 @@ class FullscreenTUI(App):
     # ── API ────────────────────────────────────────────────────────────
     def clear_pane(self) -> None:
         """Limpia el acumulado (/new): sesión nueva, panel nuevo."""
-        self._plain_tail = ""
         self._md_active = False
         self._md_raw = ""
         with contextlib.suppress(Exception):
