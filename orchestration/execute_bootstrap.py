@@ -541,12 +541,15 @@ _FILENAME_RE = re.compile(r"[\w][\w.@+-]*\.[a-zA-Z0-9]{1,5}\b")
 # Marcadores de contenido en criterios read_file (--var, :root, literales).
 # Incluye ## headings, "dobles", ids snake (tool names), fracciones y URLs:
 # el verify de T011 solo traía --port y pasaba con cualquier archivo mínimo.
+# NOTA: los literales usan {1,120} en el regex y filtran por largo en
+# código. Con {3,120} en el regex, un `"en"` (2 chars) se rechaza y el
+# motor reapareja Q2->Q3 capturando el MEDIO (T012: ", title literal...").
 _MARKER_RES = (
     re.compile(r"--[\w-]+"),
     re.compile(r":root\b"),
-    re.compile(r"`([^`]{2,120})`"),
-    re.compile(r"'((?:[^'\\]|\\.){3,120})'"),
-    re.compile(r'"([^"]{3,120})"'),
+    re.compile(r"`([^`]{1,120})`"),
+    re.compile(r"'((?:[^'\\]|\\.){1,120})'"),
+    re.compile(r'"([^"]{1,120})"'),
     re.compile(r"##\s+[\w-]+"),
     re.compile(r"\b[a-z][a-z0-9]*_[a-z0-9_]+\b"),
     re.compile(r"\b\d+/\d+%?\b"),
@@ -664,8 +667,11 @@ def _criterion_markers(criterion: str) -> list[str]:
     for rx in _MARKER_RES:
         for m in rx.finditer(required or ""):
             val = m.group(1) if m.lastindex else m.group(0)
-            if val and val not in out and val not in _META_TOKENS:
-                out.append(val)
+            if not val or val in _META_TOKENS or val in out:
+                continue
+            if len(val.strip()) < 3:
+                continue  # "en", "32": ruido que además despareja comillas
+            out.append(val)
     return out
 
 
@@ -678,8 +684,11 @@ def _forbidden_markers(criterion: str) -> list[str]:
         for rx in _MARKER_RES:
             for m in rx.finditer(frag or ""):
                 val = m.group(1) if m.lastindex else m.group(0)
-                if val and val not in out and val not in _META_TOKENS:
-                    out.append(val)
+                if not val or val in _META_TOKENS or val in out:
+                    continue
+                if len(val.strip()) < 3:
+                    continue
+                out.append(val)
     return out
 
 
