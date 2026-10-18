@@ -740,6 +740,44 @@ def _md_integrity_violation(before: dict, after: dict) -> str:
     return ""
 
 
+_MARKER_LINE_RE = re.compile(r"^\s*<!--.*?-->\s*$", re.MULTILINE)
+
+
+def _marker_violation(before: str, after: str) -> str:
+    """Mensaje de rechazo si el edit borra o duplica líneas-marcador HTML.
+
+    Los comentarios <!-- ... --> en su propia línea son ANCLAS de sección
+    (E2E landing: T018 mangló <!-- FOOTER --> y bloqueó T021; T014/T015
+    dejaron <!-- /NAV --> y <!-- SECTIONS --> duplicados/huérfanos). Un
+    edit quirúrgico inserta ENTRE marcadores, nunca los toca: si el conteo
+    de una línea-marcador preexistente baja (borrada) o sube (duplicada),
+    se rechaza. Agregar marcadores NUEVOS se permite (T012 crea el
+    esqueleto con write_file; en existentes nadie los necesita, pero no se
+    castiga innovar).
+    """
+    from collections import Counter
+
+    b = Counter(
+        m.group(0).strip() for m in _MARKER_LINE_RE.finditer(before)
+    )
+    a = Counter(
+        m.group(0).strip() for m in _MARKER_LINE_RE.finditer(after)
+    )
+    for marker, n in b.items():
+        m = a.get(marker, 0)
+        if m < n:
+            return (
+                f"borra el marcador '{marker}' ({n}→{m}) — los marcadores "
+                "<!-- ... --> son anclas de sección, preservalos tal cual"
+            )
+        if m > n:
+            return (
+                f"duplica el marcador '{marker}' ({n}→{m}) — los marcadores "
+                "<!-- ... --> son anclas de sección, preservalos tal cual"
+            )
+    return ""
+
+
 @tool
 def make_dir(path: str) -> str:
     """
@@ -1070,6 +1108,20 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
                 "NO lo reintentes."
             )
 
+    # GUARD MARCADORES: las líneas <!-- ... --> son anclas de sección
+    # (E2E landing: T018 borró <!-- FOOTER --> y bloqueó T021). Un edit
+    # inserta ENTRE marcadores, nunca los borra ni duplica.
+    _marker_bad = _marker_violation(content, new_content)
+    if _marker_bad:
+        return (
+            f"⛔ Edit RECHAZADO por marcadores en {path}: {_marker_bad}.\n"
+            "El archivo NO fue modificado.\n"
+            "PROCEDÉ ASÍ:\n"
+            f"  1) read_file(path='{path}') para ver los marcadores REALES.\n"
+            "  2) Rehacé el edit incluyendo los marcadores tal cual en "
+            "old_str y new_str (solo cambia el contenido ENTRE ellos)."
+        )
+
     p.write_text(new_content, encoding="utf-8")
     return f"✅ Replaced block in {path}"
 
@@ -1203,6 +1255,15 @@ def apply_patch(path: str, edits: str) -> str:
                 "status pending→DONE. Tu patch cambiaría MÁS COSAS — no está "
                 "permitido. NO lo reintentes."
             )
+    # GUARD MARCADORES (igual que edit_file): no borrar ni duplicar
+    # líneas <!-- ... --> preexistentes (E2E landing T018→T021).
+    _marker_bad = _marker_violation(content, new_content)
+    if _marker_bad:
+        return (
+            f"⛔ Patch RECHAZADO por marcadores en {path}: {_marker_bad}.\n"
+            "Nada fue escrito. Releé con read_file y preservá los "
+            "marcadores tal cual en old_string/new_string."
+        )
     p.write_text(new_content, encoding="utf-8")
     return f"✅ Applied {len(parsed)} patch(es) to {path} atomically (1 approval)."
 

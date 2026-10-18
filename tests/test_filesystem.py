@@ -936,3 +936,33 @@ class TestCopyFile:
         assert out.startswith("✅")
         assert "SECRETO" not in out
 
+
+
+def test_marker_guard_rechaza_borrado_y_duplicado(tmp_path):
+    """Regresión E2E landing: T018 mangló <!-- FOOTER --> y bloqueó T021.
+    Las líneas-marcador son anclas: ni borrar ni duplicar; insertar entre
+    ellas y agregar nuevas sí pasa."""
+    from tools.filesystem import apply_patch, edit_file, read_file
+
+    p = tmp_path / "index.html"
+    p.write_text("<!-- A -->\n<p>x</p>\n<!-- /A -->\n", encoding="utf-8")
+    read_file.invoke({"path": str(p)})
+
+    out = edit_file.invoke({"path": str(p),
+                            "old_str": "<!-- A -->\n<p>x</p>",
+                            "new_str": "<p>x</p>"})
+    assert "marcador" in out and "NO fue modificado" in out
+    assert "<!-- A -->" in p.read_text(encoding="utf-8")
+
+    out = edit_file.invoke({"path": str(p),
+                            "old_str": "<p>x</p>",
+                            "new_str": "<p>x</p>\n<!-- /A -->"})
+    assert "marcador" in out
+    assert p.read_text(encoding="utf-8").count("<!-- /A -->") == 1
+
+    out = apply_patch.invoke({
+        "path": str(p),
+        "edits": '[{"old_string": "<p>x</p>", "new_string": "<p>x</p>\\n<p>y</p>"}]',
+    })
+    assert out.startswith("✅")
+    assert "<p>y</p>" in p.read_text(encoding="utf-8")
