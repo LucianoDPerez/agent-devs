@@ -1782,6 +1782,7 @@ class Session:
         Si commit_each, commitea alcance sesion por tarea. Retorna resumen.
         """
         from orchestration.execute_bootstrap import (
+            _load_task_entry,
             _pool_dep_map,
             ensure_task_done,
             evaluate_task_criterion,
@@ -1796,6 +1797,36 @@ class Session:
         for idx, n in enumerate(numbers):
             unmet = [d for d in depmap.get(n, ()) if d in failed or d in blocked]
             if unmet:
+                # La tarea está bloqueada por dependencias caídas, PERO si ya
+                # estaba DONE y el disco todavía cumple su criterio no hay
+                # trabajo que hacer (E2E landing: T016 falló honesto y bloqueó
+                # 10 tareas aunque T017/T018/T019 seguían True en disco de un
+                # pool previo). Consistente con "el criterio contra el disco
+                # manda": se confirma sin correr turno (bookkeeping, sin
+                # escrituras). OJO: solo si ya estaba DONE — nunca se
+                # COMPLETA nuevo sobre base rota (una TODO sigue bloqueada
+                # aunque su criterio pase de casualidad).
+                if tasks_file:
+                    try:
+                        b_verdict, b_ev = evaluate_task_criterion(
+                            tasks_file, n, self.repo_path)
+                    except Exception:
+                        b_verdict, b_ev = None, "veredicto no evaluable"
+                    if b_verdict is True:
+                        try:
+                            _b_entry = _load_task_entry(tasks_file, n)
+                            _b_status = str((_b_entry or {}).get("status")
+                                            or "").upper()
+                        except Exception:
+                            _b_status = ""
+                        if _b_status == "DONE":
+                            console.print(
+                                f"\n[dim]✅ T{n:03d} bloqueada pero ya estaba "
+                                f"DONE y sigue cumplida en disco ({b_ev}) — "
+                                f"se confirma.[/dim]")
+                            results.append({"tarea": n, "status": "ok",
+                                            "commit": ""})
+                            continue
                 blocked[n] = unmet
                 dep_txt = ", ".join(f"T{d:03d}" for d in sorted(unmet)[:3])
                 status = f"bloqueada (depende de {dep_txt} no completada)"
