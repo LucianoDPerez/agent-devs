@@ -627,6 +627,20 @@ _INLINE_FORBIDDEN_RES = (
     re.compile(r"\(NO\s+([^)]+)\)", re.IGNORECASE),
     re.compile(r"\bSIN\s+(\w[\w/-]*)", re.IGNORECASE),
 )
+# Prohibición por cantidad cero: "(0 con atributo open)" (T020). Sin forma
+# NO/SIN, los regex de arriba no la ven y el marcador pasa de largo.
+_ZERO_QTY_ATTR_RE = re.compile(
+    r"\(\s*(?:0|cero)\s+con\s+(?:atributo\s+)?(\w[\w-]*)", re.IGNORECASE)
+
+
+def _zero_qty_attrs(criterion: str) -> list[str]:
+    """Nombres de atributo prohibidos por cantidad cero en el criterio."""
+    out: list[str] = []
+    for m in _ZERO_QTY_ATTR_RE.finditer(criterion or ""):
+        name = m.group(1)
+        if name and name not in out:
+            out.append(name)
+    return out
 
 
 def _inline_forbidden_fragments(criterion: str) -> list[str]:
@@ -819,6 +833,13 @@ def evaluate_task_criterion(tasks_file: str, num: int,
         bad = [mk for mk in _forbidden_markers(criterion) if mk in content]
         if bad:
             return False, f"contiene prohibido en {Path(target).name}: " + ", ".join(bad[:6])
+        # Cantidad cero con atributo HTML: "(0 con atributo open)" (T020).
+        # Match por palabra: \bopen\b no confunde noopener (T012/T013 nav)
+        # ni OpenCode con el atributo open.
+        for attr in _zero_qty_attrs(criterion):
+            if re.search(r"\b" + re.escape(attr) + r"\b", content):
+                return False, (f"contiene prohibido en "
+                               f"{Path(target).name}: atributo {attr}")
         # Proveniencia: si el criterio exige .tool__desc literales de copy.md
         # (T016: "no inventar"), cada desc del HTML debe existir en copy.md.
         # Sin esto el contenido inventado pasa el chequeo de marcadores
