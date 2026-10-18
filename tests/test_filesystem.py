@@ -966,3 +966,26 @@ def test_marker_guard_rechaza_borrado_y_duplicado(tmp_path):
     })
     assert out.startswith("✅")
     assert "<p>y</p>" in p.read_text(encoding="utf-8")
+
+
+def test_marker_guard_permite_dedup_a_1_pero_no_a_0(tmp_path):
+    """Higiene legítima (pedido del usuario: nav huérfano duplicado):
+    2→1 pasa, 1→0 se rechaza, 1→2 se rechaza."""
+    from tools.filesystem import edit_file, read_file
+
+    p = tmp_path / "index.html"
+    p.write_text("<!-- /NAV -->\n<p>x</p>\n<!-- /NAV -->\n",
+                 encoding="utf-8")
+    read_file.invoke({"path": str(p)})
+
+    out = edit_file.invoke({"path": str(p),
+                            "old_str": "<!-- /NAV -->\n<p>x</p>\n<!-- /NAV -->",
+                            "new_str": "<!-- /NAV -->\n<p>x</p>"})
+    assert out.startswith("✅")
+    assert p.read_text(encoding="utf-8").count("<!-- /NAV -->") == 1
+
+    out = edit_file.invoke({"path": str(p),
+                            "old_str": "<!-- /NAV -->\n<p>x</p>",
+                            "new_str": "<p>x</p>"})
+    assert "marcador" in out and "última copia" in out
+    assert "<!-- /NAV -->" in p.read_text(encoding="utf-8")

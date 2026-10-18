@@ -744,16 +744,17 @@ _MARKER_LINE_RE = re.compile(r"^\s*<!--.*?-->\s*$", re.MULTILINE)
 
 
 def _marker_violation(before: str, after: str) -> str:
-    """Mensaje de rechazo si el edit borra o duplica líneas-marcador HTML.
+    """Mensaje de rechazo si el edit rompe anclas de sección.
 
     Los comentarios <!-- ... --> en su propia línea son ANCLAS de sección
-    (E2E landing: T018 mangló <!-- FOOTER --> y bloqueó T021; T014/T015
-    dejaron <!-- /NAV --> y <!-- SECTIONS --> duplicados/huérfanos). Un
-    edit quirúrgico inserta ENTRE marcadores, nunca los toca: si el conteo
-    de una línea-marcador preexistente baja (borrada) o sube (duplicada),
-    se rechaza. Agregar marcadores NUEVOS se permite (T012 crea el
-    esqueleto con write_file; en existentes nadie los necesita, pero no se
-    castiga innovar).
+    (E2E landing: T018 borró <!-- FOOTER --> y bloqueó T021; T014/T015
+    dejaron <!-- /NAV --> y <!-- SECTIONS --> duplicados/huérfanos).
+    Regla piso-1/techo-actual por marcador preexistente:
+    - borrar la ÚLTIMA copia (1→0) se rechaza (rompe el ancla; T018→T021);
+    - duplicar (1→2) se rechaza (ancla ambigua; T014/T015);
+    - reducir duplicados a 1 (2→1) se PERMITE: es higiene legítima
+      (limpieza del nav huérfano pedida por el usuario).
+    Agregar marcadores NUEVOS se permite (T012 crea el esqueleto).
     """
     from collections import Counter
 
@@ -765,10 +766,11 @@ def _marker_violation(before: str, after: str) -> str:
     )
     for marker, n in b.items():
         m = a.get(marker, 0)
-        if m < n:
+        if m == 0:
             return (
-                f"borra el marcador '{marker}' ({n}→{m}) — los marcadores "
-                "<!-- ... --> son anclas de sección, preservalos tal cual"
+                f"borra el marcador '{marker}' (era la última copia) — los "
+                "marcadores <!-- ... --> son anclas de sección: si sobra un "
+                "duplicado, reducí a 1 pero nunca a 0"
             )
         if m > n:
             return (
