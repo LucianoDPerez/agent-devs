@@ -21,6 +21,7 @@ import sys
 import threading
 import traceback
 
+from rich.style import Style
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -118,7 +119,12 @@ class SelectablePane(RichLog):
     """
 
     def render_line(self, y: int) -> Strip:
-        """Fila visible con offsets de selección + highlight horneado."""
+        """Fila visible con offsets de selección + highlight horneado.
+
+        Sin el round-trip por Text/console.render: ese re-render truncaba
+        la tira (97 vs 100 celdas) y corría todo el mapeo del drag.
+        Se retocan los segmentos in-place, preservando texto y celdas.
+        """
         scroll_x, scroll_y = self.scroll_offset
         try:
             strip = super().render_line(y)
@@ -140,33 +146,85 @@ class SelectablePane(RichLog):
             if span is not None:
                 start, end = span
                 try:
-                    text = strip.text
-                    if end == -1 or end > len(text):
-                        end = len(text)
-                    if start < end:
-                        style = self.screen.get_component_rich_style(
-                            "screen--selection"
-                        )
-                        rebuilt = Text()
-                        for seg in strip:
-                            rebuilt.append(
-                                seg.text, style=seg.style or None
-                            )
-                        rebuilt.stylize(style, start, end)
-                        console = self.app.console
-                        try:
-                            options = console.options.update_width(
-                                max(strip.cell_length, len(rebuilt.plain), 1)
-                            )
-                            segments = console.render(rebuilt, options)
-                        except Exception:
-                            segments = console.render(rebuilt)
-                        strip = Strip(
-                            list(segments), strip.cell_length
-                        )
+                    styled = self._stylize_span(strip, start, end)
+                    if styled is not None:
+                        strip = styled
                 except Exception:
                     pass
         return strip
+
+    @staticmethod
+    def _selection_style(app) -> Style | None:
+        """Estilo de selección con contraste GARANTIZADO.
+
+        El estilo del tema resolvía a fg == bg (#094472 on #094472):
+        bloque sólido que tapaba el texto. Acá se fuerza fondo del tema
+        (fallback azul) + frente blanco brillante + bold.
+        """
+        from rich.style import Style as RichStyle
+
+        bg = None
+        try:
+            comp = app.screen.get_component_styles("screen--selection")
+            bg = comp.background
+        except Exception:
+            bg = None
+        try:
+            return RichStyle(
+                color="ansi_bright_white",
+                bgcolor=bg.name if bg is not None else "ansi_blue",
+                bold=True,
+            )
+        except Exception:
+            return None
+
+    def _stylize_span(self, strip: Strip, start: int, end: int) -> Strip | None:
+        """Aplica el estilo de selección a [start, end) sin tocar el texto."""
+        from rich.segment import Segment
+
+        try:
+            text = strip.text
+            if end == -1 or end > len(text):
+                end = len(text)
+            if start < 0:
+                start = 0
+            if start >= end:
+                return None
+            style = self._selection_style(self.app)
+            if style is None:
+                return None
+            out: list[Segment] = []
+            x = 0
+            for seg in strip:
+                seg_text = seg.text or ""
+                seg_end = x + len(seg_text)
+                if seg_end <= start or x >= end:
+                    out.append(seg)
+                else:
+                    a = max(start - x, 0)
+                    b = min(end - x, len(seg_text))
+                    base = seg.style
+                    try:
+                        control = seg.control
+                    except Exception:
+                        control = None
+                    if a > 0:
+                        out.append(Segment(seg_text[:a], base, control))
+                    try:
+                        combined = base + style if base is not None else style
+                    except Exception:
+                        combined = style
+                    out.append(Segment(seg_text[a:b], combined, control))
+                    if b < len(seg_text):
+                        out.append(Segment(seg_text[b:], base, control))
+                x = seg_end
+            try:
+                cell_length = strip.cell_length
+            except Exception:
+                cell_length = sum(len(s.text or "") for s in out)
+            return Strip(out, cell_length)
+        except Exception:
+            return None
 
     def get_selection(self, selection) -> tuple[str, str] | None:
         """Extrae de las propias líneas del log (alineación exacta)."""
