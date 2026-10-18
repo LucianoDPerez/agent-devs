@@ -3478,10 +3478,26 @@ class Session:
         (E2E landing T002: intento 1 con list_files ✅ → gate → intento 2
         leyó tui.png → 400 context-exceeded). El cierre documental ya cubre
         el veredicto de esos turnos. Con escrituras (del intento actual o
-        acumuladas del turno) la compuerta sigue aplicando siempre.
+        acumuladas del turno) la compuerta sigue aplicando siempre,
+        SALVO repo sin stack: run_verify daría [SKIPPED] y el prompt EXECUTE
+        ya ordena cerrar con verificación documental — exigir una tool de
+        verify igual genera un segundo pase de lecturas que termina igual
+        (E2E landing T017/T018: implementó + LISTO con evidencia → gate →
+        re-lecturas → "fallido sin verificación"). Sin stack solo exime si
+        el turno ya verificó en disco (lecturas reales + evidencia citada).
         """
         try:
             if not pinned_task_is_verify_only(user_input, self.repo_path):
+                try:
+                    from tools.verify import _find_stack_root
+                    if _find_stack_root(self.repo_path) is None:
+                        readish = self._called_tools & (
+                            EXPLORE_TOOL_NAMES | READISH_TOOL_NAMES)
+                        if readish and _response_has_evidence(
+                                self._last_response):
+                            return False
+                except Exception:
+                    pass
                 return True
             if bool(self._called_tools & WRITE_TOOL_NAMES):
                 return True
