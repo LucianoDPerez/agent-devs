@@ -133,3 +133,30 @@ def test_pane_mapeo_estable_con_seleccion_activa():
             assert style is not None
 
     asyncio.run(main())
+
+
+def test_pane_stream_lento_no_pica_filas():
+    """Regresión: chunks sin newline en pulls separados NO abren fila c/u.
+
+    El stream llega token a token (un chunk por pull de 10Hz): sin buffer
+    de línea parcial, cada chunk abría su propia tira y los tool calls se
+    veían picados ("PROY"/"ECT", "--color"/"-bg"). Con _carry, la línea
+    parcial se retiene hasta completarse con newline.
+    """
+    import asyncio
+
+    from display.fullscreen_tui import FullscreenTUI
+
+    async def main():
+        app = FullscreenTUI(status_provider=lambda: {}, on_submit=lambda t: None)
+        async with app.run_test(size=(100, 30)) as pilot:
+            arg = '{"path": "/a/b/c.css"}'
+            for i in range(0, len(arg), 7):
+                app._write_lines(arg[i:i + 7])
+                await pilot.pause(0.05)
+            app._write_lines("\n")
+            await pilot.pause(0.3)
+            pane = app.query_one("#pane")
+            assert [s.text for s in pane.lines] == [arg]
+
+    asyncio.run(main())

@@ -393,6 +393,8 @@ class FullscreenTUI(App):
         # Render de markdown por segmento (marcadores de display.console)
         self._md_active = False
         self._md_raw = ""
+        # Línea parcial del stream en curso (chunks sin newline al final).
+        self._carry: Text | None = None
         # Sugerencias de slash commands (tira sobre el input, estilo opencode)
         self._slash_matches: list[tuple[str, str]] = []
         self._slash_index = 0
@@ -506,10 +508,12 @@ class FullscreenTUI(App):
     def _write_text_rows(self, frag: Text) -> None:
         """Escribe un Text al RichLog fila por fila (1 write = 1 fila).
 
-        RichLog abre fila nueva por write: si se escribe el chunk tal cual,
-        el "\n" final genera una tira vacia fantasma e infla el log al
-        doble. Partiendo por "\n" (split preserva los spans ANSI) cada
-        fila lógica queda en su propia tira.
+        Con buffer de línea parcial: el stream llega en chunks que NO
+        terminan en newline (un token JSON por pull). Escribir cada chunk
+        directo abría una fila por chunk y picaba el texto a la mitad
+        ("PROY"/"ECT", "--color"/"-bg"). La última parte sin newline se
+        retiene en _carry y se antepone al próximo frag; cada stream
+        cierra con console.print("\\n"), así que nada queda oculto.
         """
         try:
             pane = self.query_one("#pane", SelectablePane)
@@ -520,14 +524,23 @@ class FullscreenTUI(App):
         except Exception:
             at_end = True
         try:
+            if self._carry is not None:
+                try:
+                    self._carry.append_text(frag)
+                    frag = self._carry
+                except Exception:
+                    pass
+                self._carry = None
+            ends_nl = frag.plain.endswith("\n")
             parts = frag.split("\n")
         except Exception:
-            parts = [frag]
-        while parts and not parts[-1].plain:
-            parts.pop()
+            parts, ends_nl = [frag], True
+        if not ends_nl and parts:
+            try:
+                self._carry = parts.pop()
+            except Exception:
+                pass
         if not parts:
-            with contextlib.suppress(Exception):
-                pane.write(Text(""), scroll_end=at_end)
             return
         for part in parts:
             with contextlib.suppress(Exception):
@@ -919,6 +932,7 @@ class FullscreenTUI(App):
 
     def clear_pane(self) -> None:
         """Limpia el acumulado (/new): sesión nueva, panel nuevo."""
+        self._carry = None
         self._md_active = False
         self._md_raw = ""
         with contextlib.suppress(Exception):
