@@ -2054,7 +2054,11 @@ class Session:
             "Es OBLIGATORIO verificar ANTES de dar la tarea por terminada, "
             "en UNA sola llamada (no 3 separadas):\n"
             f"  run_verify(path=\"{self.repo_path}\")\n"
-            "\nSi algo falla, CORREGÍ el error y volvé a ejecutar "
+            "\nNO reimplementes, NO reescribas archivos, NO releas el README "
+            "ni la tarea: solo corrí run_verify. "
+            "Si pasa, cerrá con LISTO sin tocar nada más.\n"
+            "Si algo falla, CORREGÍ solo ese error con edit_file/apply_patch "
+            "y volvé a ejecutar "
             "run_verify hasta que pase." + self._first_failure_block()
         ))
         self._explore_budget.max_calls = 3
