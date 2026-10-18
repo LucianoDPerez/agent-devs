@@ -1838,6 +1838,22 @@ class Session:
             prompt = f"implementar Tarea {n}"
             if tasks_file:
                 prompt += f" de {tasks_file}"
+                # Anti-anclaje DONE rancio (E2E landing T020 x3: el turno leyó
+                # "[DONE]" en el header y cerró como "verificación, no
+                # re-implementación" sin tocar nada aunque el disco NO
+                # cumplía). El status puede mentir; el criterio manda.
+                try:
+                    _p_entry = _load_task_entry(tasks_file, n)
+                    _p_status = str((_p_entry or {}).get("status")
+                                    or "?").upper()
+                except Exception:
+                    _p_status = "?"
+                prompt += (
+                    f" (status actual: {_p_status} — puede estar "
+                    "desactualizado. Lo que manda es el criterio contra el "
+                    "disco: si ya cumple, cerrá con evidencia SIN editar; si "
+                    "NO cumple, IMPLEMENTÁ el fix aunque figure DONE)."
+                )
             status = "ok"
             try:
                 self.run_turn(prompt)

@@ -1121,11 +1121,15 @@ def test_pool_continua_por_defecto(tmp_path):
 
     s.run_turn = _fake_run_turn
     summary = s.run_task_pool([1, 2, 3], tasks_file="deuda/tareas.json")
-    assert [c for c in calls] == [
+    assert [c.split(" (status actual:")[0] for c in calls] == [
         "implementar Tarea 1 de deuda/tareas.json",
         "implementar Tarea 2 de deuda/tareas.json",
         "implementar Tarea 3 de deuda/tareas.json",
     ]
+    # Anti-anclaje DONE rancio: el prompt aclara que el status puede
+    # mentir y que el criterio contra el disco manda.
+    assert all("(status actual:" in c and "aunque figure DONE" in c
+               for c in calls)
     assert summary["ok"] == 2
     assert summary["fallidas"] == [2]
     assert summary["bloqueadas"] == []
@@ -1147,10 +1151,12 @@ def test_pool_stop_on_fail_legacy(tmp_path):
     s.run_turn = _fake_run_turn
     summary = s.run_task_pool([1, 2, 3], tasks_file="deuda/tareas.json",
                               stop_on_fail=True)
-    assert [c for c in calls] == [
+    assert [c.split(" (status actual:")[0] for c in calls] == [
         "implementar Tarea 1 de deuda/tareas.json",
         "implementar Tarea 2 de deuda/tareas.json",
     ]
+    assert all("(status actual:" in c and "aunque figure DONE" in c
+               for c in calls)
     assert summary["ok"] == 1
     assert summary["fallidas"] == [2]
     assert summary["stopped_early"] is True
