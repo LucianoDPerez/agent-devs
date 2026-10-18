@@ -388,6 +388,8 @@ class FullscreenTUI(App):
         # Modelo real cargado en llama-server: se detecta lazy al primer
         # render del header (fallback a LLM_MODEL_NAME si no hay server).
         self._model_name: str | None = None
+        # Firma del header (base/modelo/repo/branch): si cambia, se reconstruye.
+        self._header_sig: tuple | None = None
         # Render de markdown por segmento (marcadores de display.console)
         self._md_active = False
         self._md_raw = ""
@@ -597,6 +599,20 @@ class FullscreenTUI(App):
                 if confirming
                 else ""
             )
+        # Header vivo: /model, branch o repo pueden cambiar en caliente y el
+        # header se construía una sola vez en on_mount (quedaba clavado en
+        # el modelo anterior). Se reconstruye solo si cambió la firma.
+        try:
+            sig = (
+                st.get("llm_base"), st.get("model"), st.get("transport"),
+                st.get("reasoning"), st.get("repo"), st.get("branch"),
+            )
+            if sig != self._header_sig:
+                self._header_sig = sig
+                with contextlib.suppress(Exception):
+                    self.query_one("#header", Static).update(self._build_header())
+        except Exception:
+            pass
         txt = Text.assemble(
             (" 🌿 " + str(st.get("branch", "-")), "green"),
             ((" ✅ auto", "bold black on yellow") if st.get("auto_approve") else ("", "")),
