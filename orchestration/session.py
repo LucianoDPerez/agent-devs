@@ -109,7 +109,7 @@ from orchestration.tool_dedupe import (
     ToolCallDedupe,
     VerifyRequired,
 )
-from tools import BUDGET_RETRY_TOOLS, GATE_RETRY_TOOLS
+from tools import BUDGET_RETRY_TOOLS, GATE_RETRY_TOOLS, GATE_VERIFY_ONLY_TOOLS
 
 
 # Verify diagnóstica (un solo archivo): NO valida la batería completa.
@@ -200,6 +200,9 @@ _EXECUTE_FORCE_WRITE_MSG = (
     "5) Si varios campos van al MISMO archivo (ej. 5 campos de una misma "
     "interface/type), usá apply_patch con todos los cambios juntos — "
     "cuenta como 1 sola aprobación en vez de N.\n"
+    "6) Para REESTRUCTURAR un archivo existente (cambio de formato, ej. "
+    "docs/copy.md): NO lo borres ni lo reescribas entero — usá apply_patch "
+    "por secciones chicas (1 heading por hunk).\n"
     "NO respondas con texto: ejecutá write_file/edit_file/apply_patch AHORA."
 )
 
@@ -2076,15 +2079,20 @@ class Session:
         edit_file falla, y termina reescribiendo el archivo entero de memoria
         (destructivo: perdió imports/hooks en PacientesPage.tsx).
 
-        Usa GATE_RETRY_TOOLS: read_file + edit_file + verify, SIN búsqueda
-        (list_files/search_code — el error ya viene inyectado) y SIN git-write
-        (el fix no debe volver a commiteear). force_tool_calls=True para que
-        actúe (read_file → edit_file) y no monologue.
+        Si NO hay fallo que corregir (el turno solo olvidó verificar):
+        GATE_VERIFY_ONLY_TOOLS, sin escritura — el mensaje solo no alcanzó
+        (E2E landing T014/T015 re-editaron en la segunda vuelta ignorando el
+        "NO reimplementes"). Con fallo: GATE_RETRY_TOOLS completo.
+        En ambos casos SIN búsqueda (el error ya viene inyectado) y SIN
+        git-write (el fix no debe volver a commiteear). force_tool_calls=True
+        para que actúe y no monologue.
         """
         self.current_role = Role.EXECUTE
         # Agente RESTRINGIDO (compuerta): una orden NUEVA debe reconstruirlo
         # completo, no reutilizar este subconjunto.
         self._agent_no_explore = True
+        gate_tools = (GATE_RETRY_TOOLS if self._turn_failures
+                      else GATE_VERIFY_ONLY_TOOLS)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -2094,7 +2102,7 @@ class Session:
                     self.cached_analysis, self._tools, self._dedupe,
                     self._explore_budget, self._analyze_budget,
                     read_cache=self._read_cache,
-                    tools_override=GATE_RETRY_TOOLS,
+                    tools_override=gate_tools,
                     force_tool_calls=True,
                     tool_call_logger=self._called_tools,
                     tool_call_results=self._verify_results,

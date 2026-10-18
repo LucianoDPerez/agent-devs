@@ -126,6 +126,16 @@ GATE_RETRY_TOOLS = [
     *_READONLY_GIT, *_VERIFY, run_npm_script,
 ]
 
+# Compuerta SIN fallo que corregir (el turno terminó sin verificar pero
+# run_verify nunca corrió, así que no hay _turn_failures): el modelo NO debe
+# reimplementar, solo correr run_verify. SIN tools de escritura (el mensaje
+# solo no alcanzó: E2E landing T014/T015 re-editaron en la segunda vuelta).
+# Lectura (list/read) + verify SÍ: verificar un doc puede exigir leer.
+GATE_VERIFY_ONLY_TOOLS = [
+    list_files, read_file,
+    *_READONLY_GIT, *_VERIFY, run_npm_script,
+]
+
 AGENTS: dict[str, list] = {
     "analyzer": ANALYZER_TOOLS,
     "planner": PLANNER_TOOLS,

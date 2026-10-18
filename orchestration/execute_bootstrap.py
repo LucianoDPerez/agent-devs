@@ -819,6 +819,26 @@ def evaluate_task_criterion(tasks_file: str, num: int,
         bad = [mk for mk in _forbidden_markers(criterion) if mk in content]
         if bad:
             return False, f"contiene prohibido en {Path(target).name}: " + ", ".join(bad[:6])
+        # Proveniencia: si el criterio exige .tool__desc literales de copy.md
+        # (T016: "no inventar"), cada desc del HTML debe existir en copy.md.
+        # Sin esto el contenido inventado pasa el chequeo de marcadores
+        # (E2E landing T016: 12 descs inventadas dieron True).
+        if "tool__desc" in low:
+            copy_text = ""
+            for cand_copy in ("docs/copy.md", "copy.md"):
+                cp = Path(_resolve_criterion_path(cand_copy, base))
+                if cp.is_file():
+                    copy_text = _read(str(cp)) or ""
+                    break
+            if copy_text:
+                descs = re.findall(
+                    r'<p[^>]*class="tool__desc"[^>]*>(.*?)</p>',
+                    content, re.S)
+                invented = [d.strip()[:60] for d in descs
+                            if d.strip() and d.strip() not in copy_text]
+                if invented:
+                    return False, ("desc inventada (no está en copy.md): "
+                                   + "; ".join(invented[:3]))
         return True, f"read_file OK ({Path(target).name} con marcadores)"
 
     return None, "criterio no evaluable estáticamente"

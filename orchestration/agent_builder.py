@@ -247,7 +247,9 @@ async def build_agent(
             "2) Aplicá el fix con edit_file (old_str=new_str copiados LITERALES "
             "de ese contenido).\n"
             "3) write_file SOLO para archivos NUEVOS (bloqueado para existentes).\n"
-            "4) Verificá con run_lint, run_tests, run_build.\n"
+            "4) Para REESTRUCTURAR un existente: apply_patch por secciones "
+            "chicas, nunca reescritura entera.\n"
+            "5) Verificá con run_lint, run_tests, run_build.\n"
             "No explores. No leas. ESCRIBÍ YA.\n"
         )
     if no_explore:
