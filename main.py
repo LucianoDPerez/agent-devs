@@ -572,6 +572,23 @@ def run_fullscreen(session) -> None:
         elif payload[0] == "/model":
             console.print(session.slash_model(payload[1]))
             return
+        elif payload[0] == "/log":
+            import datetime
+            try:
+                count = int((payload[1] or "").strip() or 200)
+            except ValueError:
+                count = 200
+            text = tui.dump_pane(count)
+            lines = text.splitlines()
+            stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            out = f"/tmp/agentdevs-pane-{stamp}.log"
+            try:
+                with open(out, "w", encoding="utf-8") as fh:
+                    fh.write(text + ("\n" if text and not text.endswith("\n") else ""))
+                console.print(f"[green]✅ Panel volcado: {out} ({len(lines)} líneas).[/green]")
+            except OSError as e:
+                console.print(f"[red]No pude escribir {out}: {e}[/red]")
+            return
         elif payload[0] == "/help":
             console.print("[bold]Comandos:[/bold]\n" + format_help())
             return
@@ -1498,6 +1515,9 @@ def main():
                 continue
             if kind == "run" and payload[0] == "/model":
                 console.print(session.slash_model(payload[1]) + "\n")
+                continue
+            if kind == "run" and payload[0] == "/log":
+                console.print("[dim]/log solo disponible en modo --tui (ahí el panel es virtualizado; acá ya tenés todo en el scrollback).[/dim]\n")
                 continue
             if kind == "run" and payload[0] == "/help":
                 console.print("[bold]Comandos:[/bold]\n" + format_help() + "\n")

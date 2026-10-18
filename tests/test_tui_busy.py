@@ -94,3 +94,42 @@ def test_pane_drag_selecciona_filas_visibles():
             assert "linea 01" in sel, f"debería traer filas del fondo: {sel[:80]!r}"
 
     asyncio.run(main())
+
+
+def test_pane_mapeo_estable_con_seleccion_activa():
+    """Regresión: el highlight no debe correr el mapeo del drag.
+
+    Pintar el highlight ANTES de aplicar offsets dejaba metas viejas
+    en los sub-segmentos y el end caía corto (de 40 chars devolvía 23).
+    El orden es: partir/estilar primero, offsets al final (como TextLog).
+    """
+    import asyncio
+
+    from textual.events import MouseMove
+
+    from display.fullscreen_tui import FullscreenTUI
+
+    async def main():
+        app = FullscreenTUI(status_provider=lambda: {}, on_submit=lambda t: None)
+        async with app.run_test(size=(100, 30)) as pilot:
+            app._write_lines("0123456789" * 6 + "\n")
+            await pilot.pause(0.3)
+            pane = app.query_one("#pane")
+            assert len(pane.lines) == 1
+            scr = app.screen
+            assert scr.get_widget_and_offset_at(60, 4)[1].x == 59
+            await pilot.mouse_down("#pane", (20, 0))
+            await pilot._post_mouse_events([MouseMove], "#pane", (60, 0), button=1)
+            await pilot.mouse_up("#pane", (60, 0))
+            await pilot.pause(0.3)
+            # mapeo idéntico con highlight pintado
+            assert scr.get_widget_and_offset_at(60, 4)[1].x == 59
+            sel = scr.get_selected_text()
+            assert sel == ("0123456789" * 6)[19:60]
+            # estilo legible: fg != bg
+            from display.fullscreen_tui import SelectablePane
+
+            style = SelectablePane._selection_style(app)
+            assert style is not None
+
+    asyncio.run(main())

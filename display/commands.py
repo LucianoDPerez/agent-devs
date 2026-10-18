@@ -27,6 +27,7 @@ COMMANDS: tuple[tuple[str, str, bool], ...] = (
     ("/push", "Pushea la rama actual: /push [remote]", True),
     ("/pr", "Abre PR de la rama actual con gh: /pr [base]", True),
     ("/model", "LLM en caliente: /model | /model <id> [low|medium|high] | /model local|opencode", True),
+    ("/log", "Vuelca el panel a un archivo: /log [N líneas]", True),
     ("/help", "Muestra esta ayuda de comandos", False),
 )
 

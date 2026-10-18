@@ -40,6 +40,24 @@ def _is_approval_text(text: str) -> bool:
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _MD_MAX_RENDER_CHARS = 8_000  # markdown mayor que esto queda crudo (no render)
 
+_SEL_LOG = "/tmp/agentdevs-selection.log"  # telemetria drag/copy (se rota a 200KB)
+
+
+def _sel_log(msg: str) -> None:
+    """Telemetria de seleccion a archivo (barata: solo en eventos de drag/copy)."""
+    try:
+        import os
+        import time
+        try:
+            if os.path.getsize(_SEL_LOG) > 200_000:
+                os.replace(_SEL_LOG, _SEL_LOG + ".old")
+        except OSError:
+            pass
+        with open(_SEL_LOG, "a", encoding="utf-8") as fh:
+            fh.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+    except Exception:
+        pass
+
 
 class PaneWriter:
     """File-like que captura console.file / sys.stdout / sys.stderr.
@@ -119,21 +137,17 @@ class SelectablePane(RichLog):
     """
 
     def render_line(self, y: int) -> Strip:
-        """Fila visible con offsets de selección + highlight horneado.
+        """Fila visible con highlight horneado + offsets de selección.
 
-        Sin el round-trip por Text/console.render: ese re-render truncaba
-        la tira (97 vs 100 celdas) y corría todo el mapeo del drag.
-        Se retocan los segmentos in-place, preservando texto y celdas.
+        Orden estricto (como TextLog): PRIMERO se parte/estila, ÚLTIMO
+        se aplican offsets. Hacerlo al revés deja metas viejas en los
+        sub-segmentos y el mapeo del drag se corre (el end caía corto).
         """
         scroll_x, scroll_y = self.scroll_offset
         try:
             strip = super().render_line(y)
         except Exception:
             return Strip.blank(self.size.width if self.size else 80)
-        try:
-            strip = strip.apply_offsets(scroll_x, scroll_y + y)
-        except Exception:
-            pass
         try:
             selection = self.text_selection
         except Exception:
@@ -151,6 +165,10 @@ class SelectablePane(RichLog):
                         strip = styled
                 except Exception:
                     pass
+        try:
+            strip = strip.apply_offsets(scroll_x, scroll_y + y)
+        except Exception:
+            pass
         return strip
 
     @staticmethod
@@ -158,25 +176,31 @@ class SelectablePane(RichLog):
         """Estilo de selección con contraste GARANTIZADO.
 
         El estilo del tema resolvía a fg == bg (#094472 on #094472):
-        bloque sólido que tapaba el texto. Acá se fuerza fondo del tema
-        (fallback azul) + frente blanco brillante + bold.
+        bloque sólido que tapaba el texto. Acá se fuerza frente
+        blanco brillante + bold sobre el fondo del tema.
+        (Ojo: los nombres "ansi_*" NO existen en este Rich — solo
+        "blue"/"bright_white" — y .name de un Color puede dar None:
+        cualquier fallo cae a reverse, nunca a invisible.)
         """
         from rich.style import Style as RichStyle
 
-        bg = None
         try:
             comp = app.screen.get_component_styles("screen--selection")
             bg = comp.background
         except Exception:
             bg = None
-        try:
-            return RichStyle(
-                color="ansi_bright_white",
-                bgcolor=bg.name if bg is not None else "ansi_blue",
-                bold=True,
-            )
-        except Exception:
-            return None
+        for kwargs in (
+            {"color": "bright_white", "bgcolor": bg, "bold": True},
+            {"color": "bright_white", "bgcolor": "blue", "bold": True},
+            {"reverse": True, "bold": True},
+        ):
+            try:
+                if kwargs.get("bgcolor") is None:
+                    continue
+                return RichStyle(**kwargs)
+            except Exception:
+                continue
+        return None
 
     def _stylize_span(self, strip: Strip, start: int, end: int) -> Strip | None:
         """Aplica el estilo de selección a [start, end) sin tocar el texto."""
@@ -235,8 +259,11 @@ class SelectablePane(RichLog):
         if not text.strip():
             return None
         try:
-            return selection.extract(text), "\n"
-        except Exception:
+            out = selection.extract(text), "\n"
+            _sel_log(f"get_selection sel={selection!r} nlines={len(self.lines)} out_len={len(out[0])}")
+            return out
+        except Exception as e:
+            _sel_log(f"get_selection ERROR {e!r}")
             return None
 
     def selection_updated(self, selection) -> None:
@@ -250,6 +277,7 @@ class SelectablePane(RichLog):
             super().selection_updated(selection)
         with contextlib.suppress(Exception):
             self.refresh()
+        _sel_log(f"selection_updated sel={selection!r}")
         if selection is None:
             # no sobreescribir el cache con None (se limpia por keystroke)
             return
@@ -257,6 +285,7 @@ class SelectablePane(RichLog):
             sel = self.app.screen.get_selected_text()
             if sel and sel.strip():
                 self.app._last_selected_text = sel
+                _sel_log(f"cache len={len(sel)}")
         except Exception:
             pass
 
@@ -266,6 +295,7 @@ class SelectablePane(RichLog):
         SIEMPRE atrapa excepciones (una excepción de un click no debe poder
         cerrar la app — E2E real: click aparentemente random cerraba la TUI).
         """
+        _sel_log(f"mouse_down button={event.button} pos=({event.x},{event.y})")
         try:
             if event.button == 3:   # botón derecho
                 try:
@@ -751,6 +781,7 @@ class FullscreenTUI(App):
         with contextlib.suppress(Exception):
             self.screen.action_copy_text()
         txt = self.clipboard
+        _sel_log(f"copy_selection clipboard_len={len(txt) if txt else 0} cached_len={len(self._last_selected_text)}")
         if txt:
             self._copy_to_system(txt)
 
@@ -858,6 +889,18 @@ class FullscreenTUI(App):
                 self.call_from_thread(self._refresh_toolbar)
 
     # ── API ────────────────────────────────────────────────────────────
+    def dump_pane(self, n: int = 200) -> str:
+        """Últimas N líneas del panel en texto plano (para /log)."""
+        try:
+            lines = [line.text for line in list(self.lines)]
+        except Exception:
+            return ""
+        try:
+            n = max(1, min(int(n), 3000))
+        except Exception:
+            n = 200
+        return "\n".join(lines[-n:])
+
     def clear_pane(self) -> None:
         """Limpia el acumulado (/new): sesión nueva, panel nuevo."""
         self._md_active = False
