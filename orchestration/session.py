@@ -1881,7 +1881,17 @@ class Session:
                             "se da por hecha.[/dim]")
                     status = "ok"
                 elif verdict is False:
-                    status = f"fallida ({evidence})"
+                    # Causa accionable: no es lo mismo "no escribió nada"
+                    # (reintentar) que "escribió pero mal" (corregir). El
+                    # delta ya existe (touched_before); no corre en verde
+                    # así que no duplica el git del commit.
+                    wrote = self._turn_files_delta(touched_before)
+                    if wrote:
+                        status = (f"fallida ({evidence}; el turno escribió "
+                                  "pero el criterio no cierra)")
+                    else:
+                        status = (f"fallida ({evidence}; el turno no "
+                                  "escribió archivos)")
             if status != "ok":
                 failed.add(n)
             committed = ""
