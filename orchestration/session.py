@@ -1925,15 +1925,18 @@ class Session:
                 console.print(
                     f"\n[bold red]⛔ Pool detenido en T{n:03d} "
                     f"(fallida).[/bold red]{resume}\n"
+                    f"[dim]Motivo: {status}[/dim]\n"
                     "[dim]Para seguir igual aunque fallen: "
                     "/tasks-pool ... --continue[/dim]"
                 )
                 break
         done = [r for r in results if r["status"] == "ok"]
+        fallidas_det = [(r["tarea"], r["status"]) for r in results
+                        if r["status"] != "ok" and r["tarea"] not in blocked]
         summary = {
             "total": len(results), "ok": len(done),
-            "fallidas": [r["tarea"] for r in results
-                         if r["status"] != "ok" and r["tarea"] not in blocked],
+            "fallidas": [t for t, _ in fallidas_det],
+            "fallidas_det": fallidas_det,
             "bloqueadas": sorted(blocked),
             "detalle": results,
             "stopped_early": stopped_early,
@@ -1944,6 +1947,8 @@ class Session:
             + (f" — bloqueadas: {summary['bloqueadas']}" if summary["bloqueadas"] else "")
             + (" (detenido ante el primer fallo)" if stopped_early else "")
         )
+        for t, st in fallidas_det:
+            console.print(f"[red]  • T{t:03d}: {st}[/red]")
         return summary
 
     def _profile_temps(self) -> dict:
