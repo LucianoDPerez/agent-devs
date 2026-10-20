@@ -71,6 +71,22 @@ class ToolCallLimitExceeded(ReasoningOnlyResponse):
         )
 
 
+class CompletionLoopCut(ReasoningOnlyResponse):
+    """El stream se cortó por loop de texto PERO el turno ya había escrito.
+
+    Victory-lap loop (E2E landing T021/T022): el modelo termina el trabajo,
+    escribe la evidencia… y en vez de salir repite el resumen hasta el corte.
+    Reintentarlo re-ejecuta trabajo hecho (o lo reescribe peor). Se interrumpe
+    la cadena de intentos y deciden las compuertas de cierre + el veredicto
+    determinístico. Lleva el texto parcial para no perder la evidencia.
+    """
+
+    def __init__(self, partial: str = ""):
+        self.partial = partial
+        self.reason = "completion-loop-cut"
+        super().__init__(partial, reason="completion-loop-cut")
+
+
 # Ventanas y largo mínimo para la detección de loop de texto (ver
 # _text_loop_detected). Umbrales validados en tests/test_stream_loop.py:
 # prosa aleatoria y listas markdown con items distintos jamás disparan.
@@ -320,6 +336,8 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                     elif max_content_seconds is not None:
                         elapsed = time.monotonic() - content_since
                         if elapsed > max_content_seconds:
+                            if wrote_something:
+                                raise CompletionLoopCut("".join(response_parts))
                             console.print(
                                 f"\n[dim]↻ Modelo generando texto continuo sin "
                                 f"tool calls ({elapsed:.0f}s). Se corta.[/dim]"
@@ -335,6 +353,11 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                     # por sufijo, sin importar la alineación del párrafo
                     # (ver _text_loop_detected).
                     if _text_loop_detected("".join(response_parts)):
+                        if wrote_something:
+                            # Victory-lap: el trabajo ya está en disco; no
+                            # tiene sentido otro intento (re-escribiría lo
+                            # hecho). Se corta la cadena y decide el cierre.
+                            raise CompletionLoopCut("".join(response_parts))
                         console.print(
                             "\n\n[dim]↻ Modelo repitiendo el mismo texto "
                             "(loop). Se corta el turno.[/dim]"

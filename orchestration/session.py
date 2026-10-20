@@ -67,6 +67,7 @@ from core.intents import Intent
 from core.roles import Role, role_for_intent
 from core.textutil import normalize
 from display.console import (
+    CompletionLoopCut,
     ReasoningOnlyResponse,
     ToolCallLimitExceeded,
     console,
@@ -303,6 +304,15 @@ def _is_continuation(text: str) -> bool:
         if first == nw or prefix.startswith(nw + " "):
             return True
     return False
+
+
+def _pool_ok(status: str) -> bool:
+    """El status cuenta como tarea lograda en el pool.
+
+    "ok" exacto o anotado ("ok (...)": veredicto no evaluable en disco,
+    vale la evidencia del turno). Todo lo demás (fallida/bloqueada/...) no.
+    """
+    return status == "ok" or status.startswith("ok (")
 
 
 def _is_review_correction(user_input: str) -> bool:
@@ -1874,7 +1884,7 @@ class Session:
                         ensure_task_done(tasks_file, n)
                     except Exception:
                         pass
-                    if status != "ok":
+                    if not _pool_ok(status):
                         console.print(
                             f"\n[dim]✅ T{n:03d}: el turno falló pero el "
                             f"criterio está cumplido en disco ({evidence}) — "
@@ -1892,10 +1902,65 @@ class Session:
                     else:
                         status = (f"fallida ({evidence}; el turno no "
                                   "escribió archivos)")
-            if status != "ok":
+                        # Turno no-op en tarea de implementación (E2E landing
+                        # T020 ×3: dos reads y cierre como "verificación" sin
+                        # escribir nada). UN solo reintento forzando
+                        # implementación — el veredicto decide de nuevo.
+                        if tasks_file:
+                            console.print(
+                                f"\n[dim]↻ T{n:03d} no escribió nada y el "
+                                "criterio no cierra: un reintento forzando "
+                                "implementación.[/dim]"
+                            )
+                            self._fresh_pool_turn()
+                            touched_before = set(self._session_touched_files)
+                            try:
+                                self.run_turn(
+                                    prompt + "\n(El turno anterior NO escribió "
+                                    "ningún archivo y el criterio NO se cumple "
+                                    "en disco: IMPLEMENTÁ el fix con "
+                                    "edit_file/write_file AHORA. Prohibido "
+                                    "cerrar como 'verificación sin cambios'.)"
+                                )
+                                if getattr(self, "_last_turn_failed", False):
+                                    status = ("fallida (el turno no completó "
+                                              "— ver salida arriba)")
+                            except Exception as e:  # noqa: BLE001
+                                status = f"error: {e}"
+                            try:
+                                verdict, evidence = evaluate_task_criterion(
+                                    tasks_file, n, self.repo_path)
+                            except Exception:
+                                verdict, evidence = None, "veredicto no evaluable"
+                            if verdict is True:
+                                try:
+                                    ensure_task_done(tasks_file, n)
+                                except Exception:
+                                    pass
+                                console.print(
+                                    f"\n[dim]✅ T{n:03d}: el reintento cumplió "
+                                    f"el criterio en disco ({evidence}).[/dim]")
+                                status = "ok"
+                            elif verdict is False:
+                                wrote = self._turn_files_delta(touched_before)
+                                if wrote:
+                                    status = (f"fallida ({evidence}; el "
+                                              "reintento escribió pero el "
+                                              "criterio no cierra)")
+                                else:
+                                    status = (f"fallida ({evidence}; ni el "
+                                              "reintento escribió archivos)")
+                elif verdict is None:
+                    # Criterio no evaluable en disco (p. ej. exige grep o
+                    # prohíbe navegador): no hay rescate posible, pero un
+                    # turno que salió limpio vale por su evidencia.
+                    if _pool_ok(status):
+                        status = ("ok (criterio no evaluable en disco; vale "
+                                  "la evidencia del turno)")
+            if not _pool_ok(status):
                 failed.add(n)
             committed = ""
-            if commit_each and status == "ok":
+            if commit_each and _pool_ok(status):
                 try:
                     # Stagear SOLO archivos tocados EN ESTE TURNO (untracked
                     # nuevos + tracked modificados). El scope "sesion" usa
@@ -1922,7 +1987,7 @@ class Session:
                 except Exception as e:  # noqa: BLE001
                     committed = f"falló: {e}"
             results.append({"tarea": n, "status": status, "commit": committed})
-            if status != "ok" and stop_on_fail:
+            if not _pool_ok(status) and stop_on_fail:
                 stopped_early = True
                 remaining = numbers[idx + 1:]
                 resume = ""
@@ -1940,9 +2005,9 @@ class Session:
                     "/tasks-pool ... --continue[/dim]"
                 )
                 break
-        done = [r for r in results if r["status"] == "ok"]
+        done = [r for r in results if _pool_ok(r["status"])]
         fallidas_det = [(r["tarea"], r["status"]) for r in results
-                        if r["status"] != "ok" and r["tarea"] not in blocked]
+                        if not _pool_ok(r["status"]) and r["tarea"] not in blocked]
         summary = {
             "total": len(results), "ok": len(done),
             "fallidas": [t for t, _ in fallidas_det],
@@ -5433,6 +5498,17 @@ class Session:
                 except Exception:
                     pass
                 continue
+            except CompletionLoopCut as e:
+                # Victory-lap loop con trabajo YA escrito: no reintentar
+                # (re-ejecutaría o reescribiría lo hecho). Se conserva la
+                # evidencia parcial y se va directo a las compuertas de
+                # cierre + veredicto determinístico.
+                self._last_response = e.partial or ""
+                console.print(
+                    "\n[dim]↻ Corte por loop con trabajo ya escrito — "
+                    "se cierra el turno y decide la verificación.[/dim]"
+                )
+                break
             except Exception as e:
                 if _is_llama_connection_error(e):
                     _llm_down_console_msg(self.llm)

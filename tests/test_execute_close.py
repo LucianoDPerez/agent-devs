@@ -1201,8 +1201,12 @@ def test_pool_veredicto_bloqueo_y_flip(tmp_path):
 
     s.run_turn = _fake_run_turn
     summary = s.run_task_pool([1, 2, 3, 4], tasks_file=str(tasks))
+    # T2 veredicto False + cero escrituras → UN reintento forzando
+    # implementación (que también falla: el fake no escribe).
     assert [c.split(" de ")[0] for c in calls] == [
-        "implementar Tarea 1", "implementar Tarea 2", "implementar Tarea 4"]
+        "implementar Tarea 1", "implementar Tarea 2", "implementar Tarea 2",
+        "implementar Tarea 4"]
+    assert "NO escribió" in calls[2]  # el reintento lleva el forcing
     assert summary["ok"] == 2
     assert summary["fallidas"] == [2]
     assert summary["bloqueadas"] == [3]
@@ -1218,6 +1222,62 @@ def test_pool_veredicto_bloqueo_y_flip(tmp_path):
         assert b["id"] == a["id"]
         for k in ("title", "files", "depends_on", "ac", "verify"):
             assert b[k] == a[k]
+
+
+def test_pool_reintento_noop_rescata_si_cumple(tmp_path):
+    """El reintento no-op rescata: si el segundo turno escribe y el criterio
+    cierra, la tarea queda ok + DONE (no se castiga el primer intento vacío)."""
+    import json
+
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    target = repo / "m.txt"
+    target.write_text("hola mundo\n")
+    tasks = repo / "tasks.json"
+    tasks.write_text(json.dumps({"tasks": [
+        {"id": "T01", "title": "t1", "files": ["m.txt"],
+         "depends_on": [], "ac": "",
+         "verify": "grep -q 'zzz-rescate' m.txt", "status": "TODO"},
+    ]}), encoding="utf-8")
+    s = Session(llm=None, repo_path=str(repo))
+    calls = []
+
+    def _fake_run_turn(prompt):
+        calls.append(prompt)
+        # Primer turno vacío; el reintento (forcing) sí escribe.
+        if "NO escribió" in prompt:
+            with open(target, "a", encoding="utf-8") as f:
+                f.write("zzz-rescate\n")
+            s._session_touched_files.add(str(target))
+        s._last_turn_failed = False
+
+    s.run_turn = _fake_run_turn
+    summary = s.run_task_pool([1], tasks_file=str(tasks))
+    assert len(calls) == 2  # intento + UN reintento (acotado a 1)
+    assert summary["ok"] == 1
+    assert summary["fallidas"] == []
+    after = json.loads(tasks.read_text(encoding="utf-8"))
+    assert after["tasks"][0]["status"] == "DONE"
+
+
+def test_pool_veredicto_none_anota_y_no_bloquea(tmp_path):
+    """Criterio no evaluable en disco + turno limpio: ok anotado (no es un ok
+    ciego: el status lo dice) y NO bloquea a las dependientes."""
+    from orchestration.session import Session
+
+    repo = _init_repo(tmp_path)
+    s = Session(llm=None, repo_path=str(repo))
+
+    def _fake_run_turn(prompt):
+        s._last_turn_failed = False
+
+    s.run_turn = _fake_run_turn
+    summary = s.run_task_pool([1, 2, 3], tasks_file="deuda/tareas.json")
+    assert summary["ok"] == 3
+    assert summary["fallidas"] == []
+    detalle = {r["tarea"]: r["status"] for r in summary["detalle"]}
+    assert all(v.startswith("ok (criterio no evaluable") for v in detalle.values())
 
 
 def test_pool_continue_sigue_tras_fallo(tmp_path):

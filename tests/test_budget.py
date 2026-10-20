@@ -623,8 +623,8 @@ class TestStatusFlipPassthrough:
         dd = ToolCallDedupe(max_repeats=9)
         w = wrap_tools_with_dedupe([edit_file], dd, ExploreBudget(),
                                    repo_path=str(tmp_path))[0]
-        r1 = w.invoke({"path": str(p), "old_str": '"status": "pending"',
-                       "new_str": '"status": "DONE"'})
+        r1 = w.invoke({"path": str(p), "old_str": '"id": "T006",\n      "status": "pending",\n      "file": "a.ts"',
+                       "new_str": '"id": "T006",\n      "status": "DONE",\n      "file": "a.ts"'})
         assert "Replaced" in r1
         assert json.loads(p.read_text())["tasks"][0]["status"] == "DONE"
 
@@ -676,8 +676,8 @@ class TestApplyPatchStatusFlip:
         ))
         read_file.invoke({"path": str(p)})
         edits = json.dumps([{
-            "old_string": '"status": "pending",\n      "file": "a.ts"',
-            "new_string": '"status": "DONE",\n      "file": "a.ts"',
+            "old_string": '"id": "T013",\n      "title": "x",\n      "status": "pending",\n      "file": "a.ts"',
+            "new_string": '"id": "T013",\n      "title": "x",\n      "status": "DONE",\n      "file": "a.ts"',
         }])
         r = apply_patch.invoke({"path": str(p), "edits": edits})
         assert r.startswith("✅")

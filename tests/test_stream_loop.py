@@ -18,6 +18,7 @@ import pytest
 from langchain_core.messages import AIMessageChunk
 
 from display.console import (
+    CompletionLoopCut,
     ReasoningOnlyResponse,
     stream_agent_turn,
 )
@@ -217,6 +218,25 @@ def test_stream_corta_loop_listo_sin_colgarse():
     out = _run(_FakeAgent([_text_chunk(_T004_BLOQUE) for _ in range(12)]))
     assert "<CPA_DONE>" in out
     assert len(out) < len(_T004_BLOQUE * 12)
+
+
+def test_loop_con_escritura_levanta_completion_loop_cut():
+    """Victory-lap (T021/T022): loop DESPUÉS de escribir → se levanta
+    CompletionLoopCut con el parcial (la sesión corta intentos y decide el
+    cierre), en vez de devolver texto y seguir reintentando."""
+    with pytest.raises(CompletionLoopCut) as exc:
+        _run(_FakeAgent(
+            [_tool_chunk("edit_file")] + [_text_chunk(_T004_BLOQUE)] * 4
+        ))
+    assert "<CPA_DONE>" in exc.value.partial
+    assert exc.value.reason == "completion-loop-cut"
+
+
+def test_loop_sin_escritura_no_levanta_devuelve_texto():
+    """Sin writes previas el corte por loop mantiene el comportamiento
+    anterior (devuelve el texto; el no-write retry decide)."""
+    out = _run(_FakeAgent([_text_chunk(_T004_BLOQUE) for _ in range(12)]))
+    assert "<CPA_DONE>" in out
 
 
 # ── require_text (respuesta vacía tras tools) ────────────────────────────────

@@ -81,6 +81,66 @@ def _status_only_flip(before: object, after: object) -> bool:
     return before == after
 
 
+def _single_done_flip(before: object, after: object):
+    """(task_id, verify) si difieren en EXACTAMENTE un flip a DONE, else None.
+
+    Endurece _status_only_flip para tasks.json: un edit = una tarea (el pool
+    avanza de a una; multi-flips en un edit esconden qué tarea se hizo).
+    task_id es "" si la entrada flipeada no tiene "id" hermano.
+    """
+    if not _status_only_flip(before, after):
+        return None
+    found: list[tuple[str, str]] = []
+
+    def _walk(b: object, a: object) -> None:
+        if isinstance(b, dict) and isinstance(a, dict):
+            if set(b) != set(a):
+                return
+            for k in b:
+                if k == "status" and b[k] != a[k]:
+                    found.append((
+                        b.get("id", "") if isinstance(b.get("id", ""), str) else "",
+                        b.get("verify", "") if isinstance(b.get("verify", ""), str) else "",
+                    ))
+                else:
+                    _walk(b[k], a[k])
+        elif isinstance(b, list) and isinstance(a, list) and len(b) == len(a):
+            for x, y in zip(b, a, strict=False):
+                _walk(x, y)
+
+    _walk(before, after)
+    if len(found) != 1:
+        return None
+    return found[0]
+
+
+def _strict_flip_error(before: object, after: object, search_text: str) -> str | None:
+    """None si el cambio es un único flip a DONE anclado a su tarea.
+
+    El ancla (id o verify de la tarea en el old_str) prueba que el turno
+    apunta a la tarea correcta: un old_str genérico ("status": "PENDING")
+    flipea la PRIMERA pendiente del archivo, que puede no ser la del turno
+    (E2E landing T021: casi marca T020). ensure_task_done ya construye el
+    old_str desde el "id", así que el flip del harness pasa.
+    """
+    flip = _single_done_flip(before, after)
+    if flip is None:
+        return (
+            "solo se permite UN flip pending→DONE por edit (una sola tarea, "
+            "sin tocar nada más)"
+        )
+    tid, tverify = flip
+    if not tid:
+        return None
+    st = search_text or ""
+    if tid in st or (tverify and tverify in st):
+        return None
+    return (
+        f"el flip es de la tarea {tid} pero tu old_str no la nombra — "
+        f"incluí \"id\": \"{tid}\" (o su verify literal) en el old_str"
+    )
+
+
 # Paths que el harness YA leyó en esta sesión (read_file exitoso) o creó
 # con write_file. edit_file/apply_patch EXIGEN haber leído antes: el modelo
 # chico inventa old_str de memoria y corrompe el archivo (fase 1 little-coder:
@@ -1093,22 +1153,45 @@ def edit_file(path: str, old_str: str, new_str: str) -> str:
 
     # Autorización final del status-flip en protegidos: el JSON resultante
     # debe ser EXACTAMENTE el anterior con status→DONE (nada más).
-    if _protected:
+    _is_tasks_json = Path(path).name.lower() == "tasks.json"
+    if _protected or _is_tasks_json:
         import json as _jsonf
 
         try:
-            ok_flip = _status_only_flip(
-                _jsonf.loads(content), _jsonf.loads(new_content)
-            )
-        except Exception:
-            ok_flip = False
-        if not ok_flip:
-            return (
-                f"⛔ '{path}' es de PLANIFICACIÓN: solo se permite marcar "
-                "status pending→DONE (el flip se valida sobre el JSON "
-                "completo). Tu edit cambiaría MÁS COSAS — no está permitido. "
-                "NO lo reintentes."
-            )
+            _jb, _ja = _jsonf.loads(content), _jsonf.loads(new_content)
+            _jerr = None
+        except Exception as _je:
+            _jb = _ja = None
+            _jerr = str(_je)
+        if _is_tasks_json:
+            # tasks.json SIEMPRE estricto (citado o no): un flip anclado por
+            # edit. Sin ancla, un old_str genérico flipea la primera pendiente
+            # aunque el turno trabajara otra (casi-falla T021→T020).
+            if _jerr is not None:
+                return (
+                    f"⛔ '{path}' quedaría como JSON inválido ({_jerr}). "
+                    "El archivo NO fue modificado."
+                )
+            _serr = _strict_flip_error(_jb, _ja, old_str)
+            if _serr:
+                return (
+                    f"⛔ '{path}' es tasks.json: {_serr}. "
+                    "El archivo NO fue modificado."
+                )
+        else:
+            try:
+                ok_flip = _status_only_flip(_jb, _ja)
+            except Exception:
+                ok_flip = False
+            if _jerr is not None:
+                ok_flip = False
+            if not ok_flip:
+                return (
+                    f"⛔ '{path}' es de PLANIFICACIÓN: solo se permite marcar "
+                    "status pending→DONE (el flip se valida sobre el JSON "
+                    "completo). Tu edit cambiaría MÁS COSAS — no está permitido. "
+                    "NO lo reintentes."
+                )
 
     # GUARD MARCADORES: las líneas <!-- ... --> son anclas de sección
     # (E2E landing: T018 borró <!-- FOOTER --> y bloqueó T021). Un edit
@@ -1244,19 +1327,42 @@ def apply_patch(path: str, edits: str) -> str:
             return violation
     # Autorización final del status-flip en protegidos (apply_patch): el JSON
     # resultante debe ser EXACTAMENTE el anterior con status→DONE.
-    if _protected:
+    _is_tasks_json = Path(path).name.lower() == "tasks.json"
+    if _protected or _is_tasks_json:
         try:
-            ok_flip = _status_only_flip(
-                _json.loads(content), _json.loads(new_content)
+            _jb, _ja = _json.loads(content), _json.loads(new_content)
+            _jerr = None
+        except Exception as _je:
+            _jb = _ja = None
+            _jerr = str(_je)
+        if _is_tasks_json:
+            if _jerr is not None:
+                return (
+                    f"⛔ '{path}' quedaría como JSON inválido ({_jerr}). "
+                    "Nada fue escrito."
+                )
+            _search_all = "\n".join(
+                str(e.get("old_string") or e.get("old_str") or "")
+                for e in parsed
             )
-        except Exception:
-            ok_flip = False
-        if not ok_flip:
-            return (
-                f"⛔ '{path}' es de PLANIFICACIÓN: solo se permite marcar "
-                "status pending→DONE. Tu patch cambiaría MÁS COSAS — no está "
-                "permitido. NO lo reintentes."
-            )
+            _serr = _strict_flip_error(_jb, _ja, _search_all)
+            if _serr:
+                return (
+                    f"⛔ '{path}' es tasks.json: {_serr}. Nada fue escrito."
+                )
+        else:
+            try:
+                ok_flip = _status_only_flip(_jb, _ja)
+            except Exception:
+                ok_flip = False
+            if _jerr is not None:
+                ok_flip = False
+            if not ok_flip:
+                return (
+                    f"⛔ '{path}' es de PLANIFICACIÓN: solo se permite marcar "
+                    "status pending→DONE. Tu patch cambiaría MÁS COSAS — no está "
+                    "permitido. NO lo reintentes."
+                )
     # GUARD MARCADORES (igual que edit_file): no borrar ni duplicar
     # líneas <!-- ... --> preexistentes (E2E landing T018→T021).
     _marker_bad = _marker_violation(content, new_content)

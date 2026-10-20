@@ -652,13 +652,15 @@ class TestTaskAllowExplicitUserCite:
     """E2E real: 'marcá Done en .agent/tasks.json' se bloqueaba aunque el
     usuario lo pidió explícito. Lo citado por el usuario gana a la protección."""
 
-    def test_citado_explicito_permite_editar(self):
+    def test_citado_explicito_permite_flip_anclado(self):
         from tools.filesystem import TASK_PATH_ALLOW, _is_protected_task_path
 
         repo = tempfile.mkdtemp()
         p = Path(repo) / ".agent" / "tasks.json"
         p.parent.mkdir(parents=True)
-        p.write_text('{"tasks": []}', encoding="utf-8")
+        p.write_text(
+            '{"tasks": [{"id": "T01", "status": "TODO", "verify": "x"}]}',
+            encoding="utf-8")
         assert _is_protected_task_path(str(p)) is True  # bloqueado por default
         TASK_PATH_ALLOW.add(str(p))
         try:
@@ -666,10 +668,34 @@ class TestTaskAllowExplicitUserCite:
             read_file.invoke({"path": str(p)})
             result = edit_file.invoke({
                 "path": str(p),
+                "old_str": '"id": "T01", "status": "TODO"',
+                "new_str": '"id": "T01", "status": "DONE"',
+            })
+            assert "Replaced block" in result
+        finally:
+            TASK_PATH_ALLOW.clear()
+
+    def test_citado_no_permite_cambio_estructural(self):
+        """tasks.json citado: el flip anclado pasa, pero reestructurar el
+        plan por iniciativa del agente sigue bloqueado (la cita habilita el
+        mantenimiento de status, no la replanificación)."""
+        from tools.filesystem import TASK_PATH_ALLOW
+
+        repo = tempfile.mkdtemp()
+        p = Path(repo) / ".agent" / "tasks.json"
+        p.parent.mkdir(parents=True)
+        original = '{"tasks": []}'
+        p.write_text(original, encoding="utf-8")
+        TASK_PATH_ALLOW.add(str(p))
+        try:
+            read_file.invoke({"path": str(p)})
+            result = edit_file.invoke({
+                "path": str(p),
                 "old_str": '"tasks": []',
                 "new_str": '"tasks": [{"done": true}]',
             })
-            assert "Replaced block" in result
+            assert "tasks.json" in result and "Replaced block" not in result
+            assert p.read_text(encoding="utf-8") == original
         finally:
             TASK_PATH_ALLOW.clear()
 
@@ -741,26 +767,39 @@ class TestJsonGate:
 def test_status_flip_pending_a_done_en_tasks_json(tmp_path):
     """Flujo del usuario: el agente MANTIENE tasks.json (marca DONE). Un edit
     que SOLO cambia status pending→DONE se permite; cualquier otro cambio
-    sigue PROHIBIDO."""
+    sigue PROHIBIDO. El old_str debe anclar la tarea por su "id" (o verify):
+    un flip genérico sin ancla se rechaza aunque haya una sola pendiente."""
     import json
 
     p = tmp_path / ".agent" / "tasks.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps({"tasks": [
-        {"id": "T006", "title": "x", "status": "pending", "file": "src/a.ts"},
+        {"id": "T006", "title": "x", "status": "pending", "file": "src/a.ts",
+         "verify": "grep -q x src/a.ts"},
         {"id": "T007", "title": "y", "status": "pending"},
     ]}, indent=2))
 
     read_file.invoke({"path": str(p)})
     r = edit_file.invoke({
         "path": str(p),
-        "old_str": '"status": "pending",\n      "file": "src/a.ts"',
-        "new_str": '"status": "DONE",\n      "file": "src/a.ts"',
+        "old_str": '"id": "T006", "title": "x", "status": "pending",',
+        "new_str": '"id": "T006", "title": "x", "status": "DONE",',
     })
     assert r.startswith("✅")
     d = json.loads(p.read_text())
     assert d["tasks"][0]["status"] == "DONE"
     assert d["tasks"][1]["status"] == "pending"  # solo la pinnada cambió
+
+    # Genérico sin ancla: aunque matchee único, se rechaza (podría ser la
+    # tarea equivocada — casi-falla T021→T020).
+    r2 = edit_file.invoke({
+        "path": str(p),
+        "old_str": '"status": "pending"',
+        "new_str": '"status": "DONE"',
+    })
+    assert "ancla" in r2 or "id" in r2
+    d2 = json.loads(p.read_text())
+    assert d2["tasks"][1]["status"] == "pending"  # T007 intacta
 
 
 def test_status_flip_rechaza_otros_cambios(tmp_path):
@@ -800,6 +839,72 @@ def test_write_file_status_flip_permite_sobrescribir(tmp_path):
     r2 = write_file.invoke({"path": str(p), "content": json.dumps(d, indent=2)})
     assert "PROHIBIDO" in r2
     assert "hacked" not in p.read_text()
+
+
+def test_single_done_flip_puro():
+    from tools.filesystem import _single_done_flip
+
+    assert _single_done_flip(
+        {"tasks": [{"id": "T1", "status": "pending"}]},
+        {"tasks": [{"id": "T1", "status": "DONE"}]},
+    ) == ("T1", "")
+    # Cero flips → None.
+    assert _single_done_flip(
+        {"tasks": [{"id": "T1", "status": "pending"}]},
+        {"tasks": [{"id": "T1", "status": "pending"}]},
+    ) is None
+    # Dos flips en un edit → None (una tarea por vez).
+    assert _single_done_flip(
+        {"tasks": [{"id": "T1", "status": "pending"},
+                   {"id": "T2", "status": "pending"}]},
+        {"tasks": [{"id": "T1", "status": "DONE"},
+                   {"id": "T2", "status": "DONE"}]},
+    ) is None
+    # Otro cambio además del flip → None.
+    assert _single_done_flip(
+        {"tasks": [{"id": "T1", "status": "pending", "title": "a"}]},
+        {"tasks": [{"id": "T1", "status": "DONE", "title": "b"}]},
+    ) is None
+
+
+def test_tasks_json_multi_flip_rechazado(tmp_path):
+    """Dos flips en un solo edit se rechazan aunque sean status→DONE."""
+    import json
+
+    p = tmp_path / "tasks.json"
+    p.write_text(json.dumps({"tasks": [
+        {"id": "T01", "status": "pending"},
+        {"id": "T02", "status": "pending"},
+    ]}, indent=2))
+    read_file.invoke({"path": str(p)})
+    r = edit_file.invoke({
+        "path": str(p),
+        "old_str": '"status": "pending"},\n    {"id": "T02", "status": "pending"',
+        "new_str": '"status": "DONE"},\n    {"id": "T02", "status": "DONE"',
+    })
+    assert "Replaced block" not in r
+    d = json.loads(p.read_text())
+    assert [t["status"] for t in d["tasks"]] == ["pending", "pending"]
+
+
+def test_tasks_json_flip_por_verify_tambien_ancla(tmp_path):
+    """El verify literal de la tarea también sirve de ancla (patrón real de
+    los turnos del pool, que anclan por verify cuando el id no está a mano)."""
+    import json
+
+    p = tmp_path / "tasks.json"
+    p.write_text(json.dumps({"tasks": [
+        {"id": "T01", "status": "pending", "verify": "grep -q hola m.txt"},
+        {"id": "T02", "status": "pending", "verify": "grep -q chau m.txt"},
+    ]}, indent=2))
+    read_file.invoke({"path": str(p)})
+    r = edit_file.invoke({
+        "path": str(p),
+        "old_str": '"status": "pending", "verify": "grep -q hola m.txt"',
+        "new_str": '"status": "DONE", "verify": "grep -q hola m.txt"',
+    })
+    assert r.startswith("✅")
+    assert json.loads(p.read_text())["tasks"][0]["status"] == "DONE"
 
 
 def test_status_only_flip_puro():
