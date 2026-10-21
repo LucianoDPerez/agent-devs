@@ -143,6 +143,67 @@ def _is_llama_connection_error(exc: BaseException) -> bool:
     return False
 
 
+def _is_context_exceeded(exc: BaseException) -> tuple[bool, int | None, int | None]:
+    """True si el LLM rechazó la request por falta de contexto (400 de llama.cpp u homólogos).
+
+    Retorna (excedido, pedidos, disponibles). No recorta nada: el caller solo
+    informa y deja decidir al usuario (el output grande —p. ej.
+    cm__get_architecture— ES la respuesta; truncarlo mutila calidad).
+    """
+    seen: set[int] = set()
+    blobs: list[str] = []
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        try:
+            blobs.append(str(cur))
+        except Exception:
+            pass
+        nxt = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+        cur = nxt if isinstance(nxt, BaseException) else None
+    blob = " ".join(blobs)
+    low = blob.lower()
+    markers = (
+        "exceeds the available context",
+        "exceed_context_size",
+        "exceed context",
+        "context_length_exceeded",
+        "maximum context length",
+        "context window",
+    )
+    if not any(m in low for m in markers):
+        return False, None, None
+    requested: int | None = None
+    available: int | None = None
+    try:
+        nums = [int(v) for v in re.findall(r"(\d+)\s*tokens", blob)]
+        if len(nums) >= 2:
+            requested, available = nums[0], nums[1]
+        elif len(nums) == 1:
+            requested = nums[0]
+        m_req = re.search(r"n_prompt_tokens['\"]?\s*[:=]\s*(\d+)", blob)
+        m_ctx = re.search(r"n_ctx['\"]?\s*[:=]\s*(\d+)", blob)
+        if m_req:
+            requested = int(m_req.group(1))
+        if m_ctx:
+            available = int(m_ctx.group(1))
+    except Exception:
+        pass
+    return True, requested, available
+
+
+def _fmt_elapsed(seconds: float) -> str:
+    """Duración legible para el timing por tarea (45.2s / 1m 05s)."""
+    try:
+        s = max(0.0, float(seconds))
+    except Exception:
+        return "?"
+    if s < 60:
+        return f"{s:.1f}s"
+    m = int(s // 60)
+    return f"{m}m {s % 60:05.2f}s" if m < 60 else f"{m // 60}h {m % 60:02d}m"
+
+
 def _llama_down_console_msg(base: str | None = None) -> None:
     from config import LLM_BASE_URL as _BASE
     console.print(f"\n[red]❌ llama.cpp está apagado — no se pudo conectar a {base or _BASE}[/red]")
@@ -1804,6 +1865,7 @@ class Session:
         blocked: dict[int, list[int]] = {}
         depmap = _pool_dep_map(tasks_file) if tasks_file else {}
         self._seed_pool_baseline()
+        pool_t0 = time.monotonic()
         for idx, n in enumerate(numbers):
             unmet = [d for d in depmap.get(n, ()) if d in failed or d in blocked]
             if unmet:
@@ -1835,16 +1897,21 @@ class Session:
                                 f"DONE y sigue cumplida en disco ({b_ev}) — "
                                 f"se confirma.[/dim]")
                             results.append({"tarea": n, "status": "ok",
-                                            "commit": ""})
+                                            "commit": "", "elapsed_s": 0.0,
+                                            "started_at": ""})
                             continue
                 blocked[n] = unmet
                 dep_txt = ", ".join(f"T{d:03d}" for d in sorted(unmet)[:3])
                 status = f"bloqueada (depende de {dep_txt} no completada)"
                 console.print(f"\n[dim]⏭️  T{n:03d} bloqueada: depende de {dep_txt}.[/dim]")
-                results.append({"tarea": n, "status": status, "commit": ""})
+                results.append({"tarea": n, "status": status, "commit": "",
+                                "elapsed_s": 0.0, "started_at": ""})
                 continue
             self._fresh_pool_turn()
             touched_before = set(self._session_touched_files)
+            task_t0 = time.monotonic()
+            task_started = time.strftime("%H:%M:%S", time.localtime())
+            console.print(f"\n[dim]⏱️  T{n:03d} inicio {task_started}[/dim]")
             prompt = f"implementar Tarea {n}"
             if tasks_file:
                 prompt += f" de {tasks_file}"
@@ -1986,7 +2053,14 @@ class Session:
                         committed = "nada stageable"
                 except Exception as e:  # noqa: BLE001
                     committed = f"falló: {e}"
-            results.append({"tarea": n, "status": status, "commit": committed})
+            task_elapsed = time.monotonic() - task_t0
+            console.print(
+                f"[dim]⏱️  T{n:03d} fin ({_fmt_elapsed(task_elapsed)}) — "
+                f"{'OK' if _pool_ok(status) else 'fallida'}[/dim]"
+            )
+            results.append({"tarea": n, "status": status, "commit": committed,
+                            "elapsed_s": round(task_elapsed, 1),
+                            "started_at": task_started})
             if not _pool_ok(status) and stop_on_fail:
                 stopped_early = True
                 remaining = numbers[idx + 1:]
@@ -2008,6 +2082,7 @@ class Session:
         done = [r for r in results if _pool_ok(r["status"])]
         fallidas_det = [(r["tarea"], r["status"]) for r in results
                         if not _pool_ok(r["status"]) and r["tarea"] not in blocked]
+        pool_elapsed = time.monotonic() - pool_t0
         summary = {
             "total": len(results), "ok": len(done),
             "fallidas": [t for t, _ in fallidas_det],
@@ -2015,13 +2090,22 @@ class Session:
             "bloqueadas": sorted(blocked),
             "detalle": results,
             "stopped_early": stopped_early,
+            "total_elapsed_s": round(pool_elapsed, 1),
         }
         console.print(
-            f"\n[bold]Pool: {summary['ok']}/{summary['total']} tareas OK[/bold]"
+            f"\n[bold]Pool: {summary['ok']}/{summary['total']} tareas OK "
+            f"en {_fmt_elapsed(pool_elapsed)}[/bold]"
             + (f" — fallidas: {summary['fallidas']}" if summary["fallidas"] else "")
             + (f" — bloqueadas: {summary['bloqueadas']}" if summary["bloqueadas"] else "")
             + (" (detenido ante el primer fallo)" if stopped_early else "")
         )
+        for r in results:
+            el = r.get("elapsed_s") or 0.0
+            if el <= 0:
+                continue
+            ini = f" (inicio {r.get('started_at')})" if r.get("started_at") else ""
+            mark = "✅" if _pool_ok(r.get("status", "")) else "❌"
+            console.print(f"[dim]  {mark} T{r['tarea']:03d}: {_fmt_elapsed(el)}{ini}[/dim]")
         for t, st in fallidas_det:
             console.print(f"[red]  • T{t:03d}: {st}[/red]")
         return summary
@@ -5622,8 +5706,46 @@ class Session:
                             flush=True,
                         )
                 else:
-                    turn_failed = True
-                    print(f"\n\n❌ Error en la iteración: {e}", flush=True)
+                    exceeded, req_toks, avail_toks = _is_context_exceeded(e)
+                    if exceeded:
+                        turn_failed = True
+                        lim_txt = f"{self._ctx_limit:,} tokens".replace(",", ".")
+                        det = ""
+                        if req_toks and avail_toks:
+                            det = (
+                                f" (pidió ~{req_toks:,} y el slot admite "
+                                f"{avail_toks:,})".replace(",", ".")
+                            )
+                        elif req_toks:
+                            det = f" (pidió ~{req_toks:,})".replace(",", ".")
+                        console.print(
+                            f"\n[red]⛔ Se quedó sin contexto{det} — "
+                            f"límite vivo {lim_txt}.[/red]"
+                        )
+                        console.print(
+                            "[dim]No recorto nada automáticamente para no "
+                            "perder calidad (el output grande suele SER la "
+                            "respuesta). Decidí vos:[/dim]"
+                        )
+                        console.print(
+                            "[dim]  · /compact — resume el historial y seguí "
+                            "en esta sesión[/dim]"
+                        )
+                        console.print(
+                            "[dim]  · /new — turno fresco sin historial[/dim]"
+                        )
+                        console.print(
+                            "[dim]  · reintentá más acotado (p. ej. "
+                            "cm__get_architecture con aspects=['packages'] "
+                            "o leé 1 archivo por vez)[/dim]"
+                        )
+                        console.print(
+                            "[dim]  · subí el -c de llama-server (GET /props) "
+                            "o pasate a la nube: /model muse-spark-1.3[/dim]\n"
+                        )
+                    else:
+                        turn_failed = True
+                        print(f"\n\n❌ Error en la iteración: {e}", flush=True)
                 break
             finally:
                 if watcher is not None:
