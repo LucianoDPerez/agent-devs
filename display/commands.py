@@ -11,10 +11,13 @@ Comandos (descripción breve, la que ve el usuario en el menú):
 - /history  Muestra los últimos turnos guardados con su id
 - /resume   Retoma una sesión anterior: /resume <id>
 - /help     Muestra esta ayuda de comandos
+- /language Idioma UI + respuestas: /language | /language es|en
 """
 from __future__ import annotations
 
 # (nombre, descripción breve, lleva_argumentos)
+# Descripciones en español (default histórico); las inglesas viven en
+# core.lang (t("cmd_*", "en")). format_help() acepta lang.
 COMMANDS: tuple[tuple[str, str, bool], ...] = (
     ("/new", "Inicia una nueva sesión (limpia historial y panel)", False),
     ("/compact", "Resume el historial para liberar contexto", False),
@@ -27,9 +30,28 @@ COMMANDS: tuple[tuple[str, str, bool], ...] = (
     ("/push", "Pushea la rama actual: /push [remote]", True),
     ("/pr", "Abre PR de la rama actual con gh: /pr [base]", True),
     ("/model", "LLM en caliente: /model | /model <id> [low|medium|high] | /model local|opencode", True),
+    ("/language", "Idioma UI + respuestas: /language | /language es|en", True),
     ("/log", "Vuelca el panel a un archivo: /log [N líneas]", True),
     ("/help", "Muestra esta ayuda de comandos", False),
 )
+
+# Key de core.lang.t() por comando (para format_help(lang="en")).
+_CMD_TKEY = {
+    "/new": "cmd_new",
+    "/compact": "cmd_compact",
+    "/history": "cmd_history",
+    "/resume": "cmd_resume",
+    "/autoapprove": "cmd_autoapprove",
+    "/verify": "cmd_verify",
+    "/tasks-pool": "cmd_tasks_pool",
+    "/commit": "cmd_commit",
+    "/push": "cmd_push",
+    "/pr": "cmd_pr",
+    "/model": "cmd_model",
+    "/language": "cmd_language",
+    "/log": "cmd_log",
+    "/help": "cmd_help",
+}
 
 _NAMES = [c[0] for c in COMMANDS]
 _TAKES_ARGS = {c[0] for c in COMMANDS if c[2]}
@@ -49,8 +71,25 @@ def match_commands(prefix: str) -> list[tuple[str, str]]:
     return [(n, d) for (n, d, _) in COMMANDS if n.startswith(p)]
 
 
-def format_help(matches: list[tuple[str, str]] | None = None) -> str:
-    """Una línea por comando: '  /new      descripción'."""
+def format_help(matches: list[tuple[str, str]] | None = None, lang: str = "es") -> str:
+    """Una línea por comando: '  /new      descripción'.
+
+    lang="en" usa las descripciones inglesas de core.lang; cualquier otro
+    valor usa las españolas del registro (comportamiento histórico).
+    """
+    if lang == "en":
+        try:
+            from core.lang import t as _t
+
+            order = [(n, d) for (n, d, _) in COMMANDS]
+            if matches is not None:
+                names = {n for n, _ in matches}
+                order = [(n, d) for (n, d) in order if n in names]
+            return "\n".join(
+                f"  {n:<9} {_t(_CMD_TKEY.get(n, 'cmd_help'), 'en')}" for n, _ in order
+            )
+        except Exception:
+            pass
     items = matches if matches is not None else [(n, d) for (n, d, _) in COMMANDS]
     if not items:
         return "  (sin coincidencias)"

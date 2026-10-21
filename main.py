@@ -485,14 +485,14 @@ def run_fullscreen(session) -> None:
         if kind == "message":
             pass  # sigue abajo: eco + run_turn
         elif kind == "help":
-            console.print("[bold]Comandos:[/bold]\n" + format_help())
+            console.print("[bold]Comandos:[/bold]\n" + format_help(lang=getattr(session, "_lang", "es")))
             return
         elif kind == "hint":
             matches = payload
             if matches:
-                console.print("[yellow]¿Quisiste decir?[/yellow]\n" + format_help(matches))
+                console.print("[yellow]¿Quisiste decir?[/yellow]\n" + format_help(matches, lang=getattr(session, "_lang", "es")))
             else:
-                console.print("[yellow]Comando desconocido. Disponibles:[/yellow]\n" + format_help())
+                console.print("[yellow]Comando desconocido. Disponibles:[/yellow]\n" + format_help(lang=getattr(session, "_lang", "es")))
             return
         elif payload[0] == "/new":
             session.reset()
@@ -572,6 +572,9 @@ def run_fullscreen(session) -> None:
         elif payload[0] == "/model":
             console.print(session.slash_model(payload[1]))
             return
+        elif payload[0] == "/language":
+            console.print(session.slash_language(payload[1]))
+            return
         elif payload[0] == "/log":
             import datetime
             try:
@@ -590,7 +593,7 @@ def run_fullscreen(session) -> None:
                 console.print(f"[red]No pude escribir {out}: {e}[/red]")
             return
         elif payload[0] == "/help":
-            console.print("[bold]Comandos:[/bold]\n" + format_help())
+            console.print("[bold]Comandos:[/bold]\n" + format_help(lang=getattr(session, "_lang", "es")))
             return
 
         # Turno normal del agente (el eco ya se imprimió arriba).
@@ -890,6 +893,12 @@ def run_show_config() -> int:
     else:
         print(f"   modelo local: {resolved['model']}")
         print(f"   base_url:     {resolved['base_url']}")
+    try:
+        from core.lang import resolve_language
+
+        print(f"   idioma:    {resolve_language()} (es|en; /language para cambiar)")
+    except Exception:
+        pass
     print("\n   Flags > env/.env > json. Cambiar en caliente: /model · ver modelos: --list-models")
     return 0
 
@@ -1248,6 +1257,8 @@ def main():
                         help="Modelo a usar (default: el del config; en opencode ej. muse-spark-1.3)")
     parser.add_argument("--reasoning", choices=("low", "medium", "high"), default=None,
                         help="Nivel de razonamiento para modelos Responses (muse-spark-*, gpt-*, grok-*)")
+    parser.add_argument("--language", choices=("es", "en"), default=None,
+                        help="Idioma UI + respuestas (default: detecta $LANG, fallback en)")
     parser.add_argument("--list-models", action="store_true",
                         help="Lista los modelos de OpenCode (🆓 gratis vs 💰 pago) y sale")
     parser.add_argument("--setup-opencode", action="store_true",
@@ -1334,6 +1345,15 @@ def main():
         else:
             _resolved = resolve_llm(provider_override="local")
         _eff_provider, _eff_model, _eff_reasoning = "local", None, None
+
+    if args.language:
+        try:
+            from core.lang import set_language
+
+            set_language(args.language)
+        except ValueError as e:
+            print(f"❌ {e}")
+            return 1
 
     reset_turn_usage()
     try:
@@ -1462,14 +1482,14 @@ def main():
                 continue
             kind, payload = interpret_slash(user_input)
             if kind == "help":
-                console.print("[bold]Comandos:[/bold]\n" + format_help() + "\n")
+                console.print("[bold]Comandos:[/bold]\n" + format_help(lang=getattr(session, "_lang", "es")) + "\n")
                 continue
             if kind == "hint":
                 matches = payload
                 if matches:
-                    console.print("[yellow]¿Quisiste decir?[/yellow]\n" + format_help(matches) + "\n")
+                    console.print("[yellow]¿Quisiste decir?[/yellow]\n" + format_help(matches, lang=getattr(session, "_lang", "es")) + "\n")
                 else:
-                    console.print("[yellow]Comando desconocido. Disponibles:[/yellow]\n" + format_help() + "\n")
+                    console.print("[yellow]Comando desconocido. Disponibles:[/yellow]\n" + format_help(lang=getattr(session, "_lang", "es")) + "\n")
                 continue
             if kind == "run" and payload[0] == "/new":
                 session.reset()
@@ -1516,11 +1536,14 @@ def main():
             if kind == "run" and payload[0] == "/model":
                 console.print(session.slash_model(payload[1]) + "\n")
                 continue
+            if kind == "run" and payload[0] == "/language":
+                console.print(session.slash_language(payload[1]) + "\n")
+                continue
             if kind == "run" and payload[0] == "/log":
                 console.print("[dim]/log solo disponible en modo --tui (ahí el panel es virtualizado; acá ya tenés todo en el scrollback).[/dim]\n")
                 continue
             if kind == "run" and payload[0] == "/help":
-                console.print("[bold]Comandos:[/bold]\n" + format_help() + "\n")
+                console.print("[bold]Comandos:[/bold]\n" + format_help(lang=getattr(session, "_lang", "es")) + "\n")
                 continue
             if kind == "run" and payload[0] == "/resume":
                 ok, msg, data = session.resume_session(payload[1])

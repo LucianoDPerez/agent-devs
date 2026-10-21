@@ -152,9 +152,14 @@ agent-devs --provider opencode --model <id> [--reasoning low|medium|high]
 agent-devs --list-models  # catálogo OpenCode: gratis vs pago + protocolo
 agent-devs --show-config  # config efectiva (key tapada)
 agent-devs --setup-opencode  # guarda tu key de OpenCode (permiso 600)
+agent-devs --language en|es  # idioma UI + respuestas (default: detecta $LANG, fallback en)
 ```
 
-Dentro de la sesión: **ESC** cancela el turno en curso · **Ctrl+C ×2** sale · `/new` sesión nueva (limpia el panel) · `/compact` resume el historial para liberar contexto · `/history` últimos turnos (con id) · `/resume <id>` retoma una sesión anterior · `/model [id|local|opencode] [low|medium|high]` cambia el LLM en caliente (persiste al config) · `/autoapprove [on|off]` aprueba escrituras sin preguntar (el commit sigue manual; `/new` lo apaga) · `/verify` corre lint/tests/build ahora · `/commit todo|sesion [mensaje|ai]` commitea (`ai` deja que el LLM redacte el mensaje desde el diff) · `/tasks-pool T001-T010 [archivo] [--commit] [--continue]` corre tareas en modo autónomo, un turno fresco por tarea (sin acumular contexto; frena ante el primer fallo salvo `--continue`) · `/help` ayuda. Al tipear `/` aparece el menú de comandos (↑/↓ navegan, Enter ejecuta, Tab completa, Esc cierra).
+## Idioma (es/en)
+
+El harness habla español e inglés. Orden de resolución: flag `--language` → config (`language` en `~/.config/agent-devs/config.json`) → env `AGENT_DEVS_LANGUAGE` / `LANG` → default `en`. Dentro de la sesión, `/language` muestra el actual y `/language es|en` cambia UI + respuestas del modelo en caliente (persiste al config; el próximo turno se reconstruye con la directiva nueva). Los prompts siguen en español como instrucciones al modelo — lo que cambia es el idioma en que te responde. Chino fuera de alcance por ahora (el 4B local rinde mal en chino; solo funciona bien vía nube).
+
+Dentro de la sesión: **ESC** cancela el turno en curso · **Ctrl+C ×2** sale · `/new` sesión nueva (limpia el panel) · `/compact` resume el historial para liberar contexto · `/history` últimos turnos (con id) · `/resume <id>` retoma una sesión anterior · `/model [id|local|opencode] [low|medium|high]` cambia el LLM en caliente (persiste al config) · `/language [es|en]` cambia idioma UI + respuestas en caliente (persiste) · `/autoapprove [on|off]` aprueba escrituras sin preguntar (el commit sigue manual; `/new` lo apaga) · `/verify` corre lint/tests/build ahora · `/commit todo|sesion [mensaje|ai]` commitea (`ai` deja que el LLM redacte el mensaje desde el diff) · `/tasks-pool T001-T010 [archivo] [--commit] [--continue]` corre tareas en modo autónomo, un turno fresco por tarea (sin acumular contexto; frena ante el primer fallo salvo `--continue`) · `/help` ayuda. Al tipear `/` aparece el menú de comandos (↑/↓ navegan, Enter ejecuta, Tab completa, Esc cierra).
 
 El límite de contexto se **detecta del server** (`/props` de llama.cpp): cuando la sesión consume ~80%, AgentDevs te avisa y te ofrece compactar; al 90% compacta solo.
 

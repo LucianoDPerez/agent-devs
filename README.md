@@ -152,9 +152,14 @@ agent-devs --provider opencode --model <id> [--reasoning low|medium|high]
 agent-devs --list-models  # OpenCode catalog: free vs paid + protocol
 agent-devs --show-config  # effective config (key masked)
 agent-devs --setup-opencode  # save your OpenCode key (mode 600)
+agent-devs --language en|es  # UI + answer language (default: detects $LANG, fallback en)
 ```
 
-Inside the session: **ESC** cancels the running turn · **Ctrl+C ×2** quits · `/new` new session (clears the panel) · `/compact` summarizes the history to free context · `/history` last turns (with id) · `/resume <id>` resumes a previous session · `/model [id|local|opencode] [low|medium|high]` switches LLM live (persists to the config) · `/autoapprove [on|off]` approves writes without asking (commit stays manual; `/new` turns it off) · `/verify` runs lint/tests/build now · `/commit todo|sesion [message|ai]` commits (`ai` lets the LLM write the message from the staged diff) · `/tasks-pool T001-T010 [file] [--commit] [--continue]` runs tasks autonomously, one fresh turn each (no context buildup; stops at the first failure unless `--continue`) · `/help` help. Typing `/` opens the command menu (↑/↓ navigate, Enter runs, Tab completes, Esc closes).
+## Language (es/en)
+
+The harness speaks English and Spanish. Detection order: `--language` flag → config file (`language` in `~/.config/agent-devs/config.json`) → `AGENT_DEVS_LANGUAGE` / `LANG` env → default `en`. Inside the session, `/language` shows the current one and `/language es|en` switches UI + model answers live (persists to the config; the next turn is rebuilt with the new language directive). Prompts stay in Spanish as model instructions — what changes is the language the model answers you in. Chinese is out of scope for now (the local 4B is weak in Chinese; it only works well via cloud).
+
+Inside the session: **ESC** cancels the running turn · **Ctrl+C ×2** quits · `/new` new session (clears the panel) · `/compact` summarizes the history to free context · `/history` last turns (with id) · `/resume <id>` resumes a previous session · `/model [id|local|opencode] [low|medium|high]` switches LLM live (persists to the config) · `/language [es|en]` switches UI + answer language live (persists) · `/autoapprove [on|off]` approves writes without asking (commit stays manual; `/new` turns it off) · `/verify` runs lint/tests/build now · `/commit todo|sesion [message|ai]` commits (`ai` lets the LLM write the message from the staged diff) · `/tasks-pool T001-T010 [file] [--commit] [--continue]` runs tasks autonomously, one fresh turn each (no context buildup; stops at the first failure unless `--continue`) · `/help` help. Typing `/` opens the command menu (↑/↓ navigate, Enter runs, Tab completes, Esc closes).
 
 The context limit is **detected from the server** (`/props` of llama.cpp): when the session reaches ~80%, AgentDevs warns you and offers to compact; at 90% it compacts automatically.
 

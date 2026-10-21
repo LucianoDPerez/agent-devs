@@ -1325,6 +1325,14 @@ class Session:
         # cuando el server corre otro modelo (E2E: decía qwen3.6-35b-a3b con
         # spark2.5-4B cargado). Vacío = sin detectar (nube o server caído).
         self._server_model_id: str = ""
+        # Idioma UI + respuestas (core/lang): override (/language,
+        # --language) > config file > env LANG > default "en".
+        try:
+            from core.lang import resolve_language
+
+            self._lang: str = resolve_language()
+        except Exception:
+            self._lang = "es"
 
         # Lógica de negocio: reglas concretas (campos requeridos, validaciones)
         # que el 4B ignora cuando solo ve la estructura general. Se inyecta en
@@ -1697,6 +1705,7 @@ class Session:
                     failure_sink=self._turn_failures,
                     temp_overrides=self._profile_temps(),
                     graph_project=self._graph_project,
+                    language=getattr(self, "_lang", "es"),
                 )
             )
         finally:
@@ -1865,7 +1874,13 @@ class Session:
         blocked: dict[int, list[int]] = {}
         pool_t0 = time.monotonic()
         pool_started = time.strftime("%H:%M:%S", time.localtime())
-        console.print(f"[dim]⏱️  Pool inicio {pool_started} — {len(numbers)} tarea(s)[/dim]")
+        try:
+            from core.lang import t as _t
+
+            _pool_lang = getattr(self, "_lang", "es")
+            console.print(f"[dim]⏱️  {_t('pool_start', _pool_lang)} {pool_started} — {len(numbers)} tarea(s)[/dim]")
+        except Exception:
+            console.print(f"[dim]⏱️  Pool inicio {pool_started} — {len(numbers)} tarea(s)[/dim]")
         depmap = _pool_dep_map(tasks_file) if tasks_file else {}
         self._seed_pool_baseline()
         for idx, n in enumerate(numbers):
@@ -1913,7 +1928,12 @@ class Session:
             touched_before = set(self._session_touched_files)
             task_t0 = time.monotonic()
             task_started = time.strftime("%H:%M:%S", time.localtime())
-            console.print(f"\n[dim]⏱️  T{n:03d} inicio {task_started}[/dim]")
+            try:
+                from core.lang import t as _t2
+
+                console.print(f"\n[dim]⏱️  T{n:03d} {_t2('pool_task_start', getattr(self, '_lang', 'es'))} {task_started}[/dim]")
+            except Exception:
+                console.print(f"\n[dim]⏱️  T{n:03d} inicio {task_started}[/dim]")
             prompt = f"implementar Tarea {n}"
             if tasks_file:
                 prompt += f" de {tasks_file}"
@@ -2056,10 +2076,19 @@ class Session:
                 except Exception as e:  # noqa: BLE001
                     committed = f"falló: {e}"
             task_elapsed = time.monotonic() - task_t0
-            console.print(
-                f"[dim]⏱️  T{n:03d} fin ({_fmt_elapsed(task_elapsed)}) — "
-                f"{'OK' if _pool_ok(status) else 'fallida'}[/dim]"
-            )
+            try:
+                from core.lang import t as _t3
+
+                _pl = getattr(self, "_lang", "es")
+                console.print(
+                    f"[dim]⏱️  T{n:03d} {_t3('pool_task_end', _pl)} ({_fmt_elapsed(task_elapsed)}) — "
+                    f"{'OK' if _pool_ok(status) else 'fallida'}[/dim]"
+                )
+            except Exception:
+                console.print(
+                    f"[dim]⏱️  T{n:03d} fin ({_fmt_elapsed(task_elapsed)}) — "
+                    f"{'OK' if _pool_ok(status) else 'fallida'}[/dim]"
+                )
             results.append({"tarea": n, "status": status, "commit": committed,
                             "elapsed_s": round(task_elapsed, 1),
                             "started_at": task_started})
@@ -2187,6 +2216,7 @@ class Session:
                         else None
                     ),
                     confirm_imminent_cb=self._mark_confirm_imminent,
+                    language=getattr(self, "_lang", "es"),
                 )
             )
             self._agent_no_explore = no_explore or tools_override is not None
@@ -2241,6 +2271,7 @@ class Session:
                         self._confirm_write_cb if EXECUTE_CONFIRM_WRITES else None
                     ),
                     confirm_imminent_cb=self._mark_confirm_imminent,
+                    language=getattr(self, "_lang", "es"),
                 )
             )
         finally:
@@ -2326,6 +2357,7 @@ class Session:
                     ),
                     confirm_imminent_cb=self._mark_confirm_imminent,
                     temp_overrides=self._profile_temps(),
+                    language=getattr(self, "_lang", "es"),
                 )
             )
         finally:
@@ -5711,40 +5743,42 @@ class Session:
                     exceeded, req_toks, avail_toks = _is_context_exceeded(e)
                     if exceeded:
                         turn_failed = True
+                        from core.lang import t as _t
+
+                        _lang = getattr(self, "_lang", "es")
                         lim_txt = f"{self._ctx_limit:,} tokens".replace(",", ".")
                         det = ""
                         if req_toks and avail_toks:
-                            det = (
-                                f" (pidió ~{req_toks:,} y el slot admite "
-                                f"{avail_toks:,})".replace(",", ".")
-                            )
+                            if _lang == "en":
+                                det = (
+                                    f" (asked ~{req_toks:,} but the slot holds "
+                                    f"{avail_toks:,})".replace(",", ".")
+                                )
+                            else:
+                                det = (
+                                    f" (pidió ~{req_toks:,} y el slot admite "
+                                    f"{avail_toks:,})".replace(",", ".")
+                                )
                         elif req_toks:
-                            det = f" (pidió ~{req_toks:,})".replace(",", ".")
-                        console.print(
-                            f"\n[red]⛔ Se quedó sin contexto{det} — "
-                            f"límite vivo {lim_txt}.[/red]"
-                        )
-                        console.print(
-                            "[dim]No recorto nada automáticamente para no "
-                            "perder calidad (el output grande suele SER la "
-                            "respuesta). Decidí vos:[/dim]"
-                        )
-                        console.print(
-                            "[dim]  · /compact — resume el historial y seguí "
-                            "en esta sesión[/dim]"
-                        )
-                        console.print(
-                            "[dim]  · /new — turno fresco sin historial[/dim]"
-                        )
-                        console.print(
-                            "[dim]  · reintentá más acotado (p. ej. "
-                            "cm__get_architecture con aspects=['packages'] "
-                            "o leé 1 archivo por vez)[/dim]"
-                        )
-                        console.print(
-                            "[dim]  · subí el -c de llama-server (GET /props) "
-                            "o pasate a la nube: /model muse-spark-1.3[/dim]\n"
-                        )
+                            if _lang == "en":
+                                det = f" (asked ~{req_toks:,})".replace(",", ".")
+                            else:
+                                det = f" (pidió ~{req_toks:,})".replace(",", ".")
+                        if _lang == "en":
+                            console.print(
+                                f"\n[red]{_t('ctx_title', 'en')}{det} — "
+                                f"live limit {lim_txt}.[/red]"
+                            )
+                        else:
+                            console.print(
+                                f"\n[red]{_t('ctx_title', 'es')}{det} — "
+                                f"límite vivo {lim_txt}.[/red]"
+                            )
+                        console.print(f"[dim]{_t('ctx_no_truncate', _lang)}[/dim]")
+                        console.print(f"[dim]{_t('ctx_opt_compact', _lang)}[/dim]")
+                        console.print(f"[dim]{_t('ctx_opt_new', _lang)}[/dim]")
+                        console.print(f"[dim]{_t('ctx_opt_retry', _lang)}[/dim]")
+                        console.print(f"[dim]{_t('ctx_opt_provider', _lang)}[/dim]\n")
                     else:
                         turn_failed = True
                         print(f"\n\n❌ Error en la iteración: {e}", flush=True)
@@ -6533,6 +6567,7 @@ class Session:
             "llm_base": getattr(llm, "base_url", "") or "",
             "transport": getattr(llm, "transport", "chat") or "chat",
             "reasoning": getattr(llm, "reasoning_effort", None),
+            "language": getattr(self, "_lang", "es"),
         }
 
     def slash_model(self, arg: str) -> str:
@@ -6677,6 +6712,27 @@ class Session:
         except Exception:
             pass
         return True, f"✅ LLM ahora: {shown} ({where}{extra}). Próximo turno lo usa."
+
+    def slash_language(self, arg: str) -> str:
+        """Comando /language: muestra o cambia el idioma (es|en)."""
+        from core.lang import normalize_lang, resolve_language, set_language, t
+
+        cur = getattr(self, "_lang", None) or resolve_language()
+        token = (arg or "").strip().lower()
+        if not token:
+            return f"{t('lang_current', cur)}: {cur}\n{t('lang_usage', cur)}"
+        got = normalize_lang(token)
+        if not got:
+            return f"⛔ {t('lang_invalid', cur)}"
+        try:
+            self._lang = set_language(got)
+        except ValueError:
+            return f"⛔ {t('lang_invalid', cur)}"
+        self.agent = None  # el próximo turno se reconstruye con la directiva
+        return (
+            f"✅ {t('lang_set', got)}: {got} "
+            f"({t('lang_current', got)}: {got}). {t('lang_rebuild', got)}"
+        )
 
     def close(self):
         pass

@@ -102,6 +102,9 @@ def load_config() -> dict[str, Any]:
     reasoning = pick("OPENCODE_REASONING", "AGENT_DEVS_REASONING")
     if reasoning:
         cfg["opencode_reasoning"] = reasoning
+    language = pick("AGENT_DEVS_LANGUAGE")
+    if language:
+        cfg["language"] = language
     return cfg
 
 

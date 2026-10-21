@@ -126,6 +126,7 @@ async def build_agent(
     failure_sink: dict | None = None,
     confirm_imminent_cb=None,
     temp_overrides: dict | None = None,
+    language: str = "es",
 ) -> tuple:
     """Construye un agente LangChain con tools y prompt del rol indicado.
 
@@ -269,6 +270,12 @@ async def build_agent(
             f"cm__*: '{graph_project}'. USALA SIEMPRE — nunca inventes ni "
             f"reutilices slugs de otras sesiones."
         )
+    try:
+        from core.lang import language_directive
+
+        extra_context += language_directive(language)
+    except Exception:
+        pass
     system_prompt = prompt_template.format(
         repo_path=repo_path,
         framework_rules=fw_rules,
