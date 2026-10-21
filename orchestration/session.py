@@ -1863,9 +1863,11 @@ class Session:
         stopped_early = False
         failed: set[int] = set()
         blocked: dict[int, list[int]] = {}
+        pool_t0 = time.monotonic()
+        pool_started = time.strftime("%H:%M:%S", time.localtime())
+        console.print(f"[dim]⏱️  Pool inicio {pool_started} — {len(numbers)} tarea(s)[/dim]")
         depmap = _pool_dep_map(tasks_file) if tasks_file else {}
         self._seed_pool_baseline()
-        pool_t0 = time.monotonic()
         for idx, n in enumerate(numbers):
             unmet = [d for d in depmap.get(n, ()) if d in failed or d in blocked]
             if unmet:
