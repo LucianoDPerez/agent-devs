@@ -275,9 +275,9 @@ async def build_agent(
     try:
         from core.lang import language_directive
 
-        extra_context += language_directive(language)
+        _lang_head = language_directive(language)
     except Exception:
-        pass
+        _lang_head = ""
     system_prompt = prompt_template.format(
         repo_path=repo_path,
         framework_rules=fw_rules,
@@ -288,6 +288,12 @@ async def build_agent(
         max_output_tokens=EXECUTE_MAX_TOKENS,
         max_output_chars=int(EXECUTE_MAX_TOKENS * 3),
     )
+    if _lang_head:
+        # La directiva de idioma va PRIMERO (primacía): al final del prompt
+        # se ahoga entre instrucciones y análisis en español y los modelos
+        # chicos responden en el idioma del contexto (E2E: Mellum tras
+        # /language en siguió en español).
+        system_prompt = _lang_head + "\n\n" + system_prompt
 
     role_llm = llm
     update_kwargs = {}

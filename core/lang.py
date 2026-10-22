@@ -91,10 +91,20 @@ def language_directive(lang: str | None) -> str:
             "generados siguen en inglés."
         )
     return (
-        "\n\n[LANGUAGE] Respond to the user in English. "
+        "\n\n[LANGUAGE — HIGHEST PRIORITY] Respond to the user in English, "
+        "ALWAYS, regardless of the language used in these instructions, the "
+        "conversation history, or tool outputs. "
         "Code, identifiers, technical comments and generated artifacts "
         "stay in English."
     )
+
+
+def language_suffix(lang: str | None) -> str:
+    """Refuerzo por turno al final del mensaje del usuario (el historial
+    previo suele estar en otro idioma y los modelos chicos lo imitan)."""
+    if (lang or DEFAULT) == "es":
+        return ""
+    return "\n\n(Respond in English.)"
 
 
 _STRINGS: dict[str, dict[str, str]] = {

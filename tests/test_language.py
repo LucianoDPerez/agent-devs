@@ -57,6 +57,14 @@ def test_t_bilingue():
 def test_directive_por_idioma():
     assert "English" in language_directive("en")
     assert "español" in language_directive("es").lower()
+    assert "HIGHEST PRIORITY" in language_directive("en")
+
+
+def test_suffix_solo_no_es():
+    from core.lang import language_suffix
+
+    assert language_suffix("es") == ""
+    assert "English" in language_suffix("en")
 
 
 def test_help_bilingue():

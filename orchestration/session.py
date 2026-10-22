@@ -4781,6 +4781,12 @@ class Session:
                                 d=progress['done'], t=total_b)
                         )
 
+        try:
+            from core.lang import language_suffix
+
+            agent_input += language_suffix(getattr(self, "_lang", "es"))
+        except Exception:
+            pass
         self._messages.append(HumanMessage(agent_input))
 
         # Foto del dirty tree AL INICIAR el turno: el cierre atribuye a la
