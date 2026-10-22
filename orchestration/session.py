@@ -1878,13 +1878,8 @@ class Session:
         blocked: dict[int, list[int]] = {}
         pool_t0 = time.monotonic()
         pool_started = time.strftime("%H:%M:%S", time.localtime())
-        try:
-            from core.lang import t as _t
-
-            _pool_lang = getattr(self, "_lang", "es")
-            console.print(f"[dim]⏱️  {_t('pool_start', _pool_lang)} {pool_started} — {len(numbers)} tarea(s)[/dim]")
-        except Exception:
-            console.print(f"[dim]⏱️  Pool inicio {pool_started} — {len(numbers)} tarea(s)[/dim]")
+        _pool_lang = getattr(self, "_lang", "es")
+        console.print(f"[dim]⏱️  {_t('pool_start', _pool_lang)} {pool_started} — {len(numbers)} tarea(s)[/dim]")
         depmap = _pool_dep_map(tasks_file) if tasks_file else {}
         self._seed_pool_baseline()
         for idx, n in enumerate(numbers):
@@ -2835,8 +2830,8 @@ class Session:
             ts = result.stdout.strip()
             if not ts.isdigit():
                 return False
-            import time as _t
-            return ( _t.time() - int(ts) ) < 300
+            import time as _time
+            return ( _time.time() - int(ts) ) < 300
         except Exception:
             return False
 
@@ -5564,8 +5559,6 @@ class Session:
                     exceeded, req_toks, avail_toks = _is_context_exceeded(e)
                     if exceeded:
                         turn_failed = True
-                        from core.lang import t as _t
-
                         _lang = getattr(self, "_lang", "es")
                         lim_txt = f"{self._ctx_limit:,} tokens".replace(",", ".")
                         det = ""

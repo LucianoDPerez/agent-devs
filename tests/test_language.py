@@ -95,6 +95,38 @@ def test_slash_language_cambia_y_persiste(tmp_path, monkeypatch):
     assert s._lang == "en"
 
 
+def test_no_use_before_bind_t():
+    """Regresión: UnboundLocalError en _run_turn_inner (v0.5.0).
+
+    Un `from core.lang import t as _t` tardío dentro de una función que ya
+    usa el `_t` del módulo vuelve TODOS los usos locales y revienta con
+    UnboundLocalError si el uso ejecuta antes que el import.
+    """
+    import ast
+    from pathlib import Path
+
+    for rel in ("orchestration/session.py", "main.py", "display/console.py",
+                "display/tui.py", "display/fullscreen_tui.py",
+                "orchestration/agent_builder.py"):
+        tree = ast.parse((Path(__file__).resolve().parent.parent / rel).read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            binds = sorted({
+                n.lineno for n in ast.walk(node)
+                if isinstance(n, (ast.Import, ast.ImportFrom))
+                and any((a.asname or "") == "_t" for a in n.names)
+            })
+            if not binds:
+                continue
+            bad = [
+                n.lineno for n in ast.walk(node)
+                if isinstance(n, ast.Name) and n.id == "_t"
+                and isinstance(n.ctx, ast.Load) and n.lineno < min(binds)
+            ]
+            assert not bad, f"{rel}:{node.name} usa _t antes de bindearlo: {bad[:3]}"
+
+
 def test_panel_en_usa_ingles():
     from display.console import print_role_switch
 
