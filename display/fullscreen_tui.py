@@ -597,23 +597,23 @@ class FullscreenTUI(App):
             st = self.status_provider() or {}
         except Exception:
             st = {}
+        try:
+            from core.lang import t as _t
+
+            _lang = st.get("language", "es")
+        except Exception:
+            _t = lambda k, l="es": k  # noqa: E731
+            _lang = "es"
         total = int(st.get("tokens") or 0)
         repo = (st.get("repo") or "-").rstrip("/").split("/")[-1]
         spin = _SPINNER[int(__import__("time").monotonic() * 4) % len(_SPINNER)]
-        busy = f" {spin} trabajando…" if self._busy else ""
+        busy = f" {spin} {_t('tui_working', _lang)}" if self._busy else ""
         # Confirmación de write pendiente (EXECUTE_CONFIRM_WRITES): el prompt
         # va al pane (scrollable y puede quedar fuera de vista) — el toolbar
         # y el placeholder del input dan el aviso visible SIEMPRE, para que el
         # usuario responda sí/no a tiempo y el turno no venza por no verlo.
         confirming = bool(st.get("confirm_pending"))
         with contextlib.suppress(Exception):
-            try:
-                from core.lang import t as _t
-
-                _lang = st.get("language", "es")
-            except Exception:
-                _t = lambda k, l="es": k  # noqa: E731
-                _lang = "es"
             self.query_one("#input", TextArea).placeholder = (
                 _t("tui_confirm_ph", _lang)
                 if confirming
@@ -643,13 +643,12 @@ class FullscreenTUI(App):
             ("  ·  ", "dim"),
             (f" 📁 {repo}", "blue"),
             (busy, "magenta"),
-            ("   Enter=envía · ⌥Enter=salto · rueda=scroll · "
-             + ("Selección+⌥C=copiar · " if sys.platform == "darwin" else "Selección+Ctrl+Shift+C=copiar · ")
-             + "ESC=cancela · Ctrl+C=salir", "bright_black"),
+            (_t("tui_toolbar", _lang).format(
+                sel=_t("tui_toolbar_sel_mac" if sys.platform == "darwin" else "tui_toolbar_sel_other", _lang)), "bright_black"),
         )
         if confirming:
             txt = Text(
-                " ⚠️  CONFIRMACIÓN PENDIENTE — respondé sí / no en el input  ",
+                _t("tui_confirm_bar", _lang),
                 style="bold black on yellow",
             ) + txt
         self.query_one("#toolbar", Static).update(txt)
