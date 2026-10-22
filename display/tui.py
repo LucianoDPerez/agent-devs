@@ -59,6 +59,12 @@ def _make_toolbar(status: dict) -> FormattedText:
     auto: FormattedText = (
         [("class:auto", " ✅ auto ")] if status.get("auto_approve") else []
     )
+    try:
+        from core.lang import t as _t
+
+        hint = _t("tui_hint", status.get("language", "es"))
+    except Exception:
+        hint = "Enter=envía · ⌥+Enter=salto · Click=posiciona cursor · ESC=cancela el turno · Ctrl+C=sale · exit=sale"
     return FormattedText([
         ("class:toolbar", " "),
         ("class:branch", f"🌿 {status.get('branch', '-')}"),
@@ -70,7 +76,7 @@ def _make_toolbar(status: dict) -> FormattedText:
         ("class:toolbar", "  "),
         ("class:repo", f"📁 {_short_repo(status.get('repo', ''))}"),
         ("class:toolbar", "  "),
-        ("class:hint", "Enter=envía · ⌥+Enter=salto · Click=posiciona cursor · ESC=cancela el turno · Ctrl+C=sale · exit=sale"),
+        ("class:hint", hint),
     ])
 
 

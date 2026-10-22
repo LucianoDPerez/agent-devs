@@ -58,7 +58,9 @@ async def init_mcp() -> tuple[list, int]:
     try:
         tools = await asyncio.wait_for(load_mcp_tools(), timeout=MCP_CONNECT_TIMEOUT)
     except (asyncio.TimeoutError, Exception):
-        console.print("[yellow]⚠️  MCP no respondió — se continúa sin tools del knowledge graph.[/yellow]")
+        from core.lang import t as _t
+
+        console.print(f"[yellow]{_t('builder_no_mcp', language)}[/yellow]")
         tools = []
     return tools, mcp_tool_count()
 

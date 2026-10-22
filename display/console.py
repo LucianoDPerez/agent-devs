@@ -184,7 +184,8 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                             max_tool_calls: int | None = None,
                             require_write: bool = False,
                             max_content_seconds: float | None = None,
-                            require_text: bool = False):
+                            require_text: bool = False,
+                            lang: str = "es"):
     """Ejecuta el agente con streaming. Reasoning en dim, response normal.
 
     Retorna el texto completo de la respuesta (sin razonamiento) para persistencia.
@@ -260,7 +261,9 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                 try:
                     item = await asyncio.wait_for(stream.__anext__(), idle_timeout)
                 except asyncio.TimeoutError:
-                    console.print("\n⏱️  Sin actividad del modelo; se corta aquí.", style="yellow")
+                    from core.lang import t as _t
+
+                    console.print(f"\n⏱️  {_t('stream_idle', lang)}", style="yellow")
                     break
             else:
                 item = await stream.__anext__()
@@ -293,23 +296,25 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                     reasoning_since = time.monotonic()
                     if not reasoning_started:
                         reasoning_started = True
-                        console.print("💭 [dim]Razonando…[/dim]")
+                        from core.lang import t as _t
+
+                        console.print(f"💭 [dim]{_t('stream_thinking', lang)}[/dim]")
                 # Empezó a razonar → reset del timer de contenido continuo.
                 content_since = None
                 if max_reasoning_seconds is not None:
                     elapsed = time.monotonic() - reasoning_since
                     if elapsed > max_reasoning_seconds:
+                        from core.lang import t as _t
+
                         console.print(
-                            f"\n[dim]↻ Modelo pensando sin producir output "
-                            f"({elapsed:.0f}s). Se corta aquí — el turno se "
-                            f"reintenta con lo ya leído.[/dim]"
+                            f"\n[dim]↻ {_t('stream_think_cut', lang).format(s=f'{elapsed:.0f}s')}[/dim]"
                         )
                         break
                 if max_reasoning_chars is not None and reasoning_chars > max_reasoning_chars:
+                    from core.lang import t as _t
+
                     console.print(
-                        f"\n[dim]↻ Razonamiento excedió presupuesto "
-                        f"({reasoning_chars:,} chars). Se corta aquí — el turno se "
-                        f"reintenta con instrucciones de actuar directo.[/dim]"
+                        f"\n[dim]↻ {_t('stream_chars_cut', lang).format(n=f'{reasoning_chars:,}')}[/dim]"
                     )
                     break
             else:
@@ -338,9 +343,10 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
                         if elapsed > max_content_seconds:
                             if wrote_something:
                                 raise CompletionLoopCut("".join(response_parts))
+                            from core.lang import t as _t
+
                             console.print(
-                                f"\n[dim]↻ Modelo generando texto continuo sin "
-                                f"tool calls ({elapsed:.0f}s). Se corta.[/dim]"
+                                f"\n[dim]↻ {_t('stream_text_cut', lang).format(s=f'{elapsed:.0f}s')}[/dim]"
                             )
                             break
                     console.print(escape(chunk.content), end="", highlight=False, soft_wrap=True)
@@ -407,9 +413,10 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
             await stream.aclose()
 
     if tool_call_limit_hit:
+        from core.lang import t as _t
+
         console.print(
-            f"\n[red]⛔ Límite de {max_tool_calls} tool calls alcanzado en un turno. "
-            "El 4B entró en loop. Corte forzado → retry con contexto recortado.[/red]",
+            f"\n[red]⛔ {_t('stream_toollimit', lang).format(n=max_tool_calls)}[/red]",
             style="red",
         )
         raise ToolCallLimitExceeded(total_tool_calls, max_tool_calls)
@@ -434,30 +441,34 @@ async def stream_agent_turn(agent, messages, config, idle_timeout: float | None 
 
 
 def print_turn_summary(elapsed: float, interrupted: bool, session_time: float,
-                       interrupt_source: str | None = None):
+                        interrupt_source: str | None = None, lang: str = "es"):
     from llm_wrapper import get_usage
 
+    from core.lang import t as _t
+
     usage = get_usage()
-    t, s = usage["turn"], usage["session"]
-    total = t["prompt"] + t["completion"]
-    s_total = s["prompt"] + s["completion"]
+    turn, sess = usage["turn"], usage["session"]
+    total = turn["prompt"] + turn["completion"]
+    s_total = sess["prompt"] + sess["completion"]
 
     lines = []
     if interrupted:
         src = interrupt_source or "Ctrl+C"
-        lines.append(f"⏹️  [yellow]Iteración cancelada ({src}).[/yellow]")
-    cached_str = f", [green]{t['cached']:,} reutilizados[/green]" if t["cached"] else ""
-    lines.append(f"⚡ Pregunta: [bold]{elapsed:.1f}s[/bold] | {total:,} tokens "
-                 f"(in {t['prompt']:,} + out {t['completion']:,}{cached_str})")
-    lines.append(f"📊 Sesión: {session_time:.1f}s | {s_total:,} tokens "
-                 f"(in {s['prompt']:,} + out {s['completion']:,})")
+        lines.append(f"⏹️  [yellow]{_t('sum_cancelled', lang).format(src=src)}[/yellow]")
+    cached_str = f", [green]{turn['cached']:,} {_t('sum_reused', lang)}[/green]" if turn["cached"] else ""
+    lines.append(f"\u26a1 {_t('sum_question', lang)}: [bold]{elapsed:.1f}s[/bold] | {total:,} tokens "
+                 f"(in {turn['prompt']:,} + out {turn['completion']:,}{cached_str})")
+    lines.append(f"\U0001f4ca {_t('sum_session', lang)}: {session_time:.1f}s | {s_total:,} tokens "
+                 f"(in {sess['prompt']:,} + out {sess['completion']:,})")
 
     console.print(Panel("\n".join(lines), border_style="dim", padding=(0, 1)))
     console.print()
 
 
-def print_role_switch(role_label: str, local_count: int, mcp_count: int):
-    console.print(f"\n[{role_label}] [dim]Tools: {local_count} locales + {mcp_count} graph · harness {harness_head()}[/dim]")
+def print_role_switch(role_label: str, local_count: int, mcp_count: int, lang: str = "es"):
+    from core.lang import t as _t
+
+    console.print(f"\n[{role_label}] [dim]{_t('role_tools', lang).format(local=local_count, mcp=mcp_count)} · harness {harness_head()}[/dim]")
 
 
 def harness_head() -> str:
@@ -497,17 +508,20 @@ def harness_head() -> str:
         return "?"
 
 
-def print_welcome(repo_path: str, model: str, url: str, temp: float, tool_counts: tuple, branch: str = ""):
+def print_welcome(repo_path: str, model: str, url: str, temp: float, tool_counts: tuple, branch: str = "", lang: str = "es"):
     from config import LLM_MAX_TOKENS
+
+    from core.lang import t as _t
+
     local, mcp = tool_counts
-    repo_line = f"[bold cyan]📁 Repo:[/bold cyan] {repo_path}"
+    repo_line = f"[bold cyan]{_t('welcome_repo', lang)}[/bold cyan] {repo_path}"
     if branch:
         repo_line += f"  [bold green]🌿 {branch}[/bold green]"
     info = (
-        f"[bold cyan]🔌 LLM:[/bold cyan] {url}\n"
+        f"[bold cyan]{_t('welcome_llm', lang)}[/bold cyan] {url}\n"
         f"{repo_line}\n"
-        f"[bold cyan]⚡ Modelo:[/bold cyan] {model} | Temp: {temp} | Max: {LLM_MAX_TOKENS}\n"
-        f"[bold cyan]🛠️  Tools:[/bold cyan] {local} locales + {mcp} graph (cm__*)\n"
-        f"[dim]📌 Harness: {harness_head()} (agent-devs --update lo actualiza; reiniciá la sesión después)[/dim]"
+        f"[bold cyan]{_t('welcome_model', lang)}[/bold cyan] {model} | {_t('welcome_temp', lang)}: {temp} | {_t('welcome_max', lang)}: {LLM_MAX_TOKENS}\n"
+        f"[bold cyan]{_t('welcome_tools', lang).format(local=local, mcp=mcp)}[/bold cyan]\n"
+        f"[dim]{_t('welcome_harness', lang).format(h=harness_head())}[/dim]"
     )
     console.print(Panel(info, title="[bold]AgentDevs[/bold]", border_style="cyan", padding=(0, 1)))

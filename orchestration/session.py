@@ -64,6 +64,7 @@ from config import (
     VERIFY_GATE_MAX_INJECTIONS,
 )
 from core.intents import Intent
+from core.lang import t as _t
 from core.roles import Role, role_for_intent
 from core.textutil import normalize
 from display.console import (
@@ -204,34 +205,49 @@ def _fmt_elapsed(seconds: float) -> str:
     return f"{m}m {s % 60:05.2f}s" if m < 60 else f"{m // 60}h {m % 60:02d}m"
 
 
-def _llama_down_console_msg(base: str | None = None) -> None:
+def _llama_down_console_msg(base: str | None = None, lang: str = "es") -> None:
     from config import LLM_BASE_URL as _BASE
-    console.print(f"\n[red]❌ llama.cpp está apagado — no se pudo conectar a {base or _BASE}[/red]")
-    console.print("[yellow]   Encendelo antes de seguir, por ejemplo:[/yellow]")
+    _b = base or _BASE
+    console.print(_t("ui_llama_title", lang).format(base=_b))
+    console.print(_t("ui_llama_hint", lang))
     console.print("[dim]     llama-server -hf bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M --port 8080[/dim]")
-    console.print("[dim]   O pasate a la nube: /model muse-spark-1.3[/dim]")
-    console.print("[dim]   Verificá con: agent-devs --doctor[/dim]\n")
+    console.print(_t("ui_llama_cloud", lang))
+    console.print(_t("ui_llama_doctor", lang))
 
 
-def _opencode_down_console_msg() -> None:
-    console.print("\n[red]❌ No se pudo hablar con OpenCode Zen[/red]")
-    console.print("[dim]   Verificá tu key y saldo: agent-devs --doctor[/dim]")
-    console.print("[dim]   O pasate a local: /model local (con llama-server arriba)[/dim]\n")
+def _opencode_down_console_msg(lang: str = "es") -> None:
+    console.print(_t("ui_opencode_title", lang))
+    console.print(_t("ui_opencode_key", lang))
+    console.print(_t("ui_opencode_local", lang))
 
 
-def _llm_down_console_msg(llm) -> None:
+def _llm_down_console_msg(llm, lang: str = "es") -> None:
     """Mensaje de caída según el proveedor del LLM de la SESIÓN (no config)."""
     base = getattr(llm, "base_url", "") or ""
     if "localhost" in base or "127.0.0.1" in base or not base:
-        _llama_down_console_msg(base or None)
+        _llama_down_console_msg(base or None, lang)
     else:
-        _opencode_down_console_msg()
+        _opencode_down_console_msg(lang)
 
 _ROLE_LABELS = {
     Role.ANALYZE: "🔍 Análisis", Role.PLAN: "📋 Planificación",
     Role.EXECUTE: "🛠️  Ejecución", Role.REVIEW: "🔎 Revisión",
     Role.CHAT: "💬 Charla",
 }
+
+_ROLE_LABEL_TKEY = {
+    Role.ANALYZE: "role_analyze", Role.PLAN: "role_plan",
+    Role.EXECUTE: "role_execute", Role.REVIEW: "role_review",
+    Role.CHAT: "role_chat",
+}
+
+
+def _role_label(role: Role, lang: str = "es") -> str:
+    """Etiqueta del rol en el idioma de la sesión (defecto: español)."""
+    try:
+        return _t(_ROLE_LABEL_TKEY.get(role, "role_chat"), lang)
+    except Exception:
+        return _ROLE_LABELS.get(role, "")
 
 # Context window: llama-server -c 62000 (configurado por el usuario).
 # 90% = 55800 tokens.
@@ -926,7 +942,7 @@ def _porcelain_paths(lines: list[str] | None) -> set[str]:
 
 def _parse_commit_candidates(
     lines: list[str] | None, session_files: set[str] | None,
-    max_show: int = 15,
+    max_show: int = 15, lang: str = "es",
 ) -> str:
     """Bloque de texto: pendientes agrupados (staged/modificados/untracked)
     con marca [sesión] vs [previo]. Puro y testeable. Untracked jamás se
@@ -943,7 +959,7 @@ def _parse_commit_candidates(
         path = path.strip().strip('"')
         if not path:
             continue
-        mark = "[sesión]" if path in known else "[previo]"
+        mark = _t("ui_mark_session", lang) if path in known else _t("ui_mark_prev", lang)
         if status == "??":
             untracked.append((f"{len(untracked) + 1}. {mark} {path}", path))
         elif status[0] not in (" ", "?"):
@@ -953,21 +969,21 @@ def _parse_commit_candidates(
 
     def _block(title: str, items: list[str]) -> str:
         shown = "\n".join(items[:max_show])
-        extra = f"\n  …(+{len(items) - max_show} más)" if len(items) > max_show else ""
+        extra = _t("ui_more", lang).format(n=len(items) - max_show) if len(items) > max_show else ""
         return f"{title} ({len(items)}):\n{shown}{extra}" if items else ""
 
     blocks = [
-        _block("● Staged", staged),
-        _block("● Modificados tracked", modified),
+        _block(_t("ui_block_staged", lang), staged),
+        _block(_t("ui_block_modified", lang), modified),
         _block(
-            "● Nuevos untracked (respondé 1 2 3, 'todos' o 'ninguno')",
+            _t("ui_block_untracked", lang),
             [label for label, _ in untracked],
         ),
     ]
     body = "\n".join(b for b in blocks if b)
     if not body:
-        return "↻ Árbol limpio — nada pendiente."
-    return "📦 Pendientes de stage/commit:\n" + body
+        return _t("ui_tree_clean", lang)
+    return _t("ui_pending_head", lang) + body
 
 
 def _commit_stage_set(
@@ -1028,16 +1044,17 @@ def _split_reds(
     return heredados, nuevos
 
 
-def _format_reds_attribution(heredados: list[str], nuevos: list[str]) -> str:
+def _format_reds_attribution(heredados: list[str], nuevos: list[str], lang: str = "es") -> str:
     """Línea compacta de atribución para el cierre (nombres, no logs)."""
     def _short(items: list[str], n: int = 2) -> str:
         shown = ", ".join(_baseline_key(i).split("/")[-1] for i in items[:n])
-        extra = f" (+{len(items) - n} más)" if len(items) > n else ""
-        return f"{shown}{extra}" if shown else "—"
+        if len(items) > n:
+            return _t("ui_short_more", lang).format(s=shown, n=len(items) - n)
+        return f"{shown}" if shown else "—"
 
-    return (
-        f"   Heredados: {len(heredados)} (ya fallaban: {_short(heredados)}) · "
-        f"Nuevos: {len(nuevos)} ({_short(nuevos) if nuevos else 'ninguno'})"
+    return _t("ui_reds_attr", lang).format(
+        h=len(heredados), hs=_short(heredados),
+        n=len(nuevos), ns=_short(nuevos) if nuevos else _t("ui_none", lang),
     )
 
 
@@ -1211,7 +1228,7 @@ Resumen:"""
 
 def run_commit_verification(
     repo_path: str, reuse: dict[str, bool | None] | None = None,
-    capture: dict | None = None,
+    capture: dict | None = None, lang: str = "es",
 ) -> tuple[bool, str]:
     """Batería lint/tests/build para el gate de commit y /verify.
 
@@ -1234,16 +1251,12 @@ def run_commit_verification(
         trio_ok = all(reuse.get(k) is True for k in ("run_lint", "run_tests", "run_build"))
         uni_ok = reuse.get("run_verify") is True
         if trio_ok or uni_ok:
-            src = "run_verify" if uni_ok and not trio_ok else "turno actual"
-            return True, (
-                f"  ✅ lint: reusa verificación verde ({src})\n"
-                f"  ✅ tests: reusa verificación verde ({src})\n"
-                f"  ✅ build: reusa verificación verde ({src})"
-            )
+            src = "run_verify" if uni_ok and not trio_ok else _t("ui_turn_current", lang)
+            return True, _t("ui_verify_reuse", lang).format(src=src)
     try:
         from tools.verify import run_build, run_lint, run_tests
     except Exception as e:
-        return False, f"no se pudo cargar verificación: {e}"
+        return False, _t("ui_verify_noload", lang).format(err=e)
     results: list[tuple[str, bool, str]] = []
     for name, fn in (("lint", run_lint), ("tests", run_tests), ("build", run_build)):
         try:
@@ -1252,7 +1265,7 @@ def run_commit_verification(
             out = f"[FAILED] {type(e).__name__}: {e}"
         # SKIPPED (sin stack: docs/infra) vale como ok-neutral: no bloquea.
         ok = out.startswith("[PASSED]") or out.startswith("[SKIPPED]")
-        first = out.splitlines()[0][:120] if out else "(sin salida)"
+        first = out.splitlines()[0][:120] if out else _t("ui_no_output", lang)
         results.append((name, ok, first))
         if capture is not None and not ok:
             tail = out[-1500:] if len(out) > 1500 else out
@@ -1629,10 +1642,13 @@ class Session:
                     _mid = detect_server_model(_llm_base) or ""
                     self._server_model_id = _mid
                     self._model_profile = match_profile(_mid)
+                    lang = getattr(self, "_lang", "es")
+                    _mid_disp = _mid or _t("ui_unknown", lang)
                     console.print(
-                        f"[dim]🎛️  Profile: {self._model_profile.get('family', '?')} "
-                        f"({_mid or 'desconocido'}) — "
-                        f"{self._model_profile.get('notes', '')}[/dim]"
+                        _t("ui_profile", lang).format(
+                            family=self._model_profile.get('family', '?'),
+                            mid=_mid_disp,
+                            notes=self._model_profile.get('notes', ''))
                     )
                 except Exception:
                     pass
@@ -1640,9 +1656,12 @@ class Session:
                 try:
                     from core.model_profiles import match_profile
                     self._model_profile = match_profile(_llm_model)
+                    lang = getattr(self, "_lang", "es")
+                    _model_disp = _llm_model or _t("ui_model_unset", lang)
                     console.print(
-                        f"[dim]☁️  Nube: {_llm_model or 'modelo configurado'} "
-                        f"({self._model_profile.get('family', '?')})[/dim]"
+                        _t("ui_cloud", lang).format(
+                            model=_model_disp,
+                            family=self._model_profile.get('family', '?'))
                     )
                 except Exception:
                     pass
@@ -1662,10 +1681,7 @@ class Session:
                     # y ningún cm__search_code encontraba nada.
                     idx = by_name.get("cm__index_repository")
                     if idx is not None:
-                        console.print(
-                            "\n[yellow]🧠 Indexando el repo en el knowledge graph "
-                            "(primera vez — puede tardar 1-2 min)…[/yellow]"
-                        )
+                        console.print(_t("ui_indexing", getattr(self, "_lang", "es")))
                         try:
                             out = loop.run_until_complete(
                                 idx.ainvoke({"repo_path": self.repo_path, "mode": "moderate"})
@@ -1677,19 +1693,10 @@ class Session:
                                 # Store del MCP con filas corruptas (root_path
                                 # relativo de una sesión vieja con 'agent-devs .'):
                                 # avisar cómo limpiarlo en vez de fallar mudo.
-                                console.print(
-                                    "[red]⚠️ El store del knowledge graph reportó "
-                                    "corrupción (root_path relativo). Limpialo con:[/red]\n"
-                                    "[yellow]   codebase-memory-mcp delete-project "
-                                    "--root \".\"[/yellow]"
-                                )
+                                console.print(_t("ui_graph_corrupt", getattr(self, "_lang", "es")))
                         except Exception as e:
                             if "store.corrupt" in str(e) or "bad_root_path" in str(e):
-                                console.print(
-                                    "[red]⚠️ Knowledge graph corrupto — limpiá el "
-                                    "proyecto con root_path='.' (ver docs). El agente "
-                                    "sigue sin tools cm__*.[/red]"
-                                )
+                                console.print(_t("ui_graph_corrupt2", getattr(self, "_lang", "es")))
             except Exception:
                 pass
             self.current_role = Role.ANALYZE
@@ -1790,17 +1797,14 @@ class Session:
         # absolutos con espacios sin quotear ("/Users/.../PROYECTOS IA/...").
         tasks_file = extract_tasks_file_path(text)
         if not numbers:
-            console.print(
-                "[yellow]Uso: /tasks-pool T001-T010 [archivo] [--commit] [--continue][/yellow]\n"
-                "[dim]Ej: /tasks-pool T001-T003 plans/tareas.md --commit[/dim]"
-            )
+            console.print(_t("ui_pool_usage", getattr(self, "_lang", "es")))
             return None
+        lang = getattr(self, "_lang", "es")
         console.print(
-            f"[bold cyan]Pool autónomo: {len(numbers)} tareas "
-            f"({numbers[0]:03d}→{numbers[-1]:03d})[/bold cyan]"
-            + (" + commit por tarea" if commit_each else "")
-            + " (veredicto determinístico; saltea dependientes de fallidas)"
-            + "\n[dim]Un turno fresco por tarea (sin acumular contexto).[/dim]\n"
+            _t("ui_pool_header", lang).format(
+                n=len(numbers), a=f"{numbers[0]:03d}", b=f"{numbers[-1]:03d}")
+            + (_t("ui_pool_header_commit", lang) if commit_each else "")
+            + _t("ui_pool_header_tail", lang)
         )
         return self.run_task_pool(numbers, tasks_file, commit_each,
                                   stop_on_fail=False)
@@ -1900,7 +1904,7 @@ class Session:
                         b_verdict, b_ev = evaluate_task_criterion(
                             tasks_file, n, self.repo_path)
                     except Exception:
-                        b_verdict, b_ev = None, "veredicto no evaluable"
+                        b_verdict, b_ev = None, _t("ui_no_verdict", getattr(self, "_lang", "es"))
                     if b_verdict is True:
                         try:
                             _b_entry = _load_task_entry(tasks_file, n)
@@ -1909,18 +1913,19 @@ class Session:
                         except Exception:
                             _b_status = ""
                         if _b_status == "DONE":
+                            lang = getattr(self, "_lang", "es")
                             console.print(
-                                f"\n[dim]✅ T{n:03d} bloqueada pero ya estaba "
-                                f"DONE y sigue cumplida en disco ({b_ev}) — "
-                                f"se confirma.[/dim]")
+                                _t("ui_pool_blocked_done", lang).format(
+                                    tn=f"{n:03d}", ev=b_ev))
                             results.append({"tarea": n, "status": "ok",
                                             "commit": "", "elapsed_s": 0.0,
                                             "started_at": ""})
                             continue
                 blocked[n] = unmet
                 dep_txt = ", ".join(f"T{d:03d}" for d in sorted(unmet)[:3])
-                status = f"bloqueada (depende de {dep_txt} no completada)"
-                console.print(f"\n[dim]⏭️  T{n:03d} bloqueada: depende de {dep_txt}.[/dim]")
+                lang = getattr(self, "_lang", "es")
+                status = _t("ui_pool_status_blocked", lang).format(deps=dep_txt)
+                console.print(_t("ui_pool_blocked", lang).format(tn=f"{n:03d}", deps=dep_txt))
                 results.append({"tarea": n, "status": status, "commit": "",
                                 "elapsed_s": 0.0, "started_at": ""})
                 continue
@@ -1957,7 +1962,7 @@ class Session:
             try:
                 self.run_turn(prompt)
                 if getattr(self, "_last_turn_failed", False):
-                    status = "fallida (el turno no completó — ver salida arriba)"
+                    status = _t("ui_pool_status_turn_failed", getattr(self, "_lang", "es"))
             except Exception as e:  # noqa: BLE001
                 status = f"error: {e}"
             # Veredicto determinístico: el criterio contra el disco manda
@@ -1967,17 +1972,17 @@ class Session:
                     verdict, evidence = evaluate_task_criterion(
                         tasks_file, n, self.repo_path)
                 except Exception:
-                    verdict, evidence = None, "veredicto no evaluable"
+                    verdict, evidence = None, _t("ui_no_verdict", getattr(self, "_lang", "es"))
                 if verdict is True:
                     try:
                         ensure_task_done(tasks_file, n)
                     except Exception:
                         pass
                     if not _pool_ok(status):
+                        lang = getattr(self, "_lang", "es")
                         console.print(
-                            f"\n[dim]✅ T{n:03d}: el turno falló pero el "
-                            f"criterio está cumplido en disco ({evidence}) — "
-                            "se da por hecha.[/dim]")
+                            _t("ui_pool_turn_failed_ok", lang).format(
+                                tn=f"{n:03d}", ev=evidence))
                     status = "ok"
                 elif verdict is False:
                     # Causa accionable: no es lo mismo "no escribió nada"
@@ -1985,22 +1990,19 @@ class Session:
                     # delta ya existe (touched_before); no corre en verde
                     # así que no duplica el git del commit.
                     wrote = self._turn_files_delta(touched_before)
+                    lang = getattr(self, "_lang", "es")
                     if wrote:
-                        status = (f"fallida ({evidence}; el turno escribió "
-                                  "pero el criterio no cierra)")
+                        status = _t("ui_pool_status_wrote_bad", lang).format(ev=evidence)
                     else:
-                        status = (f"fallida ({evidence}; el turno no "
-                                  "escribió archivos)")
+                        status = _t("ui_pool_status_nowrite", lang).format(ev=evidence)
                         # Turno no-op en tarea de implementación (E2E landing
                         # T020 ×3: dos reads y cierre como "verificación" sin
                         # escribir nada). UN solo reintento forzando
                         # implementación — el veredicto decide de nuevo.
                         if tasks_file:
+                            lang = getattr(self, "_lang", "es")
                             console.print(
-                                f"\n[dim]↻ T{n:03d} no escribió nada y el "
-                                "criterio no cierra: un reintento forzando "
-                                "implementación.[/dim]"
-                            )
+                                _t("ui_pool_noop_retry", lang).format(tn=f"{n:03d}"))
                             self._fresh_pool_turn()
                             touched_before = set(self._session_touched_files)
                             try:
@@ -2012,40 +2014,37 @@ class Session:
                                     "cerrar como 'verificación sin cambios'.)"
                                 )
                                 if getattr(self, "_last_turn_failed", False):
-                                    status = ("fallida (el turno no completó "
-                                              "— ver salida arriba)")
+                                    status = _t("ui_pool_status_turn_failed", getattr(self, "_lang", "es"))
                             except Exception as e:  # noqa: BLE001
                                 status = f"error: {e}"
                             try:
                                 verdict, evidence = evaluate_task_criterion(
                                     tasks_file, n, self.repo_path)
                             except Exception:
-                                verdict, evidence = None, "veredicto no evaluable"
+                                verdict, evidence = None, _t("ui_no_verdict", getattr(self, "_lang", "es"))
                             if verdict is True:
                                 try:
                                     ensure_task_done(tasks_file, n)
                                 except Exception:
                                     pass
+                                lang = getattr(self, "_lang", "es")
                                 console.print(
-                                    f"\n[dim]✅ T{n:03d}: el reintento cumplió "
-                                    f"el criterio en disco ({evidence}).[/dim]")
+                                    _t("ui_pool_retry_ok", lang).format(
+                                        tn=f"{n:03d}", ev=evidence))
                                 status = "ok"
                             elif verdict is False:
                                 wrote = self._turn_files_delta(touched_before)
+                                lang = getattr(self, "_lang", "es")
                                 if wrote:
-                                    status = (f"fallida ({evidence}; el "
-                                              "reintento escribió pero el "
-                                              "criterio no cierra)")
+                                    status = _t("ui_pool_status_retry_wrote_bad", lang).format(ev=evidence)
                                 else:
-                                    status = (f"fallida ({evidence}; ni el "
-                                              "reintento escribió archivos)")
+                                    status = _t("ui_pool_status_retry_nowrite", lang).format(ev=evidence)
                 elif verdict is None:
                     # Criterio no evaluable en disco (p. ej. exige grep o
                     # prohíbe navegador): no hay rescate posible, pero un
                     # turno que salió limpio vale por su evidencia.
                     if _pool_ok(status):
-                        status = ("ok (criterio no evaluable en disco; vale "
-                                  "la evidencia del turno)")
+                        status = _t("ui_pool_status_none_ok", getattr(self, "_lang", "es"))
             if not _pool_ok(status):
                 failed.add(n)
             committed = ""
@@ -2064,7 +2063,8 @@ class Session:
                         # Gate de seguridad: no commitear en rojo. Reusa los
                         # resultados del turno (barato si ya verificó).
                         passed, _report = run_commit_verification(
-                            self.repo_path, reuse=self._verify_results)
+                            self.repo_path, reuse=self._verify_results,
+                            lang=getattr(self, "_lang", "es"))
                         if not passed:
                             committed = "rojo, no commiteado"
                         else:
@@ -2098,16 +2098,13 @@ class Session:
                 resume = ""
                 if remaining:
                     rng = f"T{remaining[0]:03d}-T{remaining[-1]:03d}"
-                    resume = (
-                        f" Reanudá con: /tasks-pool {rng}"
-                        + (f" {tasks_file}" if tasks_file else "")
-                    )
+                    lang = getattr(self, "_lang", "es")
+                    resume = _t("ui_pool_resume", lang).format(
+                        rng=rng, tfile=f" {tasks_file}" if tasks_file else "")
+                lang = getattr(self, "_lang", "es")
                 console.print(
-                    f"\n[bold red]⛔ Pool detenido en T{n:03d} "
-                    f"(fallida).[/bold red]{resume}\n"
-                    f"[dim]Motivo: {status}[/dim]\n"
-                    "[dim]Para seguir igual aunque fallen: "
-                    "/tasks-pool ... --continue[/dim]"
+                    _t("ui_pool_stopped", lang).format(
+                        tn=f"{n:03d}", resume=resume, status=status)
                 )
                 break
         done = [r for r in results if _pool_ok(r["status"])]
@@ -2123,18 +2120,20 @@ class Session:
             "stopped_early": stopped_early,
             "total_elapsed_s": round(pool_elapsed, 1),
         }
+        lang = getattr(self, "_lang", "es")
         console.print(
-            f"\n[bold]Pool: {summary['ok']}/{summary['total']} tareas OK "
-            f"en {_fmt_elapsed(pool_elapsed)}[/bold]"
-            + (f" — fallidas: {summary['fallidas']}" if summary["fallidas"] else "")
-            + (f" — bloqueadas: {summary['bloqueadas']}" if summary["bloqueadas"] else "")
-            + (" (detenido ante el primer fallo)" if stopped_early else "")
+            _t("ui_pool_summary", lang).format(
+                ok=summary['ok'], total=summary['total'],
+                elapsed=_fmt_elapsed(pool_elapsed))
+            + (_t("ui_pool_summary_fail", lang).format(lst=summary['fallidas']) if summary["fallidas"] else "")
+            + (_t("ui_pool_summary_blocked", lang).format(lst=summary['bloqueadas']) if summary["bloqueadas"] else "")
+            + (_t("ui_pool_summary_stopped", lang) if stopped_early else "")
         )
         for r in results:
             el = r.get("elapsed_s") or 0.0
             if el <= 0:
                 continue
-            ini = f" (inicio {r.get('started_at')})" if r.get("started_at") else ""
+            ini = _t("ui_pool_ini", lang).format(t=r.get('started_at')) if r.get("started_at") else ""
             mark = "✅" if _pool_ok(r.get("status", "")) else "❌"
             console.print(f"[dim]  {mark} T{r['tarea']:03d}: {_fmt_elapsed(el)}{ini}[/dim]")
         for t, st in fallidas_det:
@@ -2387,7 +2386,7 @@ class Session:
         recent = self._messages[-2:] if len(self._messages) >= 2 else self._messages
         summary = _generate_summary(self.llm, old_messages)
         if summary.strip() == "Sesión previa resumida automáticamente.":
-            console.print("[yellow]⚠️ No se pudo generar resumen (LLM no disponible) — historial intacto.[/yellow]")
+            console.print(_t("ui_summary_fail", getattr(self, "_lang", "es")))
             return
         self._messages = [
             SystemMessage(f"Resumen de la conversación previa:\n{summary}\n{self._evidence_block()}"),
@@ -2400,9 +2399,10 @@ class Session:
         if ctx_status != "summary":
             return
 
-        console.print("\n[yellow]📦 Contexto al 90% — generando resumen del historial…[/yellow]")
+        lang = getattr(self, "_lang", "es")
+        console.print(_t("ui_ctx90", lang))
         self.force_summarize()
-        console.print("[green]✅ Resumen generado. Historial comprimido.[/green]\n")
+        console.print(_t("ui_ctx_done", lang))
 
     def _findings_block(self) -> str:
         """Bloque con el razonamiento parcial del intento fallido (tail).
@@ -2770,10 +2770,8 @@ class Session:
             ))
             self._rebuild_agent(new_role, no_explore=True)
             self._analyze_budget.reset()
-            console.print(
-                f"\n[yellow]⚠️  {reason} — Respondiendo con lo leído "
-                "(contexto mínimo, sin tools)…[/yellow]\n"
-            )
+            lang = getattr(self, "_lang", "es")
+            console.print(_t("ui_retry_minimal", lang).format(reason=reason))
             return
 
         # Turno interactivo con tools: timeouts normales (no el modo paciente
@@ -2818,10 +2816,7 @@ class Session:
         budget.max_calls = 0
         budget.reset()
         self._rebuild_agent(new_role, tools_override=[read_file])
-        console.print(
-            f"\n[yellow]⚠️  {reason} — Reintentando en modo solo-lectura "
-            "(leé los archivos clave y respondé con evidencia)…[/yellow]\n"
-        )
+        console.print(_t("ui_retry_readonly", getattr(self, "_lang", "es")).format(reason=reason))
 
     def _retry_analyze_no_explore(self, new_role: Role, reason: str) -> None:
         """Compat: redirige al retry de solo-lectura (conserva el nombre que
@@ -3029,6 +3024,7 @@ class Session:
         informan como heredados de entorno —nunca 'nuevos': el código del
         turno no pudo causar un connection refused.
         """
+        lang = getattr(self, "_lang", "es")
         try:
             reds = self._current_failing_tests()
             base = self._ensure_baseline()
@@ -3038,11 +3034,10 @@ class Session:
             return ""
         if self._only_infra_reds():
             shown = ", ".join(sorted({_baseline_key(i).split("/")[-1] for i in reds})[:2])
-            more = f" (+{len(reds) - 2} más)" if len(reds) > 2 else ""
-            return (f"\n   Heredados: {len(reds)} (infra: sin DB/servicios — "
-                    f"{shown}{more}) · Nuevos: 0 (ninguno)")
+            more = _t("ui_untracked_more", lang).format(n=len(reds) - 2) if len(reds) > 2 else ""
+            return _t("ui_reds_infra_line", lang).format(n=len(reds), s=shown, m=more)
         her, new = _split_reds(reds, base) or ([], [])
-        return "\n" + _format_reds_attribution(her, new)
+        return "\n" + _format_reds_attribution(her, new, lang)
 
     def _fix_retry_excerpts(self, max_chars: int = 3000) -> str:
         """Excerpts de fallos del turno para reinyectar al modelo (fix retry)."""
@@ -3309,9 +3304,9 @@ class Session:
         try:
             if self._ensure_baseline() is not None:
                 return
-            console.print("[dim]🔍 Sembrando baseline de verificación (una batería)…[/dim]")
+            console.print(_t("ui_seed_baseline", getattr(self, "_lang", "es")))
             cap: dict = {}
-            run_commit_verification(self.repo_path, capture=cap)
+            run_commit_verification(self.repo_path, capture=cap, lang=getattr(self, "_lang", "es"))
             seed: list[str] = []
             try:
                 from tools.verify import extract_failing_tests
@@ -3640,7 +3635,7 @@ class Session:
         code, js, _other = _split_written_by_kind(own)
         return (bool(code), js)
 
-    def _check_written_json(self, files: list[str]) -> tuple[bool, str]:
+    def _check_written_json(self, files: list[str], lang: str = "es") -> tuple[bool, str]:
         """Valida sintaxis de los .json escritos (barato, determinístico).
 
         Un JSON roto (coma colgando) rompe al consumidor (pool/tasks) igual
@@ -3662,8 +3657,8 @@ class Session:
             except Exception as e:
                 bad.append(f"{rel}: {e}")
         if bad:
-            return False, "JSON inválido en " + "; ".join(bad[:3])
-        return True, f"JSON válido ({n} archivo(s))"
+            return False, _t("ui_json_bad", lang).format(items="; ".join(bad[:3]))
+        return True, _t("ui_json_ok", lang).format(n=n)
 
     def _documentary_verify_close(self, user_input: str) -> tuple[bool | None, str]:
         """Cierre documental para tareas pinnadas solo-de-verificación.
@@ -3700,15 +3695,10 @@ class Session:
             if own:
                 return None, ""
             if self._called_tools & _DOCUMENTARY_TOOL_NAMES:
-                return True, (
-                    "Verificación documental (list_files/read_file) — tarea "
-                    "de verificación, sin cambios en disco"
-                )
-            return False, (
-                "La tarea pedía verificar con list_files/read_file y el turno "
-                "no corrió esa verificación (ni batería): no se puede dar por "
-                "hecha"
-            )
+                lang = getattr(self, "_lang", "es")
+                return True, _t("ui_doc_verify_ok", lang)
+            lang = getattr(self, "_lang", "es")
+            return False, _t("ui_doc_verify_bad", lang)
         except Exception:
             return None, ""
 
@@ -3761,6 +3751,7 @@ class Session:
         sin haber creado nada; acá el sistema verifica en disco antes de
         decir que está hecho.
         """
+        lang = getattr(self, "_lang", "es")
         files = self._changed_files()
         verify_state = self._verify_all_passed()
         # Cambios DEL TURNO vs dirty tree pre-existente: el tree puede traer
@@ -3778,17 +3769,15 @@ class Session:
             unknown_start = True
             pre_dirty = frozenset()
         own_files = files if unknown_start else self._turn_own_files(files, pre_dirty)
-        turn_suffix = "" if unknown_start else " en este turno"
+        turn_suffix = "" if unknown_start else _t("ui_close_suffix", lang)
         scope_line = ""
         try:
             _viol = getattr(self._dedupe, "scope_violations", None) or {}
             if getattr(self, "_scope_nums", None) and _viol:
-                _listed = ", ".join(f"Tarea {n}" for n in self._scope_nums)
+                _listed = ", ".join(_t("ui_close_scope_task", lang).format(n=n) for n in self._scope_nums)
                 _paths = ", ".join(sorted(_viol)[:6])
-                scope_line = (
-                    f"\n   Alcance {_listed}: ⚠️ {len(_viol)} archivo(s) fuera "
-                    f"del alcance pinnado: {_paths}"
-                )
+                scope_line = _t("ui_close_scope", lang).format(
+                    listed=_listed, n=len(_viol), paths=_paths)
         except Exception:
             scope_line = ""
         reds_line = ""
@@ -3797,60 +3786,44 @@ class Session:
             # anterior (cero baterías: cosecha salidas ya corridas).
             reds_line = self._reds_attribution_line()
         if own_files:
-            head = f"✅ Tarea realizada: {len(own_files)} archivo(s) modificado(s){turn_suffix}"
+            head = _t("ui_close_head", lang).format(n=len(own_files), suffix=turn_suffix)
             detail = "   · " + "\n   · ".join(own_files[:8])
             if len(own_files) > 8:
-                detail += f"\n   · …y {len(own_files) - 8} más"
+                detail += _t("ui_close_more", lang).format(n=len(own_files) - 8)
             if verify_state is True:
-                verify_line = "   Verificación: lint/tests/build ✅"
+                verify_line = _t("ui_close_verify_ok", lang)
             elif verify_state is False:
-                verify_line = (
-                    "   Verificación: ⚠️ FALLÓ o quedó incompleta "
-                    "(ver output arriba) — no commitear sin revisar"
-                )
+                verify_line = _t("ui_close_verify_fail", lang)
             elif self._verify_all_skipped():
-                verify_line = (
-                    "   Verificación: N/A — sin stack compilable (docs/infra); "
-                    "vale la verificación documental con citas"
-                )
+                verify_line = _t("ui_close_verify_na", lang)
             else:
-                verify_line = "   Verificación: no se corrió (podés pedirla con 'revisá los cambios')"
+                verify_line = _t("ui_close_verify_none", lang)
             evidence_line = ""
             has_ev = _response_has_evidence(self._last_response)
             if not ((verify_state is True or self._verify_all_skipped()) and has_ev):
-                evidence_line = (
-                    "\n   Evidencia: ⚠️ la respuesta no cita archivo:línea ni "
-                    "verificación exitosa — VERIFICAR CON EVIDENCIA ANTES DE "
-                    "CONFIRMAR (revisá el diff antes de commitear)"
-                )
+                evidence_line = _t("ui_close_evidence", lang)
             return f"{head}\n{detail}\n{verify_line}{reds_line}{evidence_line}{scope_line}"
         if pre_dirty and not unknown_start:
-            head = "↻ Este turno NO modificó archivos propios"
+            head = _t("ui_close_noown", lang)
             _shown = sorted(pre_dirty)[:5]
             _rest = len(pre_dirty) - len(_shown)
-            detail = (
-                f"   · {len(pre_dirty)} modificación(es) previa(s) en el árbol, "
-                "sin commitear — no son de este turno: "
-                + ", ".join(_shown)
-                + (f" (+{_rest} más)" if _rest else "")
-            )
+            detail = _t("ui_close_predetail", lang).format(
+                n=len(pre_dirty), files=", ".join(_shown),
+                extra=_t("ui_close_pmore", lang).format(n=_rest) if _rest else "")
             if verify_state is True:
-                verify_line = "   Verificación: lint/tests/build ✅"
+                verify_line = _t("ui_close_verify_ok", lang)
             elif verify_state is False:
-                verify_line = "   Verificación: ⚠️ FALLÓ (ver output arriba)"
+                verify_line = _t("ui_close_verify_fail2", lang)
             elif self._verify_all_skipped():
-                verify_line = "   Verificación: N/A — sin stack compilable (docs/infra)"
+                verify_line = _t("ui_close_verify_na2", lang)
             else:
-                verify_line = (
-                    "   Verificación: no se corrió (sin escrituras propias "
-                    "no había nada que verificar con lint/tests/build)"
-                )
+                verify_line = _t("ui_close_verify_none2", lang)
             return f"{head}\n{detail}\n{verify_line}{reds_line}{scope_line}"
         if verify_state is True:
-            return "✅ Turno completado (verificación corrida y exitosa, sin cambios en disco)."
+            return _t("ui_close_done", lang)
         if verify_state is False:
-            return "⚠️ Turno sin cambios en disco y la verificación FALLÓ (ver output arriba)." + reds_line
-        return "↻ El turno terminó sin cambios detectados en disco."
+            return _t("ui_close_fail_nochange", lang) + reds_line
+        return _t("ui_close_nochange", lang)
 
     def _failed_turn_close(self) -> str:
         """Mensaje de cierre para turnos EXECUTE fallidos (sin oferta de commit).
@@ -3862,32 +3835,19 @@ class Session:
            declarado "fallido" con todo commiteado). Informar, no alarmar.
         3. Resto → mensaje cauteloso original.
         """
+        lang = getattr(self, "_lang", "es")
         gate_ok, gate_err = self._post_write_gate()
         if not gate_ok:
-            return (
-                "\n[bold red]⛔ El turno falló y además el código quedó ROTO.[/bold red]\n"
-                f"{gate_err}\n"
-                "[dim]Revisá y corregí el archivo señalado ANTES de commitear.[/dim]\n"
-            )
+            return _t("ui_fail_broken", lang).format(err=gate_err)
         # La verificación CORRIÓ en el turno pero el cierre falló (E2E T006:
         # run_verify ✅ + flip, y la cola del turno divagó hasta agotar
         # intentos). Decirlo explícito en vez del genérico "sin verificación"
         # que contradecía el trabajo hecho. No se ofrece commit igual.
         if self._verify_all_passed() is True:
-            return (
-                "\n[dim]⚠️ El turno no cerró limpio, pero la verificación "
-                "CORRIÓ en este turno (lint/tests/build ✅). Revisá el diff "
-                "antes de commitear — no se ofrece commit automático.[/dim]"
-            )
+            return _t("ui_fail_verified", lang)
         if not self._changed_files() and self._commit_during_turn():
-            return (
-                "\n[dim]✅ Turno completado (cambios ya commiteados — el cierre "
-                "final no tenía nada que verificar).[/dim]"
-            )
-        msg = (
-            "\n[dim]↻ Turno fallido (sin verificación) — no se ofrece "
-            "commit. Revisá los cambios antes de commitearlos.[/dim]"
-        )
+            return _t("ui_fail_committed", lang)
+        msg = _t("ui_fail_base", lang)
         # Flip de planning sin verificación: si el turno marcó tareas como
         # done (tasks.json) pero NUNCA corrió verify —ni en este intento ni
         # en anteriores del turno—, el archivo afirma algo sin respaldo.
@@ -3897,11 +3857,7 @@ class Session:
         if not (self._called_tools & VERIFY_TOOL_NAMES) and not self._turn_verify_tools:
             flips = [f for f in self._changed_files() if _is_planning_file(f)]
             if flips:
-                msg += (
-                    "\n[dim]⚠️ " + ", ".join(flips[:5]) + ": marcado(s) como "
-                    "done SIN verificación corrida — no dar la tarea por "
-                    "hecha hasta verificar.[/dim]"
-                )
+                msg += _t("ui_fail_flip", lang).format(files=", ".join(flips[:5]))
         _reds_line_f = self._reds_attribution_line()
         if _reds_line_f:
             msg += "\n[dim]" + _reds_line_f.strip() + "[/dim]"
@@ -3938,8 +3894,9 @@ class Session:
         )
         lines = status.splitlines() if status.strip() else []
         if scope not in ("todo", "sesion"):
+            lang = getattr(self, "_lang", "es")
             console.print(
-                escape(_parse_commit_candidates(lines, self._session_touched_files))
+                escape(_parse_commit_candidates(lines, self._session_touched_files, lang=lang))
             )
             untracked_pick = [
                 ln[3:].strip() for ln in lines
@@ -3947,12 +3904,7 @@ class Session:
             ]
             self._pending_commit_pick = untracked_pick or None
             console.print(
-                "[dim]" + escape(
-                    "Usá /commit todo [mensaje] (todos los tracked) o "
-                    "/commit sesion [mensaje] (solo lo tocado en esta sesión). "
-                    "Para untracked respondé con números (1 3), 'todos' o "
-                    "'ninguno' — nunca se stagean solos."
-                ) + "[/dim]"
+                "[dim]" + escape(_t("ui_commit_usage", lang)) + "[/dim]"
             )
             return
         paths = _commit_stage_set(lines, scope, self._session_touched_files)
@@ -3963,23 +3915,20 @@ class Session:
         if not paths:
             # Sin nada stageable no se corre la batería (E2E: 3 baterías
             # seguidas para descubrir que todo era untracked).
-            console.print(
-                "[yellow]↻ Nada para commitear en ese alcance "
-                "(¿todo untracked? agregalo a mano).[/yellow]"
-            )
+            lang = getattr(self, "_lang", "es")
+            console.print(_t("ui_commit_nothing", lang))
             self._print_untracked_hint(untracked)
             return
-        console.print("[dim]🔍 Verificando antes de commitear (lint/tests/build)…[/dim]")
+        lang = getattr(self, "_lang", "es")
+        console.print(_t("ui_commit_verifying", lang))
         try:
-            passed, report = run_commit_verification(self.repo_path, reuse=self._verify_results)
+            passed, report = run_commit_verification(self.repo_path, reuse=self._verify_results, lang=lang)
         except Exception as e:
-            console.print(f"[dim]No se pudo verificar ({escape(str(e))}): commiteo igual bajo tu responsabilidad.[/dim]")
+            console.print(_t("ui_commit_noverify", lang).format(err=escape(str(e))))
             passed, report = True, ""
         console.print(escape(report))
         if not passed:
-            console.print(
-                "[yellow]⛔ Verificación en rojo — NO commiteo. Corregí arriba o usá /verify.[/yellow]"
-            )
+            console.print(_t("ui_commit_red", lang))
             self.note_verify_result(passed, report)
             return
         try:
@@ -3989,17 +3938,15 @@ class Session:
                 self._git_cmd(["add", "--", *paths], timeout=15)
             staged_code, staged = self._git_cmd(["diff", "--cached", "--name-only"])
             if staged_code != 0 or not staged.strip():
-                console.print(
-                    "[yellow]↻ Nada quedó stageado — no commiteo "
-                    "(revisá el árbol a mano).[/yellow]"
-                )
+                console.print(_t("ui_commit_nostaged", getattr(self, "_lang", "es")))
                 return
             if not message:
                 n = len(staged.splitlines())
+                lang = getattr(self, "_lang", "es")
                 message = (
-                    f"chore: cambios pendientes ({n} archivos)"
+                    _t("ui_chore_all", lang).format(n=n)
                     if scope == "todo"
-                    else f"chore: cambios de la sesión ({n} archivos)"
+                    else _t("ui_chore_session", lang).format(n=n)
                 )
             elif (low := message.strip().lower()) == "ai" or low == "ia" or low.startswith(("ai ", "ia ")):
                 # /commit todo ai [pista]: el LLM redacta el mensaje desde el
@@ -4009,22 +3956,24 @@ class Session:
                 ai_msg = self._ai_commit_message()
                 if ai_msg:
                     message = f"{ai_msg} ({hint})" if hint else ai_msg
-                    console.print(f"[dim]✍️ Mensaje generado: {escape(message)}[/dim]")
+                    console.print(_t("ui_commit_msg_gen", getattr(self, "_lang", "es")).format(msg=escape(message)))
                 else:
                     n = len(staged.splitlines())
+                    lang = getattr(self, "_lang", "es")
                     message = (
-                        f"chore: cambios pendientes ({n} archivos)"
+                        _t("ui_chore_all", lang).format(n=n)
                         if scope == "todo"
-                        else f"chore: cambios de la sesión ({n} archivos)"
+                        else _t("ui_chore_session", lang).format(n=n)
                     )
             code, out = self._git_cmd(["commit", "-m", message])
+            lang = getattr(self, "_lang", "es")
             if code == 0:
-                console.print(f"[green]✅ Commit creado: {escape(message)}[/green]")
+                console.print(_t("ui_commit_created", lang).format(msg=escape(message)))
                 self._print_untracked_hint(untracked)
             else:
-                console.print(f"[red]⛔ git commit falló:\n{escape(out)}[/red]")
+                console.print(_t("ui_commit_fail", lang).format(out=escape(out)))
         except Exception as e:
-            console.print(f"[red]⛔ git falló: {escape(str(e))}[/red]")
+            console.print(_t("ui_git_fail", getattr(self, "_lang", "es")).format(err=escape(str(e))))
 
     def _ai_commit_message(self) -> str:
         """Redacta el mensaje de commit con el LLM desde el diff stageado.
@@ -4072,8 +4021,9 @@ class Session:
         self._pending_commit_pick = None
         if parsed is None:
             return None
+        lang = getattr(self, "_lang", "es")
         if parsed == "none":
-            return "[dim]OK, no stageo nada.[/dim]"
+            return _t("ui_pick_none", lang)
         _code, status = self._git_cmd(
             ["status", "--porcelain", "--untracked-files=all"]
         )
@@ -4089,18 +4039,11 @@ class Session:
                 if 1 <= i <= len(pending) and pending[i - 1] in still_untracked
             ]
         if not chosen:
-            return (
-                "[yellow]↻ Ningún número válido (o ya no están untracked). "
-                "Pedí /commit de nuevo para ver la lista actual.[/yellow]"
-            )
+            return _t("ui_pick_invalid", lang)
         code, out = self._git_cmd(["add", "--", *chosen], timeout=15)
         if code != 0:
-            return f"[red]⛔ git add falló:\n{escape(out)}[/red]"
-        return (
-            f"[green]✅ Stageados {len(chosen)}: {escape(', '.join(chosen[:8]))}[/green]\n"
-            "[dim]Ahora /commit todo [mensaje] o /commit sesion [mensaje] "
-            "para commitear.[/dim]"
-        )
+            return _t("ui_pick_add_fail", lang).format(out=escape(out))
+        return _t("ui_pick_staged", lang).format(n=len(chosen), files=escape(', '.join(chosen[:8])))
 
     def _print_untracked_hint(self, untracked: list[str]) -> None:
         """Lista untracked + comando exacto para agregarlos a mano.
@@ -4112,11 +4055,11 @@ class Session:
 
         if not untracked:
             return
+        lang = getattr(self, "_lang", "es")
         shown = untracked[:12]
-        extra = f" (+{len(untracked) - len(shown)} más)" if len(untracked) > len(shown) else ""
+        extra = _t("ui_untracked_more", lang).format(n=len(untracked) - len(shown)) if len(untracked) > len(shown) else ""
         console.print(
-            "[dim]Untracked (agregar a mano): "
-            + escape(", ".join(shown)) + extra + "[/dim]"
+            _t("ui_untracked_head", lang).format(files=escape(", ".join(shown)), extra=extra)
         )
         console.print(
             "[dim]  git add -- " + escape(" ".join(shown)) + "[/dim]"
@@ -4124,34 +4067,36 @@ class Session:
 
     def slash_push(self, arg: str) -> None:
         """Comando /push [remote] — push de la rama actual, determinístico."""
+        lang = getattr(self, "_lang", "es")
         remote = arg.strip() or "origin"
         code, branch_out = self._git_cmd(["branch", "--show-current"])
         branch = branch_out.strip() or "HEAD"
         if not branch:
-            console.print("[red]⛔ HEAD detached — no se puede pushear.[/red]")
+            console.print(_t("ui_push_detached", lang))
             return
-        console.print(f"[dim]🚀 Pusheando {branch} → {remote}…[/dim]")
+        console.print(_t("ui_pushing", lang).format(branch=branch, remote=remote))
         code, out = self._git_cmd(["push", "--", remote, branch])
         if code != 0:
             # Sin upstream: la primera vez push -u lo setea.
             code2, out2 = self._git_cmd(["push", "-u", "--", remote, branch])
             if code2 == 0:
-                console.print(f"[green]🚀 Pushed {branch} → {remote} (upstream seteado)[/green]")
+                console.print(_t("ui_pushed_upstream", lang).format(branch=branch, remote=remote))
                 return
-            console.print(f"[red]⛔ push falló:\n{(out2 or out)}[/red]\n[dim]Si el remote pide auth, verificá credenciales con agent-devs --doctor.[/dim]")
+            console.print(_t("ui_push_fail", lang).format(out=(out2 or out)))
             return
-        console.print(f"[green]🚀 Pushed {branch} → {remote}[/green]")
+        console.print(_t("ui_pushed", lang).format(branch=branch, remote=remote))
 
     def slash_pr(self, arg: str) -> None:
         """Comando /pr [base] — abre PR de la rama actual con gh, determinístico."""
+        lang = getattr(self, "_lang", "es")
         base = arg.strip() or "main"
         _code, branch = self._git_cmd(["branch", "--show-current"])
         branch = branch.splitlines()[0].strip() if branch else ""
         if not branch:
-            console.print("[red]⛔ HEAD detached — no hay rama para PR.[/red]")
+            console.print(_t("ui_pr_detached", lang))
             return
         if branch == base:
-            console.print(f"[yellow]⛔ La rama actual ES {base}: cambiá de rama antes (create_branch).[/yellow]")
+            console.print(_t("ui_pr_same", lang).format(base=base))
             return
         pretty = branch.split("/", 1)[-1].replace("-", " ").strip() or branch
         title = f"{branch.split('/', 1)[0] or 'feat'}: {pretty}" if "/" in branch else f"feat: {pretty}"
@@ -4159,15 +4104,12 @@ class Session:
 
         from tools.git import create_pr
 
-        console.print(f"[dim]🚀 Creando PR: {branch} → {base} (title: {title})…[/dim]")
+        console.print(_t("ui_pr_creating", lang).format(branch=branch, base=base, title=title))
         try:
             url = create_pr.invoke({"path": self.repo_path, "title": title, "base": base})
             console.print(f"[green]✅ {url}[/green]")
         except ToolException as e:
-            console.print(
-                f"[red]⛔ No se pudo crear el PR: {e}[/red]\n"
-                "[dim]¿Tenés gh instalado y autenticado (gh auth login)? agent-devs --doctor lo verifica.[/dim]"
-            )
+            console.print(_t("ui_pr_fail", lang).format(err=e))
 
     def _closing_message(self, base: str) -> str:
         """Mensaje de cierre contexto-dependiente: si el entorno fue chequeado
@@ -4176,17 +4118,10 @@ class Session:
         el fix" a secas (feedback real del usuario: el bug estaba arreglado y
         el agente nunca se lo dijo). Incluye EVIDENCIA de lo revisado:
         archivos leídos, herramientas usadas y el reporte de runtime."""
+        lang = getattr(self, "_lang", "es")
         if not self._runtime_healthy:
             return base
-        msg = (
-            "\n\n✓ No se aplicaron cambios de código. El entorno está SANO "
-            "(backend responde, sin containers Docker pisando puertos) y "
-            "no se encontró un bug evidente — es probable que el problema "
-            "ya esté resuelto.\n"
-            "Probá la acción de nuevo en tu app. Si el error persiste, "
-            "decime exactamente qué respuesta ves (mensaje, pantalla, "
-            "endpoint) y lo investigo más fino."
-        )
+        msg = _t("ui_healthy", lang)
         evidence: list[str] = []
         if self._runtime_report:
             evidence.append(
@@ -4199,15 +4134,15 @@ class Session:
         )
         if files:
             evidence.append(
-                "Archivos inspeccionados:\n"
+                _t("ui_ev_files", lang)
                 + "\n".join(f"    - {f}" for f in files[:12])
                 + ("\n    …" if len(files) > 12 else "")
             )
         tools = sorted(self._called_tools)
         if tools:
-            evidence.append("Herramientas usadas: " + ", ".join(tools))
+            evidence.append(_t("ui_ev_tools", lang).format(tools=", ".join(tools)))
         if evidence:
-            msg += "\n\n📋 Evidencia de lo revisado:\n" + "\n".join(evidence)
+            msg += _t("ui_evidence_title", lang) + "\n".join(evidence)
         return msg
 
     def _maybe_ask_commit(self, user_input: str) -> None:
@@ -4217,14 +4152,10 @@ class Session:
         usuario quiere control). Si stdin no es tty (tests/scripts) o el repo
         no es git, se omite silenciosamente. Fail-open: nunca rompe el flujo.
         """
+        lang = getattr(self, "_lang", "es")
         if not EXECUTE_ASK_COMMIT or not sys.stdin.isatty() or self._fullscreen:
             if self._fullscreen and EXECUTE_ASK_COMMIT:
-                console.print(
-                    "[dim]ℹ️  Modo --tui: "
-                    "el commit es manual — usá /commit sesion ai (verifica + "
-                    "genera el mensaje) o git a mano. El prompt interactivo está "
-                    "deshabilitado.[/dim]"
-                )
+                console.print(_t("ui_tui_commit", lang))
             return
         try:
             import subprocess
@@ -4238,28 +4169,25 @@ class Session:
             return
 
         try:
-            answer = input("📦 Hay cambios sin commitear. ¿Los commiteo? [y/N] ").strip().lower()
+            answer = input(_t("ui_ask_commit_q", lang)).strip().lower()
         except (EOFError, KeyboardInterrupt):
             console.print()
             return
         if normalize(answer) not in ("y", "yes", "s", "si"):
-            console.print("[dim]OK, no se commitea.[/dim]")
+            console.print(_t("ui_ask_no", lang))
             return
 
         # Gate de commit: verificar ANTES de commitear. Nada roto llega a git:
         # si la batería falla, se aborta y se pide corregir primero.
-        console.print("[dim]🔍 Verificando antes de commitear (lint/tests/build)…[/dim]")
+        console.print(_t("ui_commit_verifying", lang))
         try:
-            passed, report = run_commit_verification(self.repo_path, reuse=self._verify_results)
+            passed, report = run_commit_verification(self.repo_path, reuse=self._verify_results, lang=lang)
         except Exception as e:
-            console.print(f"[dim]No se pudo verificar ({e}): commiteo igual bajo tu responsabilidad.[/dim]")
+            console.print(_t("ui_commit_noverify", lang).format(err=e))
             passed, report = True, ""
         console.print(report)
         if not passed:
-            console.print(
-                "[yellow]⛔ Verificación en rojo — NO commiteo. Corregí lo de "
-                "arriba y volvé a pedir el commit (o usá /verify cuando quieras).[/yellow]"
-            )
+            console.print(_t("ui_commit_red2", lang))
             self.note_verify_result(passed, report)
             return
 
@@ -4279,7 +4207,7 @@ class Session:
                     cwd=self.repo_path, capture_output=True, text=True, timeout=10,
                 )
                 if result.returncode == 0:
-                    console.print(f"[green]✅ Commit creado: {message}[/green]")
+                    console.print(_t("ui_commit_created", lang).format(msg=message))
                     try:
                         left = subprocess.run(
                             ["git", "status", "--porcelain"],
@@ -4289,18 +4217,15 @@ class Session:
                             ln[3:] for ln in left.splitlines() if ln.startswith("??")
                         ]
                         if untracked:
-                            console.print(
-                                "[yellow]⚠️  Quedaron SIN commitear (untracked — "
-                                "revisá antes de agregarlos a mano):[/yellow]"
-                            )
+                            console.print(_t("ui_commit_left", lang))
                             for u in untracked:
                                 console.print(f"   · {u}")
                     except Exception:
                         pass
                 else:
-                    console.print(f"[dim]Commit falló: {(result.stderr or '').strip()[:200]}[/dim]")
+                    console.print(_t("ui_commit_fail2", lang).format(err=(result.stderr or '').strip()[:200]))
         except Exception as e:
-            console.print(f"[dim]Commit falló: {e}[/dim]")
+            console.print(_t("ui_commit_fail2", lang).format(err=e))
 
     def run_turn(self, user_input: str, status: str | None = None) -> None:
         """Punto de entrada de turnos con exclusión mutua (un turno a la vez).
@@ -4312,19 +4237,10 @@ class Session:
         acá con turno ajeno en curso (la TUI los deja pasar igual).
         """
         if _sources_changed(self._source_snapshot, _WATCHED_SOURCE_FILES):
-            console.print(
-                "[red]⛔ Los archivos del harness cambiaron bajo esta sesión "
-                "abierta (pull o edición con el CLI corriendo): este proceso "
-                "sigue corriendo código viejo y puede fallar raro. Cerrá el "
-                "programa del todo y abrilo de nuevo (/new NO alcanza: no "
-                "recarga módulos). Tu mensaje no se ejecutó.[/red]"
-            )
+            console.print(_t("ui_stale", getattr(self, "_lang", "es")))
             return
         if not self._try_claim_turn():
-            console.print(
-                "[yellow]⏳ Hay un turno en curso — esperá a que termine o "
-                "cancelalo con ESC. Tu mensaje no se ejecutó: reenvialo.[/yellow]"
-            )
+            console.print(_t("ui_busy", getattr(self, "_lang", "es")))
             return
         try:
             return self._run_turn_inner(user_input, status=status)
@@ -4433,10 +4349,10 @@ class Session:
                         continue
             except Exception:
                 pass
-            _llama_down_console_msg(base or None)
+            _llama_down_console_msg(base or None, getattr(self, "_lang", "es"))
             return False
         if not (getattr(llm, "api_key", "") or "") or getattr(llm, "api_key", "") == "not-needed":
-            _opencode_down_console_msg()
+            _opencode_down_console_msg(getattr(self, "_lang", "es"))
             return False
         return True
 
@@ -4469,13 +4385,14 @@ class Session:
             intent = classify_intent(self.llm, user_input)
         except BaseException as e:
             if _is_llama_connection_error(e):
-                _llm_down_console_msg(self.llm)
+                _llm_down_console_msg(self.llm, getattr(self, "_lang", "es"))
                 return
             raise
         new_role = role_for_intent(intent)
         # Instrumentación de routing: el benchmark necesita auditar por qué un
         # prompt cayó en un rol (E2E: 'Creá el archivo' llegó como Análisis).
-        console.print(f"[dim]🎯 intent={intent.value} → rol={new_role.value}[/dim]")
+        lang = getattr(self, "_lang", "es")
+        console.print(_t("ui_intent", lang).format(i=intent.value, r=new_role.value))
 
         # Continuación: palabras como "continuar", "sigue", "dale" no son
         # verbos EXECUTE pero el usuario claramente quiere seguir con lo
@@ -4496,17 +4413,17 @@ class Session:
             new_role == Role.ANALYZE and _is_selfcontained_analysis(user_input)
         )
         role_changed = self._rebuild_agent(new_role, no_explore=selfcontained)
-        role_label = _ROLE_LABELS.get(new_role, "")
+        role_label = _role_label(new_role, getattr(self, "_lang", "es"))
 
         if new_role != Role.CHAT and (role_changed or not self._role_announced):
-            print_role_switch(role_label, self._local_count, self._mcp_count)
+            print_role_switch(role_label, self._local_count, self._mcp_count, lang=getattr(self, "_lang", "es"))
             self._role_announced = True
 
         if status:
             print(status, flush=True)
 
         if selfcontained:
-            console.print("[dim]📐 Pregunta autocontenida — respondiendo directo (explore=0).[/dim]\n")
+            console.print(_t("ui_selfcontained", getattr(self, "_lang", "es")))
 
         # Reset dedupe + explore budget cada turno (siempre restaurar defaults)
         # Orden: primero restaurar max_* a defaults, DESPUÉS reset() — reset()
@@ -4571,8 +4488,7 @@ class Session:
                 if _is_protected_task_path(str(_p)):
                     TASK_PATH_ALLOW.add(str(_p))
                     console.print(
-                        f"[dim]📎 Archivo protegido citado por vos: {Path(_p).name} "
-                        f"(edición permitida este turno).[/dim]"
+                        _t("ui_protected", getattr(self, "_lang", "es")).format(name=Path(_p).name)
                     )
         except Exception:
             pass
@@ -4672,11 +4588,7 @@ class Session:
                 fix_report = apply_mismatch_fixes(
                     self.repo_path, confirm_fn=_path_fix_confirm)
                 if fix_report:
-                    console.print(
-                        "[yellow]🔧 PATH FIX: corregí mismatches de paths "
-                        "frontend↔backend determinísticamente "
-                        "(config PATH_FIX_ENABLED=False para desactivar)[/yellow]\n"
-                    )
+                    console.print(_t("ui_pathfix", getattr(self, "_lang", "es")))
                     agent_input = f"{agent_input}\n\n{fix_report}"
 # Diagnóstico de RUNTIME: si el usuario reporta errores de servidor
             # ("Error interno del servidor", 500, no guarda...), el problema
@@ -4691,10 +4603,11 @@ class Session:
                     agent_input = f"{agent_input}\n\n{runtime_report}"
                     self._runtime_healthy = "entorno SANO" in runtime_report
                     self._runtime_report = runtime_report
-                    console.print("[dim]🩺 RUNTIME: diagnóstico de puertos ejecutado.[/dim]\n")
+                    console.print(_t("ui_runtime", getattr(self, "_lang", "es")))
             if agent_input != user_input:
                 nums = extract_requested_task_numbers(user_input)
-                scope = f" (solo Tarea(s) {', '.join(map(str, nums))})" if nums else ""
+                lang = getattr(self, "_lang", "es")
+                scope = _t("ui_preloaded_scope", lang).format(nums=', '.join(map(str, nums))) if nums else ""
                 hints_on = "CONTEXTO DE REPO PRECARGADO" in agent_input
                 # Con hints ya inyectados, explore=0: cualquier list_files/search_code
                 # lanza ToolBudgetExceeded (GraphBubbleUp) → propaga → retry write-only.
@@ -4712,7 +4625,7 @@ class Session:
                     self._explore_budget.max_reads_after_explore = 8
                     self._explore_budget.max_tools_before_write = 12
                     self._dedupe.max_repeats = 1
-                extra = " · explore=acotado (hints)" if hints_on else ""
+                extra = _t("ui_preloaded_extra", lang) if hints_on else ""
                 try:
                     from orchestration.execute_bootstrap import pinned_task_header
 
@@ -4728,15 +4641,11 @@ class Session:
                 # haciendo creer que la tarea estaba cargada.
                 if "CONTENIDO YA CARGADO DE" in agent_input:
                     console.print(
-                        f"[dim]📎 Archivos de tareas pre-cargados{scope} "
-                        f"+ checklist AC{extra}.[/dim]\n"
+                        _t("ui_preloaded", lang).format(scope=scope, extra=extra)
                     )
                 else:
                     console.print(
-                        "[dim]📎 Sin archivo de tareas reconocido "
-                        "(solo hints de repo"
-                        f"{extra}). Si citaste un path con espacios, "
-                        "quotealo: \"/ruta/con espacios/tareas.json\".[/dim]\n"
+                        _t("ui_no_taskfile", lang).format(extra=extra)
                     )
             # Correcciones pegadas (sin path a tasks.md): forzar escritura
             elif len(user_input) > 400 and any(
@@ -4749,7 +4658,7 @@ class Session:
                 agent_input = user_input + _build_review_correction_suffix()
                 self._explore_budget.max_calls = 0
                 self._explore_budget.max_tools_before_write = 4
-                console.print("[dim]🔗 Corrección post-review — explore=0, force write.[/dim]\n")
+                console.print(_t("ui_review_fix", getattr(self, "_lang", "es")))
             # Retomar análisis previo: "implementa" / "arreglá" sin tarea explícita
             elif _is_ambiguous_execute(user_input, self.repo_path):
                 # Rojos frescos mandan sobre el historial (E2E: /verify con
@@ -4763,7 +4672,7 @@ class Session:
                     agent_input = user_input + _build_failed_verify_suffix(
                         reds, details=str(record.get("details") or "")
                     )
-                    console.print("[dim]🔗 Retomando rojos de la última verificación (sin re-ejecutar la batería).[/dim]\n")
+                    console.print(_t("ui_retake_reds", getattr(self, "_lang", "es")))
                 _anchor = _tasks_anchor_line(self._last_tasks_file)
                 if _anchor:
                     agent_input += _anchor
@@ -4777,7 +4686,7 @@ class Session:
                         # exploración y forzar lectura-directa de los objetivos.
                         self._explore_budget.max_calls = 0
                         self._explore_budget.max_tools_before_write = 4
-                        console.print("[dim]🔗 Retomando análisis previo como tarea (explore=0).[/dim]\n")
+                        console.print(_t("ui_retake_analysis", getattr(self, "_lang", "es")))
                     else:
                         # Análisis previo SIN evidencia (sin file:línea ni código
                         # citado): encadenarlo con explore=0 perpetúa una
@@ -4791,7 +4700,7 @@ class Session:
                             "VERIFICÁ CON EVIDENCIA ANTES DE CONFIRMAR cualquier "
                             "diagnóstico previo antes de escribir código."
                         )
-                        console.print("[dim]🔗 Análisis previo sin evidencia — explore acotado, verificar antes de escribir.[/dim]\n")
+                        console.print(_t("ui_analysis_no_ev", getattr(self, "_lang", "es")))
             # Orden de CORRECCIÓN explícita ("corregir los errores de tests"):
             # no entra a la rama ambigua pero los rojos guardados mandan igual
             # (E2E: re-ejecutó batería + run_tests sin reds). Una sola vez;
@@ -4805,7 +4714,7 @@ class Session:
                             str(_crec.get("report") or ""),
                             details=str(_crec.get("details") or ""),
                         )
-                        console.print("[dim]🔗 Retomando rojos de la última verificación (sin re-ejecutar la batería).[/dim]\n")
+                        console.print(_t("ui_retake_reds", getattr(self, "_lang", "es")))
         elif new_role == Role.REVIEW:
             agent_input = preload_for_review(user_input, self.repo_path)
             self._dedupe.max_repeats = 1
@@ -4819,10 +4728,9 @@ class Session:
                 self._explore_budget.max_reads_after_explore = 15
                 self._explore_budget.max_tools_before_write = 30
                 nums = extract_requested_task_numbers(user_input)
-                scope = f" (Tarea(s) {', '.join(map(str, nums))})" if nums else ""
-                console.print(
-                    f"[dim]📎 Checklist AC pre-cargado para review{scope}.[/dim]\n"
-                )
+                lang = getattr(self, "_lang", "es")
+                scope = _t("ui_review_scope", lang).format(nums=', '.join(map(str, nums))) if nums else ""
+                console.print(_t("ui_review_checklist", lang).format(scope=scope))
         elif new_role == Role.ANALYZE:
             # Archivos citados (.md/.txt): inyectar contenido + checklist para
             # que la verificación se haga contra el código con evidencia, no
@@ -4834,11 +4742,9 @@ class Session:
                 agent_input = preloaded
                 self._analyze_preloaded = True
                 nums = extract_requested_task_numbers(user_input)
-                scope = f" (Tarea(s) {', '.join(map(str, nums))})" if nums else ""
-                console.print(
-                    f"[dim]📎 Tareas citadas pre-cargadas para verificación{scope} "
-                    f"(verificá cada ítem contra el código).[/dim]\n"
-                )
+                lang = getattr(self, "_lang", "es")
+                scope = _t("ui_review_scope", lang).format(nums=', '.join(map(str, nums))) if nums else ""
+                console.print(_t("ui_analyze_preloaded", lang).format(scope=scope))
 
         # Tareas bulk: escalar budgets de EXECUTE + dividir en batches con
         # cola persistida. El budget default corta una tarea de 14 templates a
@@ -4869,18 +4775,15 @@ class Session:
                             cur["seq"], total_b, cur["files"]
                         )
                         console.print(
-                            f"[dim]📦 Tarea bulk (~{bulk} archivos) dividida en "
-                            f"{total_b} batches — batch {cur['seq'] + 1}: "
-                            f"{len(cur['files'])} archivo(s). Progreso: "
-                            f"{progress['done']} done · {progress['failed']} failed · "
-                            f"{progress.get('in_progress', 0)} en curso · "
-                            f"{progress['pending']} pendientes.[/dim]\n"
+                            _t("ui_bulk_split", getattr(self, "_lang", "es")).format(
+                                n=bulk, t=total_b, c=cur['seq'] + 1, f=len(cur['files']),
+                                d=progress['done'], fl=progress['failed'],
+                                ip=progress.get('in_progress', 0), p=progress['pending'])
                         )
                     elif created or (progress["pending"] == 0 and progress.get("in_progress", 0) == 0):
                         console.print(
-                            f"[dim]📦 Tarea bulk ya COMPLETA según la cola "
-                            f"({progress['done']}/{total_b} batches done). Si "
-                            f"querés re-ejecutarla, cambiá el texto del prompt.[/dim]\n"
+                            _t("ui_bulk_done", getattr(self, "_lang", "es")).format(
+                                d=progress['done'], t=total_b)
                         )
 
         self._messages.append(HumanMessage(agent_input))
@@ -5012,6 +4915,7 @@ class Session:
                     # REVIEW exige informe en texto (nunca escritura).
                     # EXECUTE no lo usa (cierre determinístico propio).
                     require_text=new_role in (Role.ANALYZE, Role.PLAN, Role.REVIEW),
+                    lang=getattr(self, "_lang", "es"),
                 )
             )
 
@@ -5109,10 +5013,7 @@ class Session:
                         self._explore_budget.reset()
                         self._dedupe.max_repeats = 2
                         self._rebuild_agent_gate_retry()
-                        console.print(
-                            "\n[yellow]🔧 Compuerta: el build falló tras la escritura. "
-                            "Reintentando el fix con read_file + edit_file…[/yellow]\n"
-                        )
+                        console.print(_t("ui_gate_build_fail", getattr(self, "_lang", "es")))
                         continue
                 # Compuerta de verificación (EXECUTE): si el modelo NO corrió
                 # run_lint / run_tests / run_build, inyectamos un gate que lo
@@ -5131,9 +5032,7 @@ class Session:
                     # Bug latente: messages_for_agent quedaba STALE y el gate
                     # NUNCA llegaba al modelo — la verificación era un no-op.
                     messages_for_agent = list(self._messages)
-                    console.print(
-                        "\n[dim]↻ Verificando los cambios (lint/tests/build)…[/dim]\n"
-                    )
+                    console.print(_t("ui_gate_verify", getattr(self, "_lang", "es")))
                     continue
                 # GUARD PLAN-EXPLORA: el rol PLAN debe EXPLORAR antes de
                 # planificar (E2E real: los 3 modelos respondían del análisis
@@ -5148,11 +5047,7 @@ class Session:
                     and attempt + 1 < max_attempts
                 ):
                     attempt += 1
-                    console.print(
-                        "\n[yellow]📋 PLAN sin exploración: reintentando con "
-                        "exigencia de explorar (list_files/read_file/inspect) "
-                        "antes de redactar el plan…[/yellow]\n"
-                    )
+                    console.print(_t("ui_plan_noexplore", getattr(self, "_lang", "es")))
                     retry_plan = (
                         user_input
                         + "\n\n⛔ Tu plan anterior salió SIN explorar el código "
@@ -5181,10 +5076,7 @@ class Session:
                 ):
                     evidence_retried = True
                     attempt += 1
-                    console.print(
-                        "\n[yellow]🔍 Veredicto sin evidencia (0 lecturas de código) — "
-                        "reintentando con exigencia de leer y citar…[/yellow]\n"
-                    )
+                    console.print(_t("ui_verdict_noev", getattr(self, "_lang", "es")))
                     self._messages.append(HumanMessage(
                         "⛔ Tu veredicto anterior salió SIN leer código (0 tool calls "
                         "de lectura) y SIN citar evidencia. Eso NO es verificar: es "
@@ -5218,9 +5110,7 @@ class Session:
                         attempt += 1
                         shown = ", ".join(bad[:8])
                         console.print(
-                            "\n[yellow]🔍 Citas sin respaldo en disco "
-                            f"({shown}) — reintentando con exigencia de "
-                            "corregir…[/yellow]\n"
+                            _t("ui_cite_noback", getattr(self, "_lang", "es")).format(items=shown)
                         )
                         self._messages.append(HumanMessage(
                             f"⛔ Tu respuesta cita evidencia con formato que NO "
@@ -5268,10 +5158,7 @@ class Session:
                     self._verify_results.clear()
                     self._dedupe.reset()
                     self._explore_budget.reset()
-                    console.print(
-                        "\n[yellow]🔧 Verify en rojo con fallos accionables — "
-                        "un intento de fix…[/yellow]\n"
-                    )
+                    console.print(_t("ui_fix_retry", getattr(self, "_lang", "es")))
                     continue
                 break
             except KeyboardInterrupt:
@@ -5299,17 +5186,15 @@ class Session:
                 _scope = self._turn_scope_kinds()
                 if _scope is not None and not _scope[0]:
                     _, _js = _scope
+                    lang = getattr(self, "_lang", "es")
                     if _js:
-                        _ok, _msg = self._check_written_json(_js)
+                        _ok, _msg = self._check_written_json(_js, lang=lang)
                         if _ok:
                             try:
                                 self._explore_budget._writes_since_verify = 0
                             except Exception:
                                 pass
-                            console.print(
-                                f"\n[dim]✅ {_msg} — la batería no aplica "
-                                "(sin código).[/dim]"
-                            )
+                            console.print(_t("ui_scope_json_ok", lang).format(msg=_msg))
                             continue
                         verify_injections += 1
                         if verify_injections >= VERIFY_GATE_MAX_INJECTIONS:
@@ -5318,8 +5203,7 @@ class Session:
                             auto_stopped = True
                             print(
                                 self._closing_message(
-                                    f"\n\n⛔ {_msg}. Corregilo con edit_file "
-                                    "y reintentá."
+                                    _t("ui_close_json_invalid", lang).format(msg=_msg)
                                 ),
                                 flush=True,
                             )
@@ -5334,10 +5218,7 @@ class Session:
                         self._explore_budget._writes_since_verify = 0
                     except Exception:
                         pass
-                    console.print(
-                        "\n[dim]↻ Solo docs/datos (sin código): la batería no "
-                        "aplica — se sigue.[/dim]"
-                    )
+                    console.print(_t("ui_scope_docs", getattr(self, "_lang", "es")))
                     continue
                 # El modelo escribió N veces sin verificar: inyectar la
                 # compuerta de verificación AHORA (GATE_RETRY_TOOLS tiene
@@ -5347,13 +5228,10 @@ class Session:
                     turn_failed = True
                     interrupted = True
                     auto_stopped = True
+                    lang = getattr(self, "_lang", "es")
                     print(
                         self._closing_message(
-                            "\n\n↻ El modelo escribió demasiado sin verificar "
-                            "y la compuerta de verificación se inyectó "
-                            f"{verify_injections} veces sin converger. "
-                            "Reintentá con un prompt más específico "
-                            "(archivo, endpoint o línea concreta)."
+                            _t("ui_close_wrote_no_verify", lang).format(n=verify_injections)
                         ),
                         flush=True,
                     )
@@ -5364,10 +5242,7 @@ class Session:
                 self._verify_results.clear()
                 self._inject_verify_gate()
                 messages_for_agent = list(self._messages)
-                console.print(
-                    "\n[yellow]🔧 El modelo escribió sin verificar. Inyectando "
-                    "compuerta de verificación (lint/tests/build)…[/yellow]\n"
-                )
+                console.print(_t("ui_wrote_no_verify", getattr(self, "_lang", "es")))
                 continue
             except ToolBudgetExceeded as e:
                 if attempt + 1 >= max_attempts:
@@ -5390,9 +5265,10 @@ class Session:
                     # escriben; leen archivos clave y responden con evidencia.
                     # REVIEW caía en _enter_budget_retry y GANABA edit_file
                     # (E2E real T1b/9B: 5 edits a package.json en un review).
+                    lang = getattr(self, "_lang", "es")
                     self._retry_analyze_no_explore(
                         new_role,
-                        f"Exploración agotada en {role_label}: {e}",
+                        _t("ui_reason_budget", lang).format(label=role_label, err=e),
                     )
                     messages_for_agent = list(self._messages)
                     continue
@@ -5426,10 +5302,7 @@ class Session:
                         self._explore_budget.reset()
                         self._dedupe.max_repeats = 2
                         self._rebuild_agent_gate_retry()
-                        console.print(
-                            "\n[dim]↻ Verificando los cambios "
-                            "(lint/tests/build)…[/dim]\n"
-                        )
+                        console.print(_t("ui_gate_verify", getattr(self, "_lang", "es")))
                         continue
                     self._last_response = self._deterministic_close()
                     break
@@ -5445,15 +5318,10 @@ class Session:
                     self._nothing_pending_to_write() or self._verified_noop_turn()
                 ):
                     self._last_response = self._deterministic_close()
-                    console.print(
-                        "\n[dim]✅ Nada pendiente por escribir (trabajo ya "
-                        "verificado o commiteado) — cerrando sin "
-                        "reintentar.[/dim]"
-                    )
+                    console.print(_t("ui_nothing_pending", getattr(self, "_lang", "es")))
                     break
                 messages_for_agent = self._enter_budget_retry(
-                    "Presupuesto de exploración agotado. Reintentando "
-                    "con lectura acotada + escritura…"
+                    _t("ui_retry_budget", getattr(self, "_lang", "es"))
                 )
                 continue
             except ReasoningOnlyResponse as e:
@@ -5463,25 +5331,20 @@ class Session:
                 if attempt + 1 >= max_attempts:
                     turn_failed = True
                     auto_stopped = True
+                    lang = getattr(self, "_lang", "es")
                     if isinstance(e, ToolCallLimitExceeded):
                         print(
-                            f"\n\n⚠️  El modelo hizo {e.total_calls} tool calls (límite {e.limit}) "
-                            "y entró en loop. Reinicia con /new o reduce el prompt.",
+                            _t("ui_toolcall_loop", lang).format(n=e.total_calls, m=e.limit),
                             flush=True,
                         )
                     elif getattr(e, "reason", "") == "no-write":
                         print(
-                            self._closing_message(
-                                "\n\n↻ El modelo no logró escribir el cambio. "
-                                "Reintentá con un prompt más específico "
-                                "(archivo o línea concreta) o pedí un análisis primero."
-                            ),
+                            self._closing_message(_t("ui_close_no_write", lang)),
                             flush=True,
                         )
                     else:
                         print(
-                            f"\n\n⚠️  El modelo gastó todo el output ({len(e.reasoning_text)} chars) "
-                            "en razonamiento sin producir acción. Reinicia con /new o reduce el prompt.",
+                            _t("ui_reasoning_hang", lang).format(n=len(e.reasoning_text)),
                             flush=True,
                         )
                     break
@@ -5489,23 +5352,18 @@ class Session:
                 if new_role in (Role.ANALYZE, Role.PLAN, Role.REVIEW):
                     # Estos roles nunca van write-only: retry de solo-lectura
                     # y respuesta con evidencia (ver fix del handler de arriba).
+                    lang = getattr(self, "_lang", "es")
                     if isinstance(e, ToolCallLimitExceeded):
-                        reason = f"El modelo hizo {e.total_calls} tool calls (loop)"
+                        reason = _t("ui_reason_loop", lang).format(n=e.total_calls)
                     elif getattr(e, "reason", "") == "empty-after-tools":
-                        reason = (
-                            "El modelo corrió tools pero cerró sin texto "
-                            "(respuesta vacía)"
-                        )
+                        reason = _t("ui_reason_empty", lang)
                     else:
-                        reason = f"El modelo gastó {len(e.reasoning_text)} chars razonando sin actuar"
+                        reason = _t("ui_reason_thinking", lang).format(n=len(e.reasoning_text))
                     self._retry_analyze_no_explore(new_role, reason)
                     messages_for_agent = list(self._messages)
                     continue
                 if isinstance(e, ToolCallLimitExceeded):
-                    retry_msg = (
-                        f"Muchas tool calls seguidas ({e.total_calls}). "
-                        "Reintentando con lectura acotada + escritura…"
-                    )
+                    retry_msg = _t("ui_retry_many", getattr(self, "_lang", "es")).format(n=e.total_calls)
                 elif getattr(e, "reason", "") == "no-write":
                     # Cierre honesto SIN retry: si no hay nada pendiente por
                     # escribir, forzar escritura solo produce no-ops
@@ -5515,14 +5373,11 @@ class Session:
                     if new_role == Role.EXECUTE and self._nothing_pending_to_write():
                         if e.reasoning_text.strip():
                             self._last_response = e.reasoning_text
-                        console.print(
-                            "\n[dim]✅ Nada pendiente por escribir (trabajo ya "
-                            "commiteado o verificado) — cerrando sin "
-                            "reintentar.[/dim]"
-                        )
+                        lang = getattr(self, "_lang", "es")
+                        console.print(_t("ui_nothing_pending", lang))
                         _verdict = _closing_verdict_excerpt(self._last_response)
                         if _verdict:
-                            console.print(f"\n[dim]📋 Veredicto del turno:\n{_verdict}[/dim]")
+                            console.print(_t("ui_verdict_title", lang).format(verdict=_verdict))
                         break
                     # Turno ya-implementado con evidencia: el modelo leyó ≥2
                     # archivos/tools y dictaminó "ya cumple el AC" con
@@ -5533,15 +5388,13 @@ class Session:
                         e.reasoning_text or ""
                     ):
                         self._last_response = e.reasoning_text or ""
-                        console.print(
-                            "\n[dim]✅ Solo-lectura con evidencia — nada que "
-                            "escribir, cerrando sin reintentar.[/dim]"
-                        )
+                        lang = getattr(self, "_lang", "es")
+                        console.print(_t("ui_readonly_ev", lang))
                         _verdict = _closing_verdict_excerpt(self._last_response)
                         if _verdict:
-                            console.print(f"\n[dim]📋 Veredicto del turno:\n{_verdict}[/dim]")
+                            console.print(_t("ui_verdict_title", lang).format(verdict=_verdict))
                         break
-                    retry_msg = "Reintentando con lectura acotada + escritura…"
+                    retry_msg = _t("ui_retry_norewrite", getattr(self, "_lang", "es"))
                 else:
                     # Éxito ya verificado: el modelo divaga pensando tras
                     # terminar (E2E T006: 3×150s de thinking post-éxito con
@@ -5558,10 +5411,8 @@ class Session:
                         )
                         and self._verify_all_passed() is True
                     ):
-                        console.print(
-                            "\n[dim]✅ Trabajo verificado — el modelo seguía "
-                            "razonando sin actuar: cerrando sin reintentar.[/dim]"
-                        )
+                        lang = getattr(self, "_lang", "es")
+                        console.print(_t("ui_work_verified", lang))
                         self._last_response = self._deterministic_close()
                         break
                     # Tarea ya-hecha con thinking-timeout: el modelo leyó +
@@ -5576,28 +5427,19 @@ class Session:
                         self._nothing_pending_to_write() or self._verified_noop_turn()
                     ):
                         self._last_response = self._deterministic_close()
-                        console.print(
-                            "\n[dim]✅ Nada pendiente por escribir (trabajo ya "
-                            "verificado o commiteado) — cerrando sin "
-                            "reintentar.[/dim]"
-                        )
+                        console.print(_t("ui_nothing_pending", getattr(self, "_lang", "es")))
                         break
                     if new_role == Role.EXECUTE and self._readonly_evidence_turn(
                         e.reasoning_text or ""
                     ):
                         self._last_response = e.reasoning_text or ""
-                        console.print(
-                            "\n[dim]✅ Solo-lectura con evidencia — nada que "
-                            "escribir, cerrando sin reintentar.[/dim]"
-                        )
+                        lang = getattr(self, "_lang", "es")
+                        console.print(_t("ui_readonly_ev", lang))
                         _verdict = _closing_verdict_excerpt(self._last_response)
                         if _verdict:
-                            console.print(f"\n[dim]📋 Veredicto del turno:\n{_verdict}[/dim]")
+                            console.print(_t("ui_verdict_title", lang).format(verdict=_verdict))
                         break
-                    retry_msg = (
-                        f"El modelo gastó {len(e.reasoning_text)} chars razonando. "
-                        "Reintentando con lectura acotada + escritura…"
-                    )
+                    retry_msg = _t("ui_retry_thinking", getattr(self, "_lang", "es")).format(n=len(e.reasoning_text))
                 messages_for_agent = self._enter_budget_retry(retry_msg)
                 # En nube el thinking NO se puede apagar por API (el flag solo
                 # viaja a llama.cpp): repetir idéntico garantiza el mismo corte
@@ -5622,14 +5464,11 @@ class Session:
                 # evidencia parcial y se va directo a las compuertas de
                 # cierre + veredicto determinístico.
                 self._last_response = e.partial or ""
-                console.print(
-                    "\n[dim]↻ Corte por loop con trabajo ya escrito — "
-                    "se cierra el turno y decide la verificación.[/dim]"
-                )
+                console.print(_t("ui_loop_cut", getattr(self, "_lang", "es")))
                 break
             except Exception as e:
                 if _is_llama_connection_error(e):
-                    _llm_down_console_msg(self.llm)
+                    _llm_down_console_msg(self.llm, getattr(self, "_lang", "es"))
                     turn_failed = True
                     interrupted = True
                     break
@@ -5648,9 +5487,8 @@ class Session:
                         # su respuesta de cierre (con tool_choice=required no
                         # puede terminar en texto). El fix quedó aplicado:
                         # seguimos con la compuerta de verificación real.
-                        console.print(
-                            "\n[green]✓ Cambios aplicados. Verificando el resultado…[/green]"
-                        )
+                        lang = getattr(self, "_lang", "es")
+                        console.print(_t("ui_changes_applied", lang))
                         if gate_retries < POST_WRITE_GATE_MAX_RETRIES and not (
                             self._verify_tools_called(messages_for_agent)
                         ):
@@ -5660,20 +5498,14 @@ class Session:
                             # agregaba a self._messages pero messages_for_agent
                             # quedaba STALE → el gate NUNCA llegaba al modelo.
                             messages_for_agent = list(self._messages)
-                            console.print(
-                                "\n[dim]↻ Verificando los cambios (lint/tests/build)…[/dim]\n"
-                            )
+                            console.print(_t("ui_gate_verify", getattr(self, "_lang", "es")))
                             continue
                         break
                     if attempt + 1 >= max_attempts:
                         turn_failed = True
+                        lang = getattr(self, "_lang", "es")
                         print(
-                            self._closing_message(
-                                "\n\n↻ El modelo tuvo problemas para emitir "
-                                "una respuesta válida (parser de tool calls). "
-                                "Reintentá con un prompt más específico o pedí "
-                                "un análisis primero."
-                            ),
+                            self._closing_message(_t("ui_close_grammar", lang)),
                             flush=True,
                         )
                         break
@@ -5697,22 +5529,17 @@ class Session:
                     self._explore_budget.reset()
                     self._explore_budget.limit_reads_now()
                     self._rebuild_agent_write_only()
-                    console.print(
-                        "\n[dim]↻ Reintentando con lectura acotada + escritura…[/dim]"
-                    )
+                    console.print(_t("ui_retry_rw_wrapped", getattr(self, "_lang", "es")))
                     continue
                 if "Recursion" in name or "recursion" in err_text.lower():
                     from core.model_profiles import recursion_limit_for
 
                     lim = recursion_limit_for(self.llm, new_role == Role.EXECUTE)
+                    lang = getattr(self, "_lang", "es")
                     if attempt + 1 >= max_attempts:
                         turn_failed = True
                         print(
-                            self._closing_message(
-                                f"\n\n↻ El turno se alargó demasiado ({lim} pasos) sin "
-                                "completar. Reintentá con un prompt más específico "
-                                "(archivo o endpoint concreto)."
-                            ),
+                            self._closing_message(_t("ui_close_long", lang).format(n=lim)),
                             flush=True,
                         )
                     elif new_role == Role.EXECUTE:
@@ -5724,19 +5551,13 @@ class Session:
                         # disco; el ancla inyecta el contenido leído.
                         attempt += 1
                         messages_for_agent = self._enter_budget_retry(
-                            f"El turno se alargó demasiado ({lim} pasos de "
-                            "langgraph). Reintentando con lectura acotada + "
-                            "escritura…"
+                            _t("ui_retry_long", lang).format(n=lim)
                         )
                         continue
                     else:
                         turn_failed = True
                         print(
-                            self._closing_message(
-                                f"\n\n↻ El turno se alargó demasiado ({lim} pasos) sin "
-                                "completar. Reintentá con un prompt más específico "
-                                "(archivo o endpoint concreto)."
-                            ),
+                            self._closing_message(_t("ui_close_long", lang).format(n=lim)),
                             flush=True,
                         )
                 else:
@@ -5781,7 +5602,7 @@ class Session:
                         console.print(f"[dim]{_t('ctx_opt_provider', _lang)}[/dim]\n")
                     else:
                         turn_failed = True
-                        print(f"\n\n❌ Error en la iteración: {e}", flush=True)
+                        print(_t("ui_iter_error", getattr(self, "_lang", "es")).format(err=e), flush=True)
                 break
             finally:
                 if watcher is not None:
@@ -5819,23 +5640,22 @@ class Session:
         # queda limpio solo con "vos ›" + respuesta del LLM; el summary era
         # ruido sin aporte (el toolbar ya muestra tokens en vivo).
         if not self._fullscreen:
+            lang = getattr(self, "_lang", "es")
             print_turn_summary(
                 elapsed,
                 interrupted,
                 self._session_time,
                 interrupt_source=(
                     "ESC" if interrupted_by_esc
-                    else ("auto — límite de intentos" if auto_stopped else None)
+                    else (_t("ui_auto_stop", lang) if auto_stopped else None)
                 ),
+                lang=lang,
             )
         elif interrupted_by_esc:
             # En full-screen el summary se omite, pero el cancelo hay que
             # informarlo: si no, la respuesta queda cortada a mitad sin
             # explicación y parece un bug del streaming.
-            console.print(
-                "\n[yellow]⏹️  Turno cancelado (ESC). Podés seguir con otro "
-                "prompt.[/yellow]\n"
-            )
+            console.print(_t("ui_cancelled", getattr(self, "_lang", "es")))
 
         # Bulk: contabilidad del batch ANTES del commit-ask (el estado en la
         # cola decide si este es el último batch → recién ahí se ofrece commit)
@@ -5849,10 +5669,9 @@ class Session:
             elif turn_failed:
                 status = fail_or_keep_batch(th, seq, BULK_MAX_BATCH_ATTEMPTS)
                 if status == "failed":
+                    lang = getattr(self, "_lang", "es")
                     console.print(
-                        f"\n[bold red]⛔ Batch {seq + 1} marcado FAILED tras "
-                        f"{BULK_MAX_BATCH_ATTEMPTS} intentos. Revisá esos "
-                        "archivos; la cola sigue en cache.db para reanudar.[/bold red]\n"
+                        _t("ui_batch_failed", lang).format(n=seq + 1, m=BULK_MAX_BATCH_ATTEMPTS)
                     )
                     self._bulk_task_hash = ""
 
@@ -5866,12 +5685,7 @@ class Session:
         if new_role == Role.EXECUTE and not interrupted and not turn_failed:
             if self._turn_writes_all_failed():
                 turn_failed = True
-                console.print(
-                    "\n[red]⛔ El turno intentó escribir pero ninguna escritura "
-                    "se aplicó (bloqueadas por guards o fallidas) y no hay "
-                    "verificación en verde. Se marca fallido para no fingir "
-                    "avance: revisá los ⛔ de arriba y reintentá.[/red]"
-                )
+                console.print(_t("ui_writes_failed", getattr(self, "_lang", "es")))
         # Contenido EXACTO pinnado incumplido: la tarea exigía pegar un
         # contenido byte-exacto (`pegar_contenido`) y el archivo en disco
         # difiere (E2E T02: el modelo parafraseó con `__dirname + ...` —
@@ -5881,14 +5695,8 @@ class Session:
             _inexact = self._check_pinned_exact_contents(user_input)
             if _inexact:
                 turn_failed = True
-                console.print(
-                    "\n[red]⛔ Contenido EXACTO incumplido en: "
-                    + ", ".join(_inexact)
-                    + ". La tarea pedía pegar el contenido tal cual "
-                    "(sin parafrasear ni 'simplificar'). Corregilo con "
-                    "edit_file/write_file copiando LITERAL el "
-                    "`pegar_contenido` de la tarea.[/red]"
-                )
+                lang = getattr(self, "_lang", "es")
+                console.print(_t("ui_exact_fail", lang).format(files=", ".join(_inexact)))
         # Verificación en rojo al cerrar: falla solo si el turno rompió algo
         # NUEVO (E2E T02/T04: verify FALLÓ + text-loop → cierre "ok" y el pool
         # siguió sobre base rota). Sin rojos nuevos (todo heredado o de infra)
@@ -5897,13 +5705,10 @@ class Session:
         if new_role == Role.EXECUTE and not interrupted and not turn_failed:
             if self._turn_verify_is_red():
                 _pass_ok, _why = self._verify_red_close()
+                lang = getattr(self, "_lang", "es")
                 if _pass_ok:
                     if _why == "solo-infra":
-                        console.print(
-                            "\n[yellow]⚠️  Rojos solo de infra (sin DB/servicios): no "
-                            "los causó este turno — se informan pero no fallan ni "
-                            "frenan el pool.[/yellow]"
-                        )
+                        console.print(_t("ui_reds_infra", lang))
                     elif _why in ("no-relacionados", "sin-baseline-no-relacionados"):
                         try:
                             _rn = ", ".join(
@@ -5911,25 +5716,13 @@ class Session:
                                         for i in self._current_failing_tests()})[:2]
                             )
                         except Exception:
-                            _rn = "tests ajenos"
-                        console.print(
-                            "\n[yellow]⚠️  Rojos no relacionados con tu cambio "
-                            f"({_rn}): tu turno no rompió nada propio — el cierre "
-                            "no falla (verificá el criterio de la tarea).[/yellow]"
-                        )
+                            _rn = "tests ajenos" if lang == "es" else "unrelated tests"
+                        console.print(_t("ui_reds_unrelated", lang).format(names=_rn))
                     else:
-                        console.print(
-                            "\n[yellow]⚠️  Rojos heredados (ya fallaban antes de este "
-                            "turno): tu cambio no rompió nada nuevo — el cierre "
-                            "no falla.[/yellow]"
-                        )
+                        console.print(_t("ui_reds_inherited", lang))
                 else:
                     turn_failed = True
-                    console.print(
-                        "\n[red]⛔ La verificación terminó en rojo y el turno no "
-                        "la dejó verde. Se marca fallido para no fingir avance: "
-                        "corregí los errores de arriba y re-verificá.[/red]"
-                    )
+                    console.print(_t("ui_reds_fail", lang))
         # Verificación por alcance: turno sin código (solo json/docs) donde
         # la batería nunca corrió en verde — validar barato en vez de fallar
         # trabajo correcto (E2E: tasks.json válido cerraba fallido "sin
@@ -5938,17 +5731,13 @@ class Session:
             if self._verify_all_passed() is not True:
                 _scope_c = self._turn_scope_kinds()
                 if _scope_c is not None and not _scope_c[0] and _scope_c[1]:
-                    _ok_c, _msg_c = self._check_written_json(_scope_c[1])
+                    lang = getattr(self, "_lang", "es")
+                    _ok_c, _msg_c = self._check_written_json(_scope_c[1], lang=lang)
                     if _ok_c:
-                        console.print(
-                            f"\n[dim]✅ {_msg_c} — verificación por alcance "
-                            "(sin código).[/dim]"
-                        )
+                        console.print(_t("ui_scope_json_ok2", lang).format(msg=_msg_c))
                     else:
                         turn_failed = True
-                        console.print(
-                            f"\n[red]⛔ {_msg_c}. Corregilo y re-verificá.[/red]"
-                        )
+                        console.print(_t("ui_scope_json_bad", lang).format(msg=_msg_c))
         # Verificación DOCUMENTAL: tarea pinnada solo-de-verificación (el AC
         # pide list_files/read_file y prohíbe modificar). Sin batería en
         # verde y sin escrituras, las tools documentales corridas SON la
@@ -5993,20 +5782,13 @@ class Session:
             # En full-screen lo saltea: stdin pertenece a la TUI.
             if sys.stdin.isatty() and not self._fullscreen:
                 try:
-                    console.print(
-                        "\n[bold cyan]🔑 Si la tarea requiere una credencial o entorno "
-                        "externo (API key, servicio cloud, VM, cuenta, etc.) que el "
-                        "agente no tiene:[/bold cyan]"
-                        "\n  · pegala acá (p. ej. NEW_RELIC_API_KEY=... y reintentá), o"
-                        "\n  · pedile al agente que te explique los pasos manuales."
-                    )
+                    lang = getattr(self, "_lang", "es")
+                    console.print(_t("ui_cred_prompt", lang))
                     answer = input("› ").strip()
                     if answer:
                         # Reintento el turno con la credencial como nuevo input
                         # (el usuario pegó algo, p. ej. una variable de entorno).
-                        console.print(
-                            "[dim]Credencial recibida — reintentando con tu input…[/dim]\n"
-                        )
+                        console.print(_t("ui_cred_recv", lang))
                         # Procesar el input como un nuevo turno
                         self.run_turn(answer)
                 except (EOFError, KeyboardInterrupt):
@@ -6028,35 +5810,30 @@ class Session:
                     p["done"] == p["total"] and p["total"] > 0
                     and seq == p["total"] - 1
                 ):
-                    console.print(
-                        f"\n[bold green]✅ Tarea bulk COMPLETA: "
-                        f"{p['done']}/{p['total']} batches.[/bold green]\n"
-                    )
+                    lang = getattr(self, "_lang", "es")
+                    console.print(_t("ui_bulk_complete", lang).format(d=p['done'], t=p['total']))
             else:
                 if (
                     _estimate_tokens(self._messages) / self._ctx_limit
                     >= BULK_SESSION_ROTATION_CTX
                 ):
-                    console.print(
-                        "\n[yellow]🔄 Contexto alto entre batches — "
-                        "rotando sesión (la cola persiste en SQLite)…[/yellow]\n"
-                    )
+                    console.print(_t("ui_bulk_rotate", getattr(self, "_lang", "es")))
                     self.reset()
                 nxt_input = canonical_task_text(user_input) + build_batch_scope(
                     nxt["seq"], bulk_progress(th)["total"], nxt["files"]
                 )
+                lang = getattr(self, "_lang", "es")
                 console.print(
-                    f"[dim]📦 Batch {nxt['seq'] + 1}/"
-                    f"{bulk_progress(th)['total']} — continuando automáticamente…[/dim]\n"
+                    _t("ui_bulk_next", lang).format(n=nxt['seq'] + 1, t=bulk_progress(th)['total'])
                 )
                 self.run_turn(nxt_input)
 
         ctx_status = self._check_context()
         if ctx_status == "warning":
+            lang = getattr(self, "_lang", "es")
             pct = _estimate_tokens(self._messages) / self._ctx_limit * 100
             console.print(
-                f"\n[yellow]⚠️  Contexto al {pct:.0f}% (límite {self._ctx_limit:,} tokens) — "
-                f"escribí /compact para resumir ahora o /new para empezar limpio[/yellow]\n"
+                _t("ui_ctx_warn", lang).format(p=f"{pct:.0f}", lim=f"{self._ctx_limit:,}")
             )
         elif ctx_status == "summary":
             self._maybe_summarize()
@@ -6078,12 +5855,12 @@ class Session:
         if not any(k in response for k in ("APROBADO", "APROBADA", "✅ APROBAR")):
             return
 
-        console.print("\n[bold yellow]⚖️  JUDGE — validando review con modelo externo…[/bold yellow]")
+        console.print(_t("ui_judge_check", getattr(self, "_lang", "es")))
 
         # Get git diff
         diff = self._get_git_diff()
         if not diff:
-            console.print("[dim]   (sin diff para evaluar, se omite judge)[/dim]\n")
+            console.print(_t("ui_judge_nodiff", getattr(self, "_lang", "es")))
             return
 
         # Load judge prompt
@@ -6112,16 +5889,17 @@ class Session:
             verdict = result.content or ""
 
             # Print verdict
+            lang = getattr(self, "_lang", "es")
             if "NO APROBAR" in verdict or "CRITICAL" in verdict:
-                console.print("\n[bold red]⛔ JUDGE: NO APROBAR[/bold red]")
+                console.print(_t("ui_judge_no", lang))
             elif "REVISAR" in verdict:
-                console.print("\n[bold yellow]⚠️  JUDGE: REVISAR[/bold yellow]")
+                console.print(_t("ui_judge_rev", lang))
             else:
-                console.print("\n[bold green]✅ JUDGE: APROBADO (confirmado)[/bold green]")
+                console.print(_t("ui_judge_ok", lang))
 
             console.print(f"\n[dim]{verdict}[/dim]\n")
         except Exception as e:
-            console.print(f"[dim red]⚠️  Judge falló: {e}[/dim red]\n")
+            console.print(_t("ui_judge_fail", getattr(self, "_lang", "es")).format(err=e))
 
     def _get_git_diff(self) -> str:
         """Get the diff of changed files in the repo."""
@@ -6173,25 +5951,20 @@ class Session:
         Alcance: solo aprobaciones de write/edit/delete (+ PATH FIX). El
         commit sigue siendo manual siempre. Se apaga solo con /new.
         """
+        lang = getattr(self, "_lang", "es")
         a = (arg or "").strip().lower()
         if a in ("on", "si", "sí", "s", "1", "true", "activar"):
             self._auto_approve = True
         elif a in ("off", "no", "n", "0", "false", "desactivar"):
             self._auto_approve = False
         elif a:
-            return (
-                f"⛔ Uso: /autoapprove [on|off] (recibí {arg!r}). "
-                f"Estado actual: {'ON' if self._auto_approve else 'OFF'}."
-            )
+            return _t("ui_auto_usage", lang).format(
+                arg=arg, state='ON' if self._auto_approve else 'OFF')
         else:
             self._auto_approve = not self._auto_approve
         if self._auto_approve:
-            return (
-                "✅ Auto-approve ON: las escrituras se aprueban sin preguntar "
-                "(vale para esta sesión; /new lo apaga). El commit sigue "
-                "siendo manual."
-            )
-        return "✅ Auto-approve OFF: vuelvo a pedir confirmación por escritura."
+            return _t("ui_auto_on", lang)
+        return _t("ui_auto_off", lang)
 
     def resume_session(self, session_prefix: str) -> tuple[bool, str, list[dict]]:
         """Retoma una sesión previa del MISMO repo por id (completo o prefijo).
@@ -6202,13 +5975,14 @@ class Session:
         """
         from cache import normalize_path
 
+        lang = getattr(self, "_lang", "es")
         prefix = (session_prefix or "").strip()
         if not prefix:
-            return False, "Uso: /resume <id> (mirálos con /history).", []
+            return False, _t("ui_resume_usage", lang), []
         try:
             recent = load_recent_turns(self.repo_path, limit=50)
         except Exception:
-            return False, "⛔ No se pudo leer el historial.", []
+            return False, _t("ui_resume_noread", lang), []
         sids: list[str] = []
         for t in recent:
             sid = t.get("session_id") or ""
@@ -6223,23 +5997,23 @@ class Session:
                 except Exception:
                     foreign = []
                 if foreign:
-                    return False, f"⛔ La sesión {prefix} es de otro repo. Parate en ese repo para retomarla.", []
-            return False, f"⛔ No hay sesión '{prefix}' en este repo. Mirá los ids con /history.", []
+                    return False, _t("ui_resume_other", lang).format(sid=prefix), []
+            return False, _t("ui_resume_nosess", lang).format(prefix=prefix), []
         if len(matches) > 1:
-            return False, f"⛔ Prefijo ambiguo: {', '.join(matches)}. Pasá más caracteres.", []
+            return False, _t("ui_resume_amb", lang).format(ms=', '.join(matches)), []
         sid = matches[0]
         try:
             data = load_session_turns(sid)
         except Exception:
-            return False, "⛔ No se pudo cargar esa sesión.", []
+            return False, _t("ui_resume_noload", lang), []
         if not data:
-            return False, f"⛔ La sesión {sid} no tiene turnos.", []
+            return False, _t("ui_resume_empty", lang).format(sid=sid), []
         try:
             here = normalize_path(self.repo_path)
         except Exception:
             here = self.repo_path
         if any((t.get("repo_path") or "") != here for t in data):
-            return False, f"⛔ La sesión {sid} es de otro repo. Parate en ese repo para retomarla.", []
+            return False, _t("ui_resume_other", lang).format(sid=sid), []
         # Tope: últimas 20 — sesiones larguísimas reventarían el contexto.
         shown_truncated = len(data) > 20
         data = data[-20:]
@@ -6252,7 +6026,7 @@ class Session:
             if a:
                 msgs.append(AIMessage(a))
         if not msgs:
-            return False, f"⛔ La sesión {sid} no tiene contenido recuperable.", []
+            return False, _t("ui_resume_nocont", lang).format(sid=sid), []
         self._messages = msgs
         self.session_id = sid
         self._last_response = (data[-1].get("assistant_message") or "").strip()
@@ -6265,8 +6039,8 @@ class Session:
         except ValueError:
             role = Role.ANALYZE
         self._rebuild_agent(role)
-        extra = " (últimos 20 turnos)" if shown_truncated else ""
-        return True, f"✅ Sesión {sid} retomada: {len(data)} turno(s){extra}. Seguí donde habías quedado.", data
+        extra = _t("ui_resume_trunc", lang) if shown_truncated else ""
+        return True, _t("ui_resume_ok", lang).format(sid=sid, n=len(data), extra=extra), data
 
     def _cancel_turn(self) -> None:
         """Cancela TODOS los turnos vivos (mismo camino que ESC).
@@ -6325,17 +6099,11 @@ class Session:
             old = (kwargs.get("old_str", "") or "").strip()
             new = (kwargs.get("new_str", "") or "").strip()
             if new and new in content and (not old or old not in content):
-                return (
-                    f"El cambio {name} sobre '{path}' YA ESTÁ aplicado "
-                    "(new_str presente, old_str ausente). No se reejecuta."
-                )
+                return _t("ui_pending_applied_edit", getattr(self, "_lang", "es")).format(name=name, path=path)
         elif name == "write_file":
             new_content = kwargs.get("content", "")
             if isinstance(new_content, str) and new_content and new_content == content:
-                return (
-                    f"El archivo '{path}' YA TIENE ese contenido. "
-                    "No se reescribe."
-                )
+                return _t("ui_pending_applied_write", getattr(self, "_lang", "es")).format(path=path)
         return None
 
     def _try_execute_pending_write(self, user_input: str) -> bool:
@@ -6348,7 +6116,7 @@ class Session:
         # 'no' explícito descarta el pendiente
         norm = normalize(user_input)
         if norm in ("no", "n", "nope", "cancelar", "cancela", "rechazo"):
-            console.print("[dim]Pendiente descartado.[/dim]")
+            console.print(_t("ui_pending_drop", getattr(self, "_lang", "es")))
             self._pending_write = None
             self._pending_timeouts.clear()
             return False
@@ -6360,10 +6128,8 @@ class Session:
             self._pending_write = None
             self._pending_timeouts.clear()
             return True
-        console.print(
-            f"\n[dim]↻ Edit pendiente detectado — reintentando {name} sobre '{path}' "
-            f"sin re-explorar (contexto del turno anterior conservado)…[/dim]"
-        )
+        lang = getattr(self, "_lang", "es")
+        console.print(_t("ui_pending_edit", lang).format(name=name, path=path))
         # Ejecutar SIN pasar por confirmación (el usuario ya dijo 'continua/si')
         # Usamos las tools de filesystem directamente para evitar re-confirm loop.
         self._pending_write = None
@@ -6383,9 +6149,9 @@ class Session:
                 from tools.filesystem import delete_file as _df
                 result = _df.invoke(kwargs)  # type: ignore
             else:
-                result = f"⛔ Tipo pendiente desconocido: {name}"
+                result = _t("ui_pending_unknown", getattr(self, "_lang", "es")).format(name=name)
         except Exception as e:
-            result = f"⛔ Error reejecutando pendiente: {e}"
+            result = _t("ui_pending_error", getattr(self, "_lang", "es")).format(err=e)
         console.print(f"[dim]{result}[/dim]")
         # Persistir en historial como turno EXECUTE (sin LLM)
         human_msg = f"[pending retry] {name} {path}"
@@ -6444,16 +6210,15 @@ class Session:
                 return False
             path = kwargs.get("path", "?")
             extra = f"\n[dim]{kwargs['desc']}[/dim]\n" if kwargs.get("desc") else ""
+            lang = getattr(self, "_lang", "es")
             continua_hint = (
-                "Podés decir 'continua' o 'sí' para reintentarlo sin perder contexto."
-                if keep_pending else "Si vence, se omite este cambio."
+                _t("ui_confirm_hint_keep", lang)
+                if keep_pending else _t("ui_confirm_hint_drop", lang)
             )
             console.print(
-                f"\n[bold yellow]❓ ¿Aprobás {name} sobre '{path}'?[/bold yellow]\n"
-                f"{extra}"
-                "[dim]Escribí 'sí'/'no' (o 's'/'n') en el input y Enter. "
-                f"Sin respuesta en {int(self._confirm_timeout)}s se venció. "
-                f"{continua_hint}[/dim]"
+                _t("ui_confirm_q", lang).format(
+                    name=name, path=path, extra=extra,
+                    timeout=int(self._confirm_timeout), hint=continua_hint)
             )
             self._confirm_answer = None
             self._confirm_event = threading.Event()
@@ -6474,32 +6239,25 @@ class Session:
                 # tiempo, es falta de decisión. Descartarlo corta el loop
                 # 'timeout → continua → timeout' (E2E Medicos: 6x mismo write).
                 self._pending_write = None
-                console.print(
-                    "[yellow]⏱️  Confirmación vencida 2 veces para el mismo cambio — "
-                    "lo descarto para no loopear. Si lo necesitás, pedilo de nuevo "
-                    "con otra estrategia o aprobá dentro del timeout.[/yellow]"
-                )
+                console.print(_t("ui_confirm_twice", getattr(self, "_lang", "es")))
                 return False
             if keep_pending:
-                console.print(
-                    "[yellow]⏱️  Confirmación vencida — podés reintentarlo con 'continua' o 'sí' "
-                    "(sin re-explorar, sin perder lo ya leído).[/yellow]"
-                )
+                console.print(_t("ui_confirm_expire_keep", getattr(self, "_lang", "es")))
             else:
-                console.print("[yellow]⏱️  Confirmación vencida — se omite este cambio.[/yellow]")
+                console.print(_t("ui_confirm_expire_drop", getattr(self, "_lang", "es")))
             # NO cancelar el turno: dejar que el wrapper devuelva 'rechazado'
             # y el turno cierre normal (interrupted=False) para que el historial
             # y el read_cache se preserven para el próximo 'continua'.
             return False
         if self._confirm_answer:
-            console.print("[green]✅ Aprobado.[/green]")
+            console.print(_t("ui_confirm_ok", getattr(self, "_lang", "es")))
             self._pending_write = None
             self._pending_timeouts.pop(self._pending_key(name, kwargs), None)
             return True
         if cancel_on_reject:
-            console.print("[red]⛔ Rechazado — se cancela el turno.[/red]")
+            console.print(_t("ui_confirm_no_cancel", getattr(self, "_lang", "es")))
         else:
-            console.print("[red]⛔ Rechazado — se omite este cambio.[/red]")
+            console.print(_t("ui_confirm_no_skip", getattr(self, "_lang", "es")))
         self._pending_write = None
         self._pending_timeouts.pop(self._pending_key(name, kwargs), None)
         if cancel_on_reject:
@@ -6552,7 +6310,7 @@ class Session:
         return {
             "branch": _git_branch(self.repo_path),
             "tokens": total,
-            "role": _ROLE_LABELS.get(self.current_role, ""),
+            "role": _role_label(self.current_role, getattr(self, "_lang", "es")),
             "repo": self.repo_path,
             "tools": f"{self._local_count}+{self._mcp_count}",
             "session_id": self.session_id,
@@ -6619,13 +6377,14 @@ class Session:
 
         # Formas: /model local | /model <id> [low|medium|high] | /model (lista)
         if model is None and provider is None:
+            lang = getattr(self, "_lang", "es")
             status = self.get_status()
+            _reason = f" · reasoning {status['reasoning']}" if status.get("reasoning") else ""
             lines = [
-                f"🤖 Actual: {status['model'] or '?'} "
-                f"({status['transport']}"
-                + (f" · reasoning {status['reasoning']}" if status.get("reasoning") else "")
-                + ")",
-                "   Usá: /model <id> [low|medium|high] · /model local · /model <id> en opencode",
+                _t("ui_model_cur", lang).format(
+                    model=status['model'] or '?',
+                    transport=status['transport'], reason=_reason),
+                _t("ui_model_use", lang),
             ]
             try:
                 from llm_config import active_config_file, fetch_opencode_models, is_free_model
@@ -6635,25 +6394,22 @@ class Session:
                     resolve_llm(provider_override="opencode")["base_url"],
                 )
                 shown = [m["id"] for m in mods if is_free_model(m) is not True][:30]
-                lines.append("   Disponibles (pago, van por este harness): " + ", ".join(shown))
-                lines.append(f"   Detalle: agent-devs --list-models  (config: {active_config_file()})")
+                lines.append(_t("ui_model_avail", lang).format(mods=", ".join(shown)))
+                lines.append(_t("ui_model_detail", lang).format(cfg=active_config_file()))
             except Exception as e:
-                lines.append(f"   (no pude listar Zen: {str(e)[-120:]})")
+                lines.append(_t("ui_model_listfail", lang).format(err=str(e)[-120:]))
             return True, "\n".join(lines)
 
         if (model or "").strip().lower() == "local":
             resolved = resolve_llm(provider_override="local")
         else:
             if model and needs_messages_api(model):
-                return False, (
-                    f"❌ '{model}' solo sale por API Anthropic (sin soporte). "
-                    "Probá /model muse-spark-1.3 o /model deepseek-v4.1-flash."
-                )
+                return False, _t("ui_model_anthropic", getattr(self, "_lang", "es")).format(model=model)
             resolved = resolve_llm(provider_override=provider or "opencode",
                                    model_override=model,
                                    reasoning_override=reasoning)
             if resolved["provider"] == "opencode" and not resolved["api_key"]:
-                return False, "❌ Sin API key de OpenCode — corré agent-devs --setup-opencode."
+                return False, _t("ui_model_nokey", getattr(self, "_lang", "es"))
 
         new_llm = LocalLLM(
             base_url=resolved["base_url"],
@@ -6711,7 +6467,7 @@ class Session:
             self._model_profile = _mp(shown)
         except Exception:
             pass
-        return True, f"✅ LLM ahora: {shown} ({where}{extra}). Próximo turno lo usa."
+        return True, _t("ui_model_switched", getattr(self, "_lang", "es")).format(shown=shown, where=where, extra=extra)
 
     def slash_language(self, arg: str) -> str:
         """Comando /language: muestra o cambia el idioma (es|en)."""

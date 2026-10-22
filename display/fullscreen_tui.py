@@ -607,8 +607,15 @@ class FullscreenTUI(App):
         # usuario responda sí/no a tiempo y el turno no venza por no verlo.
         confirming = bool(st.get("confirm_pending"))
         with contextlib.suppress(Exception):
+            try:
+                from core.lang import t as _t
+
+                _lang = st.get("language", "es")
+            except Exception:
+                _t = lambda k, l="es": k  # noqa: E731
+                _lang = "es"
             self.query_one("#input", TextArea).placeholder = (
-                "❓ Escribí sí / no y Enter para aprobar o rechazar"
+                _t("tui_confirm_ph", _lang)
                 if confirming
                 else ""
             )

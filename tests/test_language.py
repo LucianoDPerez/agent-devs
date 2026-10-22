@@ -93,3 +93,25 @@ def test_slash_language_cambia_y_persiste(tmp_path, monkeypatch):
     out2 = Session.slash_language(s, "xx")
     assert "⛔" in out2
     assert s._lang == "en"
+
+
+def test_panel_en_usa_ingles():
+    from display.console import print_role_switch
+
+    assert "local" in __import__("core.lang", fromlist=["t"]).t("role_tools", "en")
+    assert "locales" in __import__("core.lang", fromlist=["t"]).t("role_tools", "es")
+
+
+def test_context_exceeded_bilingue():
+    from orchestration.session import _is_context_exceeded
+
+    e = Exception(
+        "request (27155 tokens) exceeds the available context size "
+        "(26624 tokens), try increasing it"
+    )
+    ok, req, avail = _is_context_exceeded(e)
+    assert ok and req == 27155 and avail == 26624
+    from core.lang import t
+
+    assert "Ran out" in t("ctx_title", "en") or "context" in t("ctx_title", "en").lower()
+    assert "contexto" in t("ctx_title", "es").lower()

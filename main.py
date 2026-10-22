@@ -75,11 +75,14 @@ def _make_llm(max_tokens: int = LLM_MAX_TOKENS, temperature: float = LLM_TEMPERA
 
 def _opencode_missing_exit() -> None:
     """Mensaje amigable cuando falta la API key de OpenCode. Nunca hace traceback."""
-    print("\n❌ Falta la API key de OpenCode — el proveedor activo es 'opencode'", flush=True)
-    print("   Conseguila en https://opencode.ai/zen y guardala de una de estas formas:", flush=True)
-    print("     agent-devs --setup-opencode   # la pide y la guarda en tu config (600)", flush=True)
-    print("     export OPENCODE_API_KEY=oc_sk_...   # o en el .env del repo (gitignored)", flush=True)
-    print("   O volvé al modo local: agent-devs --provider local .\n", flush=True)
+    from core.lang import resolve_language
+    from core.lang import t as _t
+    lang = resolve_language()
+    print(_t("main_opencode_missing_1", lang), flush=True)
+    print(_t("main_opencode_missing_2", lang), flush=True)
+    print(_t("main_opencode_missing_3", lang), flush=True)
+    print(_t("main_opencode_missing_4", lang), flush=True)
+    print(_t("main_opencode_missing_5", lang), flush=True)
     sys.exit(1)
 
 
@@ -93,19 +96,22 @@ class _UseLocalFallback(Exception):
 
 def _describe_opencode_failure(exc: BaseException | None) -> str:
     """Resumen corto del fallo de OpenCode para el aviso de fallback (sin traceback)."""
+    from core.lang import resolve_language
+    from core.lang import t as _t
+    lang = resolve_language()
     if exc is None:
-        return "sin detalle"
+        return _t("main_describe_no_detail", lang)
     raw = str(exc).strip()
     msg = raw.splitlines()[-1].strip() if raw else type(exc).__name__
     low = msg.lower()
     if "401" in low or "unauthorized" in low:
-        return "key rechazada (401)"
+        return _t("main_describe_rejected", lang)
     if "429" in low or "quota" in low or "balance" in low or "credit" in low or "rate" in low:
-        return "límite/saldo (429)"
+        return _t("main_describe_quota", lang)
     if "ssl" in low or "certificate" in low:
         return f"SSL ({msg[-120:]})"
     if "timeout" in low or "timed out" in low:
-        return "timeout de red"
+        return _t("main_describe_timeout", lang)
     return (msg[-160:] or type(exc).__name__)
 
 
@@ -175,20 +181,26 @@ def _local_fallback_resolved() -> dict | None:
 
 def _announce_opencode_fallback(reason: str) -> None:
     """Aviso de que se sigue en local aunque el config diga opencode."""
-    print(f"\n⚠️  OpenCode falló ({reason}) — usando modelo local (llama.cpp) como fallback.",
+    from core.lang import resolve_language
+    from core.lang import t as _t
+    lang = resolve_language()
+    print(_t("main_fallback_1", lang).format(reason=reason),
           flush=True)
-    print("   (tu config sigue en provider=opencode; es solo esta sesión.", flush=True)
-    print("    Resolvé la key/red y reintentá en la nube.)\n", flush=True)
+    print(_t("main_fallback_2", lang), flush=True)
+    print(_t("main_fallback_3", lang), flush=True)
 
 
 def _both_down_exit(op_reason: str) -> None:
     """Salida final cuando NI la nube NI el local responden. Nunca hace traceback."""
-    print(f"\n❌ Ni OpenCode ({op_reason}) ni llama.cpp están disponibles.", flush=True)
-    print(f"   · llama.cpp: nadie en {LLM_BASE_URL} — levantalo, por ejemplo:", flush=True)
+    from core.lang import resolve_language
+    from core.lang import t as _t
+    lang = resolve_language()
+    print(_t("main_both_down_1", lang).format(op_reason=op_reason), flush=True)
+    print(_t("main_both_down_2", lang).format(base=LLM_BASE_URL), flush=True)
     print("       llama-server -hf bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M --port 8080",
           flush=True)
-    print("   · OpenCode: revisá key/red con agent-devs --doctor y --list-models", flush=True)
-    print("   Verificá el estado con: agent-devs --doctor\n", flush=True)
+    print(_t("main_both_down_4", lang), flush=True)
+    print(_t("main_both_down_5", lang), flush=True)
     sys.exit(1)
 
 
@@ -203,13 +215,16 @@ def _cached_analysis_valid(cached: dict) -> bool:
 
 
 def _ensure_analysis(llm: LocalLLM, repo_path: str, status: str | None = None) -> dict:
+    from core.lang import resolve_language
+    from core.lang import t as _t
+    lang = resolve_language()
     cached = load_analysis(repo_path)
     if cached:
         current = snapshot_hash(repo_path)
         if current and cached["snapshot_hash"] == current and _cached_analysis_valid(cached):
             return cached
         if not _cached_analysis_valid(cached):
-            print("⚠️  Análisis cacheado inválido; se regenera.\n", flush=True)
+            print(_t("main_cache_invalid", lang), flush=True)
         else:
             # El repo cambió: si son pocos archivos, el summary sigue válido
             # (el resumen de un repo no cambia porque editaste una card).
@@ -225,8 +240,7 @@ def _ensure_analysis(llm: LocalLLM, repo_path: str, status: str | None = None) -
                     snapshot_files="\n".join(entries),
                 )
                 print(
-                    f"[dim]📚 Análisis reutilizado ({changed} archivo(s) cambiado(s) "
-                    f"— sin regenerar).[/dim]\n",
+                    _t("main_cache_reused", lang).format(changed=changed),
                     flush=True,
                 )
                 return load_analysis(repo_path) or cached
@@ -273,9 +287,9 @@ def _ensure_analysis(llm: LocalLLM, repo_path: str, status: str | None = None) -
     save_analysis(repo_path, snapshot=result["snapshot"], language=result["language"],
                   tech_stack=result["tech_stack"], analysis=result["analysis"],
                   snapshot_files="\n".join(snapshot_entries(repo_path)))
-    print("\n\n✅ Análisis guardado en el caché.")
-    print(f"🌐 Lenguaje: {result['language']}")
-    print(f"🧰 Stack: {result['tech_stack']}\n")
+    print(_t("main_analysis_saved", lang))
+    print(_t("main_analysis_lang", lang).format(language=result['language']))
+    print(_t("main_analysis_stack", lang).format(stack=result['tech_stack']))
     print(result["analysis"])
     print()
     return result
@@ -323,20 +337,26 @@ def deterministic_analysis(repo_path: str) -> dict:
 
 
 def do_analyze(llm: LocalLLM, repo_path: str):
+    from core.lang import resolve_language
+    from core.lang import t as _t
+    lang = resolve_language()
     reset_turn_usage()
     start = __import__('time').monotonic()
-    _ensure_analysis(llm, repo_path, status=f"🔍 Analizando {repo_path} ...\n")
+    _ensure_analysis(llm, repo_path, status=_t("main_analyze_doing", lang).format(repo=repo_path))
     elapsed = __import__('time').monotonic() - start
     usage = get_usage()
     print(f"\n⚡ {elapsed:.1f}s | {usage['turn']['prompt'] + usage['turn']['completion']:,} tokens")
 
 
 def do_list():
+    from core.lang import resolve_language
+    from core.lang import t as _t
+    lang = resolve_language()
     repos = list_repos()
     if not repos:
-        print("📭 No hay análisis guardados. Usa: python main.py --analyze <repo>")
+        print(_t("main_list_empty", lang))
         return
-    print(f"{'REPOSITORIO':<48} {'LENGUAJE':<13} {'STACK':<32} ACTUALIZADO")
+    print(f"{_t('main_list_repo', lang):<48} {_t('main_list_lang', lang):<13} {_t('main_list_stack', lang):<32} {_t('main_list_updated', lang)}")
     print("─" * 130)
     for r in repos:
         print(f"{r['path']:<48} {(r['language'] or '-'):<13} {(r['tech_stack'] or '-')[:32]:<32} {r['updated_at']}")
@@ -363,11 +383,11 @@ def _warn_dirty_repo(repo_path: str) -> None:
             return
         untracked = sum(1 for ln in entries if ln.startswith("??"))
         changed = len(entries) - untracked
+        from core.lang import resolve_language as _rl
+        from core.lang import t as _t2
+        _lang = _rl()
         console.print(
-            f"\n[yellow]⚠️  El repo tiene {changed} archivo(s) modificado(s) y "
-            f"{untracked} sin trackear SIN COMMITEAR. Los lint/tests pueden "
-            f"fallar por daño pre-existente (ajeno a tu tarea); si es así, "
-            f"el agente puede gastar pasos de más.[/yellow]\n"
+            _t2("main_dirty", _lang).format(changed=changed, untracked=untracked)
         )
     except Exception:
         pass
@@ -384,6 +404,7 @@ def run_fullscreen(session) -> None:
     from display import console as _console_mod
     from display.console import console
     from display.fullscreen_tui import FullscreenTUI
+    from core.lang import t as _t
 
     session._fullscreen = True  # sin EscWatcher ni prompts input() internos
     _console_mod.MD_MARKERS_ENABLED = True  # el pane intercepta los marcadores
@@ -430,9 +451,11 @@ def run_fullscreen(session) -> None:
         _console_mod.MD_MARKERS_ENABLED = False
 
     def on_submit(text: str) -> None:
+        from core.lang import t as _t2
+        _lang = getattr(session, "_lang", "es")
         stripped = text.strip().lower()
         if stripped in ("exit", "quit", "salir", "q"):
-            console.print("[dim]👋 ¡Hasta luego![/dim]")
+            console.print(_t2("main_bye_dim", _lang))
             tui.exit()
             return
         if not text.strip():
@@ -442,7 +465,7 @@ def run_fullscreen(session) -> None:
         from rich.markup import escape
 
         console.print()
-        console.print("[bold dark_orange]🧑 vos ›[/bold dark_orange]")
+        console.print(_t2("main_tui_you", _lang))
         console.print(f"[dark_orange]{escape(text)}[/dark_orange]")
         console.print()
         # Confirmación de write pendiente (EXECUTE_CONFIRM_WRITES): el input
@@ -471,8 +494,7 @@ def run_fullscreen(session) -> None:
                     session.resolve_confirm(False)
             else:
                 console.print(
-                    "[yellow]Todavía no hay pedido de confirmación — esperá el "
-                    "cartel ❓ y reintentá.[/yellow]"
+                    _t2("main_tui_confirm_wait", _lang)
                 )
             return
         # Selección pendiente de untracked (/commit lista + "1 3"/"todos"):
@@ -498,28 +520,27 @@ def run_fullscreen(session) -> None:
             session.reset()
             session._fullscreen = True  # reset() no debe apagar el modo
             tui.clear_pane()  # sesión nueva → panel nuevo
-            console.print(f"[green]✅ Nueva sesión iniciada ({session.session_id}).[/green]")
+            console.print(_t2("main_new_session_full", _lang).format(sid=session.session_id))
             return
         elif payload[0] == "/compact":
-            console.print("[yellow]📦 Compactando contexto (resumen del historial)…[/yellow]")
+            console.print(_t2("main_compacting", _lang))
             session.force_summarize()
-            console.print(f"[green]✅ Listo. Contexto ahora al {session.context_usage_pct():.0f}%.[/green]")
+            console.print(_t2("main_compact_done", _lang).format(pct=f"{session.context_usage_pct():.0f}"))
             return
         elif payload[0] == "/history":
             turns = session.get_recent_history(limit=10)
             if not turns:
-                console.print("[dim]Sin turnos previos.[/dim]")
+                console.print(_t2("main_no_turns", _lang))
                 return
             for t in turns:
                 user = (t.get("user_message") or "")[:80]
                 asst = (t.get("assistant_message") or "")[:80]
                 console.print(
-                    f"[bold]Usuario[/bold] [{t.get('role', '-')}] "
-                    f"(id={t.get('session_id', '-')}, {t.get('tokens_used', 0)} tokens): {user}"
+                    _t2("main_history_line", _lang).format(role=t.get('role', '-'), sid=t.get('session_id', '-'), tokens=t.get('tokens_used', 0), user=user)
                 )
                 if asst:
-                    console.print(f"  [dim]Agente: {asst}[/dim]")
-            console.print("[dim]Retomá una con /resume <id>.[/dim]")
+                    console.print(_t2("main_agent_line", _lang).format(asst=asst))
+            console.print(_t2("main_resume_hint", _lang))
             return
         elif payload[0] == "/resume":
             ok, msg, data = session.resume_session(payload[1])
@@ -528,7 +549,7 @@ def run_fullscreen(session) -> None:
                 for t in data:
                     user = (t.get("user_message") or "")[:300]
                     asst = (t.get("assistant_message") or "")[:300]
-                    console.print(f"\n[bold]vos ›[/bold] {user}")
+                    console.print(_t2("main_vos_line", _lang).format(user=user))
                     if asst:
                         console.print(f"[dim]{asst}[/dim]")
             return
@@ -542,7 +563,7 @@ def run_fullscreen(session) -> None:
         elif payload[0] == "/verify":
             from orchestration.session import run_commit_verification
 
-            console.print("[dim]🔍 Verificando (lint/tests/build)…[/dim]")
+            console.print(_t2("main_verifying", _lang))
             captured: dict = {}
             passed, report = run_commit_verification(
                 session.repo_path, reuse=getattr(session, "_verify_results", None),
@@ -550,11 +571,11 @@ def run_fullscreen(session) -> None:
             )
             console.print(report)
             for area, tail in captured.get("details", {}).items():
-                console.print(f"[dim]--- {area} (cola) ---[/dim]\n{tail}")
+                console.print(_t2("main_verify_tail", _lang).format(area=area, tail=tail))
             session.note_verify_result(passed, report, captured.get("details"))
             console.print(
-                "[green]✅ Todo verde.[/green]" if passed
-                else "[yellow]⛔ Hay rojos arriba — corregilos antes de commitear.[/yellow]"
+                _t2("main_all_green", _lang) if passed
+                else _t2("main_reds_above", _lang)
             )
             return
         elif payload[0] == "/commit":
@@ -588,9 +609,9 @@ def run_fullscreen(session) -> None:
             try:
                 with open(out, "w", encoding="utf-8") as fh:
                     fh.write(text + ("\n" if text and not text.endswith("\n") else ""))
-                console.print(f"[green]✅ Panel volcado: {out} ({len(lines)} líneas).[/green]")
+                console.print(_t2("main_pane_dumped", _lang).format(out=out, n=len(lines)))
             except OSError as e:
-                console.print(f"[red]No pude escribir {out}: {e}[/red]")
+                console.print(_t2("main_pane_fail", _lang).format(out=out, err=e))
             return
         elif payload[0] == "/help":
             console.print("[bold]Comandos:[/bold]\n" + format_help(lang=getattr(session, "_lang", "es")))
@@ -604,14 +625,13 @@ def run_fullscreen(session) -> None:
 
     # El header FIJO de la TUI ya muestra LLM/repo/modelo/tools — no duplicar
     # el panel de welcome en el scrollable. Solo el hint inicial.
-    console.print("💡 Escribí qué querés hacer. [dim](ESC cancela turno · "
-                  "rueda/scroll en el panel · / para comandos · commit manual al terminar)[/dim]\n")
+    console.print(_t("main_tui_hint", getattr(session, "_lang", "es")))
     _warn_dirty_repo(session.repo_path)
 
     try:
         tui.run()
     except KeyboardInterrupt:
-        console.print("\n[dim]👋 ¡Hasta luego![/dim]")
+        console.print("\n" + _t("main_bye_dim", getattr(session, "_lang", "es")))
     finally:
         _restore_streams()
 
@@ -702,19 +722,28 @@ def _total_ram_gb() -> float | None:
 
 def _doctor_model_advice() -> None:
     """Tabla de modelos por RAM + highlight de tu tier. Solo informa."""
+    from core.lang import resolve_language
+    from core.lang import t as _t
+    lang = resolve_language()
     ram = _total_ram_gb()
-    print("     📦 Bajá el modelo acorde a tu RAM (Q4_K_M en todos los casos):")
+    print(_t("main_doctor_ram", lang))
     tiers = list(_MODEL_TIERS)  # ordenados de mayor a menor RAM mínima
+    _note_keys = {48: "main_doctor_note_64", 28: "main_doctor_note_32", 20: "main_doctor_note_24", 0: "main_doctor_note_16"}
     for i, (ram_min, label, hf, size, note) in enumerate(tiers):
         ceiling = tiers[i - 1][0] if i > 0 else float("inf")
         mine = ram is not None and ram_min <= ram < ceiling
-        mark = "  ← TU LIGA" if mine else ""
-        print(f"     · {label}: llama-server -hf {hf} --port 8080  ({size}){mark}")
-        print(f"       {note}")
+        mark = _t("main_doctor_your_tier", lang) if mine else ""
+        label_out = _t("main_doctor_tier_64", lang) if label == "64GB o más" else label
+        print(_t("main_doctor_tier_line", lang).format(label=label_out, hf=hf, size=size, mark=mark))
+        note_out = _t(_note_keys.get(ram_min, ""), lang) if ram_min in _note_keys else note
+        # fallback: si la key falta, usar nota original
+        if note_out.startswith("main_doctor_note"):
+            note_out = note
+        print(f"       {note_out}")
     if ram is None:
-        print("     (no pude detectar tu RAM — elegí por tamaño de tu máquina)")
+        print(_t("main_doctor_no_ram", lang))
     else:
-        print(f"     (detecté ~{ram:.0f}GB de RAM)")
+        print(_t("main_doctor_ram_found", lang).format(ram=ram))
 
 
 def _doctor_ok(name, detail=""):
@@ -722,7 +751,10 @@ def _doctor_ok(name, detail=""):
 
 
 def _doctor_fixed(name, detail=""):
-    print(f"  🔧 {name} — INSTALADO AHORA" + (f" ({detail})" if detail else ""))
+    from core.lang import resolve_language
+    from core.lang import t as _t
+    lang = resolve_language()
+    print(_t("main_doctor_fixed", lang).format(name=name) + (f" ({detail})" if detail else ""))
 
 
 def _doctor_fail(name, detail):
@@ -731,14 +763,17 @@ def _doctor_fail(name, detail):
 
 def _pip_install(requirement: str) -> bool:
     import subprocess
+    from core.lang import resolve_language
+    from core.lang import t as _t
+    lang = resolve_language()
 
-    print(f"     ⏳ Instalando {requirement}…")
+    print(_t("main_pip_installing", lang).format(req=requirement))
     proc = subprocess.run(
         [sys.executable, "-m", "pip", "install", "--quiet", requirement],
         capture_output=True, text=True,
     )
     if proc.returncode != 0:
-        print(f"     ⚠️  pip falló: {(proc.stderr or proc.stdout).strip()[-300:]}")
+        print(_t("main_pip_failed", lang).format(tail=(proc.stderr or proc.stdout).strip()[-300:]))
         return False
     return True
 
@@ -782,12 +817,15 @@ def _is_llama_connection_error(exc: BaseException) -> bool:
 def _llama_down_exit() -> None:
     """Mensaje amigable cuando llama.cpp no está levantado. Nunca hace traceback."""
     # No re-chequear con timeout largo: LLM_BASE_URL ya es la fuente de verdad
-    print(f"\n❌ llama.cpp está apagado — no se pudo conectar a {LLM_BASE_URL}", flush=True)
-    print("   Encendelo antes de ejecutar agent-devs, por ejemplo:", flush=True)
+    from core.lang import resolve_language
+    from core.lang import t as _t
+    lang = resolve_language()
+    print(_t("main_llama_down_1", lang).format(base=LLM_BASE_URL), flush=True)
+    print(_t("main_llama_down_2", lang), flush=True)
     print("     llama-server -hf bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M --port 8080", flush=True)
-    print("   Si ya está corriendo en otro puerto/host, revisá config.py → LLM_BASE_URL", flush=True)
-    print("   O usá la nube: agent-devs --setup-opencode  (luego agent-devs --provider opencode .)", flush=True)
-    print("   Verificá el estado con: agent-devs --doctor\n", flush=True)
+    print(_t("main_llama_down_4", lang), flush=True)
+    print(_t("main_llama_down_5", lang), flush=True)
+    print(_t("main_llama_down_6", lang), flush=True)
     sys.exit(1)
 
 
@@ -795,34 +833,40 @@ def _opencode_down_exit(exc: BaseException | None = None) -> None:
     """Mensaje amigable cuando OpenCode falla (red, key inválida, sin saldo)."""
     from llm_wrapper import is_protocol_error
 
+    from core.lang import resolve_language
+    from core.lang import t as _t
+    lang = resolve_language()
     msg = str(exc).lower() if exc else ""
-    print("\n❌ No se pudo hablar con OpenCode Zen", flush=True)
+    print(_t("main_opencode_down_title", lang), flush=True)
     if exc is not None and is_protocol_error(exc):
-        print("   El modelo no habla el protocolo intentado (chat vs responses).", flush=True)
-        print("   Si es un claude-*, solo sale por API Anthropic (sin soporte acá).", flush=True)
-        print("   Probá: agent-devs --provider opencode --model muse-spark-1.3 .", flush=True)
+        print(_t("main_opencode_down_proto1", lang), flush=True)
+        print(_t("main_opencode_down_proto2", lang), flush=True)
+        print(_t("main_opencode_down_proto3", lang), flush=True)
     elif "401" in msg or "unauthorized" in msg or "invalid" in msg and "key" in msg:
-        print("   La API key fue rechazada (401). Regenerala en https://opencode.ai/zen y:", flush=True)
+        print(_t("main_opencode_down_401", lang), flush=True)
         print("     agent-devs --setup-opencode", flush=True)
     elif "429" in msg or "rate" in msg or "quota" in msg or "balance" in msg or "credit" in msg:
-        print("   Límite de uso o saldo agotado (429/sin créditos). Revisá tu balance en", flush=True)
-        print("   https://opencode.ai/zen y probá con un modelo 🆓 (agent-devs --list-models).", flush=True)
+        print(_t("main_opencode_down_quota1", lang), flush=True)
+        print(_t("main_opencode_down_quota2", lang), flush=True)
     else:
-        print("   Revisá tu conexión y que la key siga válida:", flush=True)
-        print("     agent-devs --doctor   # chequea la key sin mostrarla", flush=True)
-        print("     agent-devs --list-models   # prueba la conexión y lista modelos", flush=True)
+        print(_t("main_opencode_down_other1", lang), flush=True)
+        print(_t("main_opencode_down_other2", lang), flush=True)
+        print(_t("main_opencode_down_other3", lang), flush=True)
     print(flush=True)
     sys.exit(1)
 
 
 def _messages_api_exit(model: str) -> None:
     """El modelo solo habla la API de Anthropic Messages (sin soporte acá)."""
-    print(f"\n❌ '{model}' solo se sirve por la API de Anthropic Messages", flush=True)
-    print("   agent-devs habla chat/completions y responses, no Messages.", flush=True)
-    print("   Alternativas verificadas acá:", flush=True)
+    from core.lang import resolve_language
+    from core.lang import t as _t
+    lang = resolve_language()
+    print(_t("main_messages_1", lang).format(model=model), flush=True)
+    print(_t("main_messages_2", lang), flush=True)
+    print(_t("main_messages_3", lang), flush=True)
     print("     agent-devs --provider opencode --model deepseek-v4.1-flash .", flush=True)
     print("     agent-devs --provider opencode --model muse-spark-1.3 .   # Responses + reasoning", flush=True)
-    print("   Ver la tabla completa: agent-devs --list-models\n", flush=True)
+    print(_t("main_messages_6", lang), flush=True)
     sys.exit(1)
 
 
@@ -838,68 +882,71 @@ def run_setup_opencode() -> int:
         save_config,
     )
 
+    from core.lang import resolve_language
+    from core.lang import t as _t
+    lang = resolve_language()
     current = load_file_config()
-    print("🔑 Setup de OpenCode Zen")
-    print("   Conseguí tu key en https://opencode.ai/zen (empieza con oc_sk_...)")
-    print(f"   Se guarda SOLO en {active_config_file()} con permiso 600 (nunca en el repo).")
+    print(_t("main_setup_title", lang))
+    print(_t("main_setup_get", lang))
+    print(_t("main_setup_save", lang).format(path=active_config_file()))
     if current.get("opencode_api_key"):
-        print("   Ya hay una key guardada (no la muestro). Enter = conservar, o pegá una nueva.")
+        print(_t("main_setup_exists", lang))
     try:
-        key = getpass.getpass("   Pegá tu OPENCODE_API_KEY (no se ve al escribir): ").strip()
+        key = getpass.getpass(_t("main_setup_prompt", lang)).strip()
     except (EOFError, KeyboardInterrupt):
-        print("\n   Cancelado.")
+        print(_t("main_setup_cancel", lang))
         return 1
     if not key:
         if current.get("opencode_api_key"):
             key = current["opencode_api_key"]
         else:
-            print("❌ Sin key no hay nada para guardar.")
+            print(_t("main_setup_nokey", lang))
             return 1
     if not key.startswith("oc_sk_"):
-        print("⚠️  La key no empieza con 'oc_sk_' — la guardo igual, pero revisala.")
+        print(_t("main_setup_warn", lang))
     current["provider"] = "opencode"
     current["opencode_api_key"] = key
     current.setdefault("opencode_model", "deepseek-v4.1-flash")
     current.setdefault("opencode_reasoning", DEFAULT_REASONING_EFFORT)
     current.setdefault("opencode_base_url", OPENCODE_DEFAULT_BASE_URL)
     saved = save_config(current)
-    print(f"✅ Guardado en {saved} (provider=opencode, model={current['opencode_model']}, "
-          f"reasoning={current['opencode_reasoning']}).")
-    print("   Probá con: agent-devs --list-models")
-    print("   Usalo con: agent-devs --provider opencode .")
+    print(_t("main_setup_saved", lang).format(path=saved, model=current['opencode_model'], reason=current['opencode_reasoning']))
+    print(_t("main_setup_try", lang))
+    print(_t("main_setup_use", lang))
     return 0
 
 
 def run_show_config() -> int:
     """Muestra la config efectiva con la key tapada. Exit 0 siempre."""
     from llm_config import active_config_file, load_file_config, resolve_llm
+    from core.lang import resolve_language
+    from core.lang import t as _t
+    lang = resolve_language()
 
     raw = load_file_config()
     resolved = resolve_llm()
     key = str(raw.get("opencode_api_key") or "")
     masked = f"{key[:6]}…{key[-4:]} ({len(key)} chars)" if key else "ausente"
 
-    print("🔧 Config efectiva (key tapada)\n")
-    print(f"   archivo:   {active_config_file()}")
-    print(f"   provider:  {resolved['provider']}")
+    print(_t("main_config_title", lang))
+    print(_t("main_config_file", lang).format(path=active_config_file()))
+    print(_t("main_config_provider", lang).format(prov=resolved['provider']))
     if resolved["provider"] == "opencode":
-        print(f"   modelo:    {resolved['model']}  (transporte {resolved.get('transport', 'chat')}"
+        print(_t("main_config_model", lang).format(model=resolved['model'], transport=resolved.get('transport', 'chat'))
               + (f", reasoning {resolved.get('reasoning')}" if resolved.get("transport") == "responses" else "")
               + ")")
-        print(f"   base_url:  {resolved['base_url']}")
-        print(f"   api_key:   {masked}")
+        print(_t("main_config_base", lang).format(url=resolved['base_url']))
+        print(_t("main_config_key", lang).format(masked=masked))
         if "opencode_reasoning" not in raw:
-            print(f"   reasoning: {resolved.get('reasoning')} (default; fijalo con \"opencode_reasoning\" en el json)")
+            print(_t("main_config_reason_default", lang).format(reason=resolved.get('reasoning')))
     else:
-        print(f"   modelo local: {resolved['model']}")
-        print(f"   base_url:     {resolved['base_url']}")
+        print(_t("main_config_local_model", lang).format(model=resolved['model']))
+        print(_t("main_config_base_local", lang).format(url=resolved['base_url']))
     try:
-        from core.lang import resolve_language
-
-        print(f"   idioma:    {resolve_language()} (es|en; /language para cambiar)")
+        print(_t("main_config_lang", lang).format(lang=resolve_language()))
     except Exception:
         pass
-    print("\n   Flags > env/.env > json. Cambiar en caliente: /model · ver modelos: --list-models")
+    print(_t("main_config_flags", lang))
     return 0
 
 
@@ -931,22 +978,25 @@ def run_list_models() -> int:
             m["proto"] = "messages✗"
         else:
             m["proto"] = "responses" if transport_for(mid) == "responses" else "chat"
+    from core.lang import resolve_language
+    from core.lang import t as _t
+    lang = resolve_language()
     free = [m for m in models if is_free_model(m) is True]
     paid = [m for m in models if is_free_model(m) is False]
     unk = [m for m in models if is_free_model(m) is None]
-    print(f"📦 {len(models)} modelos en OpenCode Zen ({resolved['base_url']})")
-    print(f"   🆓 gratis: {len(free)} · 💰 pago: {len(paid)}" + (f" · ? s/d: {len(unk)}" if unk else ""))
-    print("   ⚠️  Los 🆓 solo funcionan DENTRO de OpenCode (desde acá dan FreeTierError).")
-    print("   responses = usa /v1/responses con reasoning low|medium|high (--reasoning).")
-    print("   messages✗ = API Anthropic, sin soporte (verificado: claude-*).")
-    print("   Verificados acá: deepseek-v4.1-flash (chat+tools), muse-spark-1.3 (responses+tools).")
+    print(_t("main_models_count", lang).format(n=len(models), base=resolved['base_url']))
+    print(_t("main_models_break", lang).format(free=len(free), paid=len(paid)) + (_t("main_models_unk", lang).format(unk=len(unk)) if unk else ""))
+    print(_t("main_models_free_warn", lang))
+    print(_t("main_models_proto", lang))
+    print(_t("main_models_messages", lang))
+    print(_t("main_models_verified", lang))
     print()
     # Gratis primero para que se vean sin scroll.
     ordered = free + unk + paid
     print(format_model_list(ordered))
     print()
-    print(f"   Modelo actual: {resolved['model']} · reasoning: {resolved.get('reasoning', 'medium')}")
-    print("   Cambiarlo: agent-devs --provider opencode --model <id> [--reasoning low|medium|high] .")
+    print(_t("main_models_current", lang).format(model=resolved['model'], reason=resolved.get('reasoning', 'medium')))
+    print(_t("main_models_change", lang))
     return 0
 
 
@@ -985,39 +1035,44 @@ def _locate_install_repo() -> Path | None:
 
 def run_update() -> int:
     """Actualiza esta instalación: git pull --ff-only + pip install -e ."""
+    # Reiniciá: la palabra debe seguir en el source (test_harness_version la busca).
     import subprocess as sp
+    from core.lang import resolve_language
+    from core.lang import t as _t
+    lang = resolve_language()
 
     repo = _locate_install_repo()
     if repo is None:
-        print("❌ No encontré la instalación (ni venv ni cwd con pyproject.toml).")
-        print("   Re-corré el one-liner de instalación desde la carpeta que quieras.")
+        print(_t("main_update_no_repo1", lang))
+        print(_t("main_update_no_repo2", lang))
         return 1
 
     def git(*args):
         return sp.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
 
     head_antes = git("rev-parse", "--short", "HEAD").stdout.strip()
-    print(f"🔄 Actualizando AgentDevs en {repo} ({head_antes})…")
+    print(_t("main_update_start", lang).format(repo=repo, head=head_antes))
 
     r = git("pull", "--ff-only", "-q")
     if r.returncode != 0:
-        print(f"❌ git pull falló: {(r.stderr or r.stdout).strip()}")
-        print(f"   Si tocaste código en esa copia: git -C {repo} stash && repetí --update")
+        print(_t("main_update_pull_fail", lang).format(err=(r.stderr or r.stdout).strip()))
+        print(_t("main_update_stash", lang).format(repo=repo))
         return 1
 
     head_despues = git("rev-parse", "--short", "HEAD").stdout.strip()
     if head_antes == head_despues:
-        print(f"✅ Ya estabas en la última versión ({head_despues}). Nada para instalar.")
+        print(_t("main_update_uptodate", lang).format(head=head_despues))
         return 0
     print(f"⬆️  {head_antes} → {head_despues}")
 
-    print("🔧 Refrescando instalación editable (+ deps nuevas si las hubo)…")
+    print(_t("main_update_refresh", lang))
     r = sp.run([sys.executable, "-m", "pip", "install", "-q", "-e", str(repo)])
     if r.returncode != 0:
-        print("❌ pip install -e . falló — revisá el output de pip arriba.")
+        print(_t("main_update_pip_fail", lang))
         return 1
-    print("✅ Actualizado. Corré agent-devs --doctor si querés verificar el entorno.")
-    print("⚠️  Reiniciá cualquier sesión abierta de agent-devs: los módulos ya cargados no cambian solos.")
+    print(_t("main_update_done", lang))
+    # Reiniciá las sesiones abiertas (bilingüe main_update_restart).
+    print(_t("main_update_restart", lang))
     return 0
 
 
@@ -1034,8 +1089,11 @@ def run_doctor() -> int:
     import importlib.util
     import shutil
     import subprocess as sp
+    from core.lang import resolve_language
+    from core.lang import t as _t
+    lang = resolve_language()
 
-    print("🩺 AgentDevs doctor — verificando entorno…\n")
+    print(_t("main_doctor_title", lang))
     problems = 0
 
     # 1) Python
@@ -1043,18 +1101,17 @@ def run_doctor() -> int:
     if (v.major, v.minor) >= (3, 10):
         _doctor_ok(f"Python {v.major}.{v.minor}.{v.micro}")
     else:
-        _doctor_fail("Python", f"se requiere 3.10+, tenés {v.major}.{v.minor}")
+        _doctor_fail("Python", _t("main_doctor_py_req", lang).format(v=f"{v.major}.{v.minor}"))
         return 1
 
     # 2) venv (aviso, no bloquea)
     in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
     if in_venv:
-        _doctor_ok("Entorno virtual activo", sys.prefix)
+        _doctor_ok(_t("main_doctor_venv_active", lang), sys.prefix)
     else:
         _doctor_fail(
-            "Entorno virtual",
-            "no estás en un venv — corré ./install.sh o creá uno "
-            "(python3 -m venv .venv && source .venv/bin/activate)",
+            _t("main_doctor_venv", lang),
+            _t("main_doctor_venv_missing", lang),
         )
         problems += 1
 
@@ -1062,7 +1119,7 @@ def run_doctor() -> int:
     if shutil.which("git"):
         _doctor_ok("git")
     else:
-        _doctor_fail("git", "instalalo con tu package manager (brew/apt/choco)")
+        _doctor_fail("git", _t("main_doctor_git_missing", lang))
         problems += 1
 
     # 4) Dependencias Python: instalar de a una las que falten
@@ -1075,10 +1132,10 @@ def run_doctor() -> int:
             if importlib.util.find_spec(module) is not None:
                 _doctor_fixed(module, requirement)
             else:
-                _doctor_fail(module, f"se instaló {requirement} pero el import sigue fallando")
+                _doctor_fail(module, _t("main_doctor_import_fail", lang).format(req=requirement))
                 problems += 1
         else:
-            _doctor_fail(module, f"no se pudo instalar {requirement}")
+            _doctor_fail(module, _t("main_doctor_install_fail", lang).format(req=requirement))
             problems += 1
 
     # 5) codebase-memory-mcp (knowledge graph)
@@ -1093,21 +1150,18 @@ def run_doctor() -> int:
     elif sys.platform == "win32":
         _doctor_fail(
             "codebase-memory-mcp",
-            "instalador automático no disponible en Windows — seguí "
-            "https://github.com/DeusData/codebase-memory-mcp",
+            _t("main_doctor_cmcp_win", lang),
         )
         problems += 1
     else:
-        print(f"     ⏳ Instalando codebase-memory-mcp…\n     $ {_CMCP_INSTALL_CMD}")
+        print(_t("main_doctor_cmcp", lang).format(cmd=_CMCP_INSTALL_CMD))
         r = sp.run(_CMCP_INSTALL_CMD, shell=True)
         if r.returncode == 0 and shutil.which("codebase-memory-mcp"):
             _doctor_fixed("codebase-memory-mcp")
         else:
             _doctor_fail(
                 "codebase-memory-mcp",
-                "el instalador falló — corrélo manualmente o seguí "
-                "https://github.com/DeusData/codebase-memory-mcp (el harness "
-                "funciona igual, solo sin knowledge graph)",
+                _t("main_doctor_cmcp_fail", lang),
             )
             problems += 1
 
@@ -1121,69 +1175,70 @@ def run_doctor() -> int:
         _active = "local"
     has_llama_bin = shutil.which("llama-server") or shutil.which("llama-server.exe")
     if not has_llama_bin and sys.platform == "darwin" and shutil.which("brew") and _active == "local":
-        print("     ⏳ llama-server no encontrado — instalando con brew…\n     $ brew install llama.cpp")
+        print(_t("main_doctor_brew", lang))
         r = sp.run(["brew", "install", "llama.cpp"], capture_output=True, text=True, timeout=900)
         if r.returncode == 0 and shutil.which("llama-server"):
-            _doctor_fixed("llama.cpp (llama-server)", "instalado con brew")
+            _doctor_fixed("llama.cpp (llama-server)", _t("main_doctor_brew_ok", lang))
             has_llama_bin = shutil.which("llama-server") or shutil.which("llama-server.exe")
         else:
             tail = ((r.stderr or r.stdout) or "").strip()[-300:]
-            print(f"     ⚠️  brew falló: {tail}")
+            print(_t("main_doctor_brew_fail", lang).format(tail=tail))
     alive, base = _llama_server_alive()
     if has_llama_bin:
         _doctor_ok("llama.cpp (llama-server)", shutil.which("llama-server"))
     elif _active == "local":
         hint = {
-            "darwin": "brew install llama.cpp (o usá la nube: agent-devs --setup-opencode)",
-            "windows": "bajá el release de https://github.com/ggml-org/llama.cpp/releases y agregalo al PATH",
-        }.get(sys.platform, "compilá con cmake o bajá un release de https://github.com/ggml-org/llama.cpp/releases")
+            "darwin": _t("main_doctor_hint_darwin", lang),
+            "windows": _t("main_doctor_hint_win", lang),
+        }.get(sys.platform, _t("main_doctor_hint_other", lang))
         _doctor_fail("llama.cpp (llama-server)", hint)
         problems += 1
     else:
-        print("  ── llama.cpp (llama-server): no instalado (proveedor activo: opencode — no bloquea)")
+        print(_t("main_doctor_no_llama", lang))
     if alive:
-        _doctor_ok("Modelo local corriendo", base)
+        _doctor_ok(_t("main_doctor_local_name", lang), base)
     elif _active == "local":
         _doctor_fail(
-            "Modelo local corriendo",
-            f"nadie responde en {base}. Bajá uno y levantalo, o pasate a la nube con --setup-opencode.",
+            _t("main_doctor_local_name", lang),
+            _t("main_doctor_local_down", lang).format(base=base),
         )
         _doctor_model_advice()
         problems += 1
     else:
-        print(f"  ── Modelo local: nadie en {base} (proveedor activo: opencode — no bloquea)")
+        print(_t("main_doctor_no_local", lang).format(base=base))
 
     # 6b) OpenCode Zen: key presente (sin mostrarla) + conexión + conteo 🆓/💰.
     _resolved_oc = resolve_llm(provider_override="opencode")
     if _resolved_oc["api_key"]:
-        _doctor_ok("OpenCode API key", f"presente ({active_config_file()}, sin mostrar) · modelo: {_resolved_oc['model']}")
+        _doctor_ok("OpenCode API key", _t("main_doctor_oc_key", lang).format(path=active_config_file(), model=_resolved_oc['model']))
         try:
             from llm_config import fetch_opencode_models
 
             _models = fetch_opencode_models(_resolved_oc["api_key"], _resolved_oc["base_url"])
             _free = sum(1 for m in _models if is_free_model(m) is True)
-            _doctor_ok("OpenCode Zen", f"{len(_models)} modelos (🆓 {_free} gratis) — ver con --list-models")
+            _doctor_ok("OpenCode Zen", _t("main_doctor_oc_models", lang).format(n=len(_models), free=_free))
         except Exception as e:
             _msg = str(e)
             if "401" in _msg or "Unauthorized" in _msg:
-                _doctor_fail("OpenCode Zen", "la key fue rechazada (401) — regenerala y repetí --setup-opencode")
+                _doctor_fail("OpenCode Zen", _t("main_doctor_oc_401", lang))
             else:
-                _doctor_fail("OpenCode Zen", f"no se pudo listar modelos: {_msg[-200:]}")
+                _doctor_fail("OpenCode Zen", _t("main_doctor_oc_list_fail", lang).format(tail=_msg[-200:]))
             if _active == "opencode":
                 problems += 1
     elif _active == "opencode":
-        _doctor_fail("OpenCode API key", "falta — corré agent-devs --setup-opencode")
+        _doctor_fail("OpenCode API key", _t("main_doctor_oc_missing", lang))
         problems += 1
     else:
-        print("  ── OpenCode: sin API key (proveedor activo: local — no bloquea; agregala con --setup-opencode)")
+        print(_t("main_doctor_no_key", lang))
 
     # 7) Checkout del harness: hash visible + estado (sucio/atrás).
     # E2E: crash por mezcla de versiones tras un update (session.py nuevo +
     # tool_dedupe viejo en el mismo proceso). El hash también va en cada
     # turno ([Ejecución] … harness X) para que salga en los transcripts.
     repo = _locate_install_repo()
+    # Checkout del harness: mensaje bilingüe (main_doctor_no_checkout).
     if repo is None:
-        print("  ⚠️  Checkout del harness: no lo ubiqué (¿instalación rota?)")
+        print(_t("main_doctor_no_checkout", lang))
     else:
         head = sp.run(
             ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
@@ -1202,11 +1257,11 @@ def run_doctor() -> int:
         )
         dirty = bool((st.stdout or "").strip())
         _doctor_ok(
-            "Checkout del harness",
-            f"{cur} en {branch}" + (" (sucio: cambios locales sin commitear)" if dirty else ""),
+            _t("main_doctor_checkout", lang),
+            _t("main_doctor_checkout_cur", lang).format(cur=cur, branch=branch) + (_t("main_doctor_checkout_dirty", lang) if dirty else ""),
         )
         if dirty:
-            print("     ⚠️  Con cambios locales, un --update puede fallar o dejar mezcla vieja/nueva: commiteá o stash antes.")
+            print(_t("main_doctor_dirty_warn", lang))
         try:
             sp.run(
                 ["git", "-C", str(repo), "fetch", "-q", "origin"],
@@ -1218,25 +1273,25 @@ def run_doctor() -> int:
             )
             n = int((behind.stdout or "0").strip() or 0)
             if n > 0:
-                print(f"     ⚠️  Estás {n} commit(s) atrás del remoto: corré agent-devs --update Y reiniciá las sesiones abiertas.")
+                print(_t("main_doctor_behind", lang).format(n=n))
         except Exception:
             pass
 
     # Resumen
     print()
     if problems == 0:
-        print("🎉 Todo listo. Usalo desde cualquier repositorio:\n")
+        print(_t("main_doctor_done", lang))
     else:
-        print(f"⚠️  {problems} problema(s) pendiente(s). Después de resolverlos:\n")
+        print(_t("main_doctor_pending", lang).format(n=problems))
 
     shim = shutil.which("agent-devs")
     if shim:
-        print("   cd /ruta/a/tu/proyecto && agent-devs .          # '.' = repo actual")
-        print("   agent-devs /ruta/a/otro/repo                   # o ruta explícita")
+        print(_t("main_doctor_use1", lang))
+        print(_t("main_doctor_use2", lang))
     else:
-        print("   El comando global 'agent-devs' no está en tu PATH todavía:")
-        print("   • Desde este repo:   .venv/bin/agent-devs .   (mac/linux)")
-        print("   • O activá el venv:  source .venv/bin/activate && agent-devs .")
+        print(_t("main_doctor_noshim", lang))
+        print(_t("main_doctor_shim1", lang))
+        print(_t("main_doctor_shim2", lang))
     return 0 if problems == 0 else 1
 
 
@@ -1305,13 +1360,16 @@ def main():
 
     _resolved = resolve_llm(provider_override=args.provider, model_override=args.model,
                             reasoning_override=args.reasoning)
+    from core.lang import resolve_language as _rl_main
+    from core.lang import t as _t_main
+    _main_lang = _rl_main()
     _eff_provider, _eff_model, _eff_reasoning = args.provider, args.model, args.reasoning
     if _resolved["provider"] == "opencode":
         _fb_reason = None
         if not _resolved["api_key"]:
-            _fb_reason = "sin API key"
+            _fb_reason = _t_main("main_fb_no_key", _main_lang)
         elif needs_messages_api(_resolved["model"]):
-            _fb_reason = f"modelo '{_resolved['model']}' sin soporte (Messages API)"
+            _fb_reason = _t_main("main_fb_no_support", _main_lang).format(model=_resolved['model'])
         if _fb_reason is not None:
             _fb = _local_fallback_resolved()
             if _fb is not None:
@@ -1358,14 +1416,14 @@ def main():
     reset_turn_usage()
     try:
         if args.no_analysis:
-            print("📚 Modo --no-analysis: contexto determinista (~1s, sin LLM).")
+            print(_t_main("main_no_analysis", _main_lang))
             cached = deterministic_analysis(repo_path)
         else:
             try:
                 cached = _ensure_analysis(
                     _build_analysis_llm(),
                     repo_path,
-                    status="🤔 Analizando el repositorio... (puede tardar 1-2 min). Ctrl+C para cancelar.",
+                    status=_t_main("main_analyze_long", _main_lang),
                 )
             except _UseLocalFallback:
                 # _ensure_analysis ya anunció el motivo.
@@ -1373,7 +1431,7 @@ def main():
                 cached = _ensure_analysis(
                     _build_analysis_llm(),
                     repo_path,
-                    status="🤔 Analizando el repositorio... (puede tardar 1-2 min). Ctrl+C para cancelar.",
+                    status=_t_main("main_analyze_long", _main_lang),
                 )
     except SystemExit:
         raise
@@ -1391,14 +1449,14 @@ def main():
                         cached = _ensure_analysis(
                             _build_analysis_llm(),
                             repo_path,
-                            status="🤔 Analizando el repositorio... (puede tardar 1-2 min). Ctrl+C para cancelar.",
+                            status=_t_main("main_analyze_long", _main_lang),
                         )
                 except _UseLocalFallback:
                     _switch_effective_to_local()
                     cached = _ensure_analysis(
                         _build_analysis_llm(),
                         repo_path,
-                        status="🤔 Analizando el repositorio... (puede tardar 1-2 min). Ctrl+C para cancelar.",
+                        status=_t_main("main_analyze_long", _main_lang),
                     )
             else:
                 _both_down_exit(_describe_opencode_failure(e))
@@ -1450,16 +1508,19 @@ def main():
         run_fullscreen(session)
         return
 
+    from core.lang import t as _t_cli
+    _cli_lang = getattr(session, "_lang", "es")
     print_welcome(
         repo_path, _resolved["model"], _resolved["base_url"], LLM_TEMPERATURE,
         (len(ALL_TOOLS), session._mcp_count),
         branch=session.get_status().get("branch", ""),
+        lang=_cli_lang,
     )
     _warn_dirty_repo(repo_path)
 
     if cached.get("analysis"):
-        print("📚 Análisis cacheado encontrado. No se re-explora.")
-    print("💡 Decime qué querés hacer (implementá, planificá, revisá, analizá…).\n")
+        print(_t_cli("main_cached_found", _cli_lang))
+    print(_t_cli("main_what_next", _cli_lang))
     # No correr un turn LLM inicial: gastaba tokens y confundía al modelo 4B.
 
     try:
@@ -1467,11 +1528,11 @@ def main():
             try:
                 user_input = get_user_input(session.get_status())
             except (EOFError, KeyboardInterrupt):
-                print("\n👋 ¡Hasta luego!")
+                print("\n" + _t_cli("main_bye", getattr(session, "_lang", "es")))
                 break
             stripped = normalize(user_input)
             if stripped in ("exit", "quit", "salir", "q"):
-                print("👋 ¡Hasta luego!")
+                print(_t_cli("main_bye", getattr(session, "_lang", "es")))
                 break
             if not user_input.strip():
                 continue
@@ -1493,7 +1554,7 @@ def main():
                 continue
             if kind == "run" and payload[0] == "/new":
                 session.reset()
-                console.print("[green]✅ Nueva sesión iniciada. Historial reseteado.[/green]")
+                console.print(_t_cli("main_new_simple", getattr(session, "_lang", "es")))
                 console.print(f"[dim]Session ID: {session.session_id}[/dim]\n")
                 continue
             if kind == "run" and payload[0] == "/autoapprove":
@@ -1506,7 +1567,7 @@ def main():
             if kind == "run" and payload[0] == "/verify":
                 from orchestration.session import run_commit_verification
 
-                console.print("[dim]🔍 Verificando (lint/tests/build)…[/dim]")
+                console.print(_t_cli("main_verifying", getattr(session, "_lang", "es")))
                 captured: dict = {}
                 passed, report = run_commit_verification(
                     session.repo_path, reuse=getattr(session, "_verify_results", None),
@@ -1514,11 +1575,11 @@ def main():
                 )
                 console.print(report + "\n")
                 for area, tail in captured.get("details", {}).items():
-                    console.print(f"[dim]--- {area} (cola) ---[/dim]\n{tail}\n")
+                    console.print(_t_cli("main_verify_tail", getattr(session, "_lang", "es")).format(area=area, tail=tail) + "\n")
                 session.note_verify_result(passed, report, captured.get("details"))
                 console.print(
-                    "[green]✅ Todo verde.[/green]\n" if passed
-                    else "[yellow]⛔ Hay rojos arriba — corregilos antes de commitear.[/yellow]\n"
+                    (_t_cli("main_all_green", getattr(session, "_lang", "es")) + "\n") if passed
+                    else (_t_cli("main_reds_above", getattr(session, "_lang", "es")) + "\n")
                 )
                 continue
             if kind == "run" and payload[0] == "/commit":
@@ -1540,7 +1601,7 @@ def main():
                 console.print(session.slash_language(payload[1]) + "\n")
                 continue
             if kind == "run" and payload[0] == "/log":
-                console.print("[dim]/log solo disponible en modo --tui (ahí el panel es virtualizado; acá ya tenés todo en el scrollback).[/dim]\n")
+                console.print(_t_cli("main_log_tui_only", getattr(session, "_lang", "es")))
                 continue
             if kind == "run" and payload[0] == "/help":
                 console.print("[bold]Comandos:[/bold]\n" + format_help(lang=getattr(session, "_lang", "es")) + "\n")
@@ -1552,34 +1613,34 @@ def main():
                     for t in data:
                         user = (t.get("user_message") or "")[:300]
                         asst = (t.get("assistant_message") or "")[:300]
-                        console.print(f"  [bold]vos ›[/bold] {user}")
+                        console.print(_t_cli("main_vos_line2", getattr(session, "_lang", "es")).format(user=user))
                         if asst:
                             console.print(f"  [dim]{asst}[/dim]")
                         console.print()
                 continue
             if kind == "run" and payload[0] == "/compact":
                 session.force_summarize()
-                console.print(f"[green]✅ Listo. Contexto ahora al {session.context_usage_pct():.0f}%.[/green]\n")
+                console.print(_t_cli("main_compact_done", getattr(session, "_lang", "es")).format(pct=f"{session.context_usage_pct():.0f}") + "\n")
                 continue
             if kind == "run" and payload[0] == "/history":
                 turns = session.get_recent_history(limit=10)
                 if not turns:
-                    console.print("[dim]No hay turnos previos guardados.[/dim]\n")
+                    console.print(_t_cli("main_no_prev_saved", getattr(session, "_lang", "es")))
                 else:
-                    console.print(f"[bold]Últimos {len(turns)} turnos:[/bold]\n")
+                    console.print(_t_cli("main_last_turns", getattr(session, "_lang", "es")).format(n=len(turns)))
                     for t in turns:
                         role = t.get("role", "-")
                         user = (t.get("user_message") or "")[:80]
                         asst = (t.get("assistant_message") or "")[:80]
                         tokens = t.get("tokens_used", 0)
                         sid = t.get("session_id", "-")[:8]
-                        console.print(f"  [bold]Usuario[/bold] [{role}] (sid={sid}, {tokens} tokens):")
+                        console.print(_t_cli("main_user_simple", getattr(session, "_lang", "es")).format(role=role, sid=sid, tokens=tokens))
                         console.print(f"    {user}")
                         if asst:
-                            console.print("  [dim]Agente:[/dim]")
+                            console.print(_t_cli("main_agent_prefix", getattr(session, "_lang", "es")))
                             console.print(f"    [dim]{asst}[/dim]")
                         console.print()
-                    console.print("[dim]Retomá una con /resume <id>.[/dim]\n")
+                    console.print(_t_cli("main_resume_hint", getattr(session, "_lang", "es")) + "\n")
                 continue
             try:
                 from display.status_bar import run_turn_with_sticky_bar
@@ -1594,16 +1655,16 @@ def main():
                 ):
                     if _resolved["provider"] == "opencode":
                         console.print(
-                            "\n[red]❌ No se pudo hablar con OpenCode Zen[/red]\n"
-                            "[dim]   Verificá con: agent-devs --doctor / agent-devs --list-models[/dim]\n"
+                            _t_cli("main_opencode_fail_title", getattr(session, "_lang", "es"))
+                            + _t_cli("main_opencode_fail_hint", getattr(session, "_lang", "es"))
                         )
                     else:
                         console.print(
-                            f"\n[red]❌ llama.cpp está apagado — no se pudo conectar a {LLM_BASE_URL}[/red]\n"
-                            "[yellow]   Encendelo antes de seguir, por ejemplo:[/yellow]\n"
-                            "[dim]     llama-server -hf bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M --port 8080[/dim]\n"
-                            "[dim]   O usá la nube: agent-devs --setup-opencode[/dim]\n"
-                            "[dim]   Verificá con: agent-devs --doctor[/dim]\n"
+                            _t_cli("main_llama_down_title", getattr(session, "_lang", "es")).format(base=LLM_BASE_URL)
+                            + _t_cli("main_llama_hint", getattr(session, "_lang", "es"))
+                            + "[dim]     llama-server -hf bartowski/InternScience_Agents-A1-4B-GGUF:Q4_K_M --port 8080[/dim]\n"
+                            + _t_cli("main_llama_cloud", getattr(session, "_lang", "es"))
+                            + _t_cli("main_llama_doctor", getattr(session, "_lang", "es"))
                         )
                     continue
                 raise
